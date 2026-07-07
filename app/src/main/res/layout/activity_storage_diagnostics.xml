@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingBottom="32dp">
+
+        <!-- ── Toolbar ─────────────────────────────────────────────────────── -->
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/ds_surface"
+            android:elevation="4dp"
+            app:navigationIcon="@drawable/ic_back"
+            app:titleTextColor="@color/ds_text_primary"
+            app:title="Storage Diagnostics"/>
+
+        <!-- ── Status card ────────────────────────────────────────────────── -->
+        <LinearLayout
+            android:id="@+id/cardStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@color/ds_surface"
+            android:layout_marginTop="16dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:padding="20dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Connection Status"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="12sp"
+                    android:letterSpacing="0.08"
+                    android:textAllCaps="true"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnRunTest"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:text="Run Test"
+                    android:textAllCaps="false"
+                    android:textSize="13sp"
+                    app:cornerRadius="18dp"/>
+            </LinearLayout>
+
+            <!-- Status indicator row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="16dp">
+
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:background="@drawable/bg_online_dot"
+                    android:backgroundTint="#666666"
+                    android:layout_marginEnd="10dp"/>
+
+                <TextView
+                    android:id="@+id/tvStatusLabel"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Not tested yet"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="15sp"/>
+
+                <TextView
+                    android:id="@+id/tvLatency"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="@color/ds_text_tertiary"
+                    android:textSize="13sp"/>
+            </LinearLayout>
+
+            <!-- Progress bar shown while testing -->
+            <ProgressBar
+                android:id="@+id/progressTest"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:layout_marginTop="12dp"
+                android:indeterminate="true"
+                android:progressTint="@color/ds_accent"
+                android:indeterminateTint="@color/ds_accent"
+                android:visibility="gone"/>
+        </LinearLayout>
+
+        <!-- ── Configuration card ─────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="CONFIGURATION"
+            android:textColor="@color/ds_text_tertiary"
+            android:textSize="11sp"
+            android:letterSpacing="0.10"
+            android:textAllCaps="true"
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@color/ds_surface"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <!-- Bucket -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Bucket"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="14sp"/>
+                <TextView
+                    android:id="@+id/tvBucket"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="monospace"/>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ds_divider" android:layout_marginStart="20dp"/>
+
+            <!-- Region -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Region"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="14sp"/>
+                <TextView
+                    android:id="@+id/tvRegion"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="monospace"/>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ds_divider" android:layout_marginStart="20dp"/>
+
+            <!-- Endpoint -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Endpoint"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="14sp"/>
+                <TextView
+                    android:id="@+id/tvEndpoint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"
+                    android:maxWidth="200dp"
+                    android:singleLine="true"
+                    android:ellipsize="middle"/>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ds_divider" android:layout_marginStart="20dp"/>
+
+            <!-- Key ID (masked) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Key ID"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="14sp"/>
+                <TextView
+                    android:id="@+id/tvKeyId"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="monospace"/>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="@color/ds_divider" android:layout_marginStart="20dp"/>
+
+            <!-- Credentials configured -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Credentials"
+                    android:textColor="@color/ds_text_secondary"
+                    android:textSize="14sp"/>
+                <TextView
+                    android:id="@+id/tvCredentials"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="14sp"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ── Error detail card (shown only on failure) ───────────────────── -->
+        <TextView
+            android:id="@+id/labelErrorDetail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ERROR DETAIL"
+            android:textColor="@color/ds_text_tertiary"
+            android:textSize="11sp"
+            android:letterSpacing="0.10"
+            android:textAllCaps="true"
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:id="@+id/cardError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@color/ds_surface"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvErrorDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#FF6B6B"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:lineSpacingMultiplier="1.4"/>
+        </LinearLayout>
+
+        <!-- ── Help card ───────────────────────────────────────────────────── -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="TROUBLESHOOTING"
+            android:textColor="@color/ds_text_tertiary"
+            android:textSize="11sp"
+            android:letterSpacing="0.10"
+            android:textAllCaps="true"
+            android:paddingStart="20dp"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@color/ds_surface"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="HTTP 403 — Your B2 application key is missing the writeFiles or readFiles permission. Regenerate the key in your Backblaze B2 dashboard with the correct bucket access."
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="13sp"
+                android:lineSpacingMultiplier="1.4"
+                android:paddingBottom="12dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="HTTP 404 — The bucket name does not match exactly. Check capitalisation and trailing characters."
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="13sp"
+                android:lineSpacingMultiplier="1.4"
+                android:paddingBottom="12dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Timeout / no credentials — Add B2_KEY_ID and B2_APPLICATION_KEY to the project secrets in Replit, then rebuild and reinstall the app."
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="13sp"
+                android:lineSpacingMultiplier="1.4"/>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

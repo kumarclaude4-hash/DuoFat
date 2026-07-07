@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="@color/ds_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <!-- Back arrow -->
+        <ImageView
+            android:id="@+id/btnBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_arrow_back"
+            android:padding="12dp"
+            android:layout_marginBottom="8dp"
+            app:tint="@color/ds_text_secondary"
+            android:contentDescription="Back"
+            android:background="?attr/selectableItemBackgroundBorderless"/>
+
+        <!-- Shield icon -->
+        <ImageView
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:src="@drawable/ic_shield"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="16dp"
+            app:tint="@color/ds_accent"
+            android:contentDescription="DuoShield"/>
+
+        <!-- Title -->
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Restore Your Account"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="@color/ds_text_primary"
+            android:gravity="center"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Subtitle -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Enter your Account ID and 12 recovery words to restore your encrypted identity."
+            android:textSize="14sp"
+            android:textColor="@color/ds_text_secondary"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.4"
+            android:layout_marginBottom="32dp"/>
+
+        <!-- Account ID label -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ACCOUNT ID"
+            android:textColor="@color/ds_accent"
+            android:textSize="10sp"
+            android:textAllCaps="true"
+            android:letterSpacing="0.12"
+            android:layout_marginBottom="6dp"/>
+
+        <!-- Account ID field -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="e.g. XXXXX-XXXXX-XXX"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_marginBottom="20dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etAccountId"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textNoSuggestions"
+                android:textColor="@color/ds_text_primary"
+                android:textSize="16sp"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.05"
+                android:singleLine="true"
+                android:imeOptions="actionNext"/>
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Recovery words label -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="12 RECOVERY WORDS"
+            android:textColor="@color/ds_accent"
+            android:textSize="10sp"
+            android:textAllCaps="true"
+            android:letterSpacing="0.12"
+            android:layout_marginBottom="6dp"/>
+
+        <!-- Seed phrase field -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="word1 word2 word3 … word12"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_marginBottom="8dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etSeedWords"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textMultiLine|textNoSuggestions|textVisiblePassword"
+                android:minLines="3"
+                android:maxLines="6"
+                android:textColor="@color/ds_text_primary"
+                android:textSize="15sp"
+                android:fontFamily="monospace"
+                android:lineSpacingMultiplier="1.5"/>
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Helper -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/bg_id_card"
+            android:padding="12dp"
+            android:layout_marginBottom="24dp">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_shield"
+                android:layout_marginEnd="8dp"
+                app:tint="@color/ds_accent"
+                android:contentDescription="Info"/>
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Both your Account ID and all 12 recovery words are required. They never leave your device."
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="12sp"
+                android:lineSpacingMultiplier="1.3"/>
+        </LinearLayout>
+
+        <!-- Error text -->
+        <TextView
+            android:id="@+id/tvError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/ds_danger"
+            android:textSize="13sp"
+            android:lineSpacingMultiplier="1.3"
+            android:layout_marginBottom="16dp"
+            android:visibility="gone"/>
+
+        <!-- Indeterminate progress bar (identity / key / DB steps) -->
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progressRestore"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:visibility="gone"
+            android:indeterminate="true"
+            app:indicatorColor="@color/ds_accent"
+            app:trackColor="@color/ds_divider"/>
+
+        <!-- Determinate progress bar (media pre-cache step) -->
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progressMediaCacheBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:visibility="gone"
+            android:indeterminate="false"
+            android:max="100"
+            app:indicatorColor="@color/ds_accent"
+            app:trackColor="@color/ds_divider"/>
+
+        <TextView
+            android:id="@+id/tvMediaProgress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:textColor="@color/ds_text_tertiary"
+            android:textSize="12sp"
+            android:gravity="end"
+            android:visibility="gone"/>
+
+        <!-- Restore button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRestore"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="54dp"
+            android:text="Restore Account"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/ds_accent"
+            app:cornerRadius="28dp"/>
+
+    </LinearLayout>
+</ScrollView>

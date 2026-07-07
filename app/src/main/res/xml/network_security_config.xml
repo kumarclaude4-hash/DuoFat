@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Global cleartext policy: blocked for all domains.
+        Link-preview fetches must be HTTPS-only.  If a specific domain ever
+        needs HTTP, add a <domain-config> block here with the real domain name
+        (not the IANA example.com placeholder — BUG-NS01).
+    -->
+    <base-config cleartextTrafficPermitted="false"/>
+</network-security-config>

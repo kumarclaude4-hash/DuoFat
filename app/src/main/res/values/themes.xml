@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ── Sanctuary Premium Theme ── -->
+    <style name="Theme.DuoShield" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Colours: Warm Darkness -->
+        <item name="colorPrimary">@color/ds_accent</item>
+        <item name="colorPrimaryVariant">@color/ds_accent_dim</item>
+        <item name="colorOnPrimary">@color/ds_text_on_accent</item>
+        <item name="colorSecondary">@color/ds_accent</item>
+        <item name="colorSecondaryVariant">@color/ds_accent_dim</item>
+        <item name="colorOnSecondary">@color/ds_text_on_accent</item>
+        <item name="colorSurface">@color/ds_surface</item>
+        <item name="colorOnSurface">@color/ds_text_primary</item>
+        <item name="colorError">@color/ds_danger</item>
+        <item name="colorOnError">@color/ds_text_on_accent</item>
+        <item name="android:colorBackground">@color/ds_background</item>
+        <item name="android:windowBackground">@color/ds_background</item>
+
+        <!-- Typography -->
+        <item name="android:textColorPrimary">@color/ds_text_primary</item>
+        <item name="android:textColorSecondary">@color/ds_text_secondary</item>
+        <item name="android:textColorHint">@color/ds_text_tertiary</item>
+
+        <!-- Ripple -->
+        <item name="rippleColor">@color/ds_accent_ripple</item>
+        <item name="colorControlHighlight">@color/ds_accent_ripple</item>
+
+        <!-- Navigation / Status bar -->
+        <item name="android:navigationBarColor">@color/ds_background</item>
+        <item name="android:statusBarColor">@color/ds_toolbar</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:ignore="NewApi">false</item>
+
+        <!-- Shapes: Organic Curves -->
+        <item name="shapeAppearanceSmallComponent">@style/ShapeSmall</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeMedium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeLarge</item>
+
+        <!-- Window transitions -->
+        <item name="android:windowAnimationStyle">@style/WindowAnim.DuoShield</item>
+        <item name="android:windowContentTransitions">true</item>
+
+        <!-- TextInputLayout defaults -->
+        <item name="textInputStyle">@style/Widget.DuoShield.TextInput</item>
+
+        <!-- AlertDialog -->
+        <item name="alertDialogTheme">@style/Theme.DuoShield.Dialog</item>
+        <item name="materialAlertDialogTheme">@style/Theme.DuoShield.Dialog</item>
+
+        <!-- Bottom Sheet -->
+        <item name="bottomSheetDialogTheme">@style/Theme.DuoShield.BottomSheet</item>
+
+        <!-- Switch -->
+        <item name="switchStyle">@style/Widget.DuoShield.Switch</item>
+    </style>
+
+    <!-- Full-screen variant -->
+    <style name="Theme.DuoShield.FullScreen" parent="Theme.DuoShield">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:statusBarColor">@color/transparent</item>
+        <item name="android:navigationBarColor">@color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:ignore="NewApi">shortEdges</item>
+    </style>
+
+    <!-- Splash screen -->
+    <style name="Theme.DuoShield.Splash" parent="Theme.DuoShield">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@color/ds_background</item>
+        <item name="android:navigationBarColor">@color/ds_background</item>
+        <item name="android:windowBackground">@color/ds_background</item>
+    </style>
+
+    <!-- ── Shapes ── -->
+    <style name="ShapeSmall" parent="ShapeAppearance.MaterialComponents.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/ds_corner_radius_button</item>
+    </style>
+    <style name="ShapeMedium" parent="ShapeAppearance.MaterialComponents.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/ds_corner_radius_input</item>
+    </style>
+    <style name="ShapeLarge" parent="ShapeAppearance.MaterialComponents.LargeComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">@dimen/ds_corner_radius_card</item>
+    </style>
+    <style name="ShapeAppearanceOverlay.CircleAvatar" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
+    </style>
+
+    <!-- ── Window animations ── -->
+    <style name="WindowAnim.DuoShield" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/slide_out_left</item>
+        <item name="android:activityCloseEnterAnimation">@anim/slide_in_left</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out_right</item>
+    </style>
+
+    <!-- ── TextInput ── -->
+    <style name="Widget.DuoShield.TextInput" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundColor">@color/ds_input_bg</item>
+        <item name="boxStrokeColor">@color/ds_input_border_focus</item>
+        <item name="boxStrokeWidth">@dimen/ds_input_border_width</item>
+        <item name="boxCornerRadiusTopStart">@dimen/ds_corner_radius_input</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/ds_corner_radius_input</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/ds_corner_radius_input</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/ds_corner_radius_input</item>
+        <item name="hintTextColor">@color/ds_text_secondary</item>
+        <item name="android:textColorHint">@color/ds_text_tertiary</item>
+    </style>
+
+    <!-- ── Dialogs ── -->
+    <style name="Theme.DuoShield.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">@color/ds_surface_2</item>
+        <item name="colorOnSurface">@color/ds_text_primary</item>
+        <item name="colorPrimary">@color/ds_accent</item>
+        <item name="android:backgroundDimAmount">0.80</item>
+    </style>
+
+    <!-- ── Bottom Sheet ── -->
+    <style name="Theme.DuoShield.BottomSheet" parent="Theme.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.DuoShield.BottomSheet</item>
+        <item name="android:statusBarColor">@color/transparent</item>
+    </style>
+    <style name="Widget.DuoShield.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="backgroundTint">@color/ds_surface_2</item>
+        <item name="shapeAppearance">@style/ShapeLarge</item>
+    </style>
+
+    <!-- ── Switch ── -->
+    <style name="Widget.DuoShield.Switch" parent="Widget.MaterialComponents.CompoundButton.Switch">
+        <item name="colorPrimary">@color/ds_accent</item>
+        <item name="colorControlNormal">@color/ds_text_tertiary</item>
+    </style>
+
+    <!-- ── Toolbar ── -->
+    <style name="Widget.DuoShield.Toolbar" parent="Widget.MaterialComponents.Toolbar">
+        <item name="android:background">@color/ds_toolbar</item>
+        <item name="titleTextColor">@color/ds_text_primary</item>
+        <item name="subtitleTextColor">@color/ds_text_secondary</item>
+        <item name="navigationIconTint">@color/ds_text_primary</item>
+        <item name="titleTextAppearance">@style/TextAppearance.DuoShield.ToolbarTitle</item>
+    </style>
+
+    <!-- ── FAB ── -->
+    <style name="Widget.DuoShield.FAB" parent="Widget.MaterialComponents.FloatingActionButton">
+        <item name="backgroundTint">@color/ds_accent</item>
+        <item name="tint">@color/ds_text_on_accent</item>
+        <item name="rippleColor">@color/ds_accent_ripple</item>
+        <item name="elevation">8dp</item>
+    </style>
+
+    <!-- ══ UI Mode Variants ══════════════════════════════════════════════════ -->
+
+    <!-- Sanctuary — premium Warm-Darkness identity (identical to base theme) -->
+    <style name="Theme.DuoShield.Sanctuary" parent="Theme.DuoShield"/>
+
+    <!-- Classic — compact, flat surfaces with tighter corners -->
+    <style name="Theme.DuoShield.Classic" parent="Theme.DuoShield">
+        <item name="android:colorBackground">@color/classic_background</item>
+        <item name="android:windowBackground">@color/classic_background</item>
+        <item name="colorSurface">@color/classic_surface</item>
+        <item name="android:statusBarColor">@color/classic_background</item>
+        <item name="android:navigationBarColor">@color/classic_background</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeClassicSmall</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeClassicMedium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeClassicLarge</item>
+        <item name="textInputStyle">@style/Widget.DuoShield.TextInput.Classic</item>
+    </style>
+
+    <!-- Classic shapes — tighter, more functional corners -->
+    <style name="ShapeClassicSmall" parent="ShapeSmall">
+        <item name="cornerSize">4dp</item>
+    </style>
+    <style name="ShapeClassicMedium" parent="ShapeMedium">
+        <item name="cornerSize">6dp</item>
+    </style>
+    <style name="ShapeClassicLarge" parent="ShapeLarge">
+        <item name="cornerSize">8dp</item>
+    </style>
+
+    <!-- Classic TextInput — same style with classic background -->
+    <style name="Widget.DuoShield.TextInput.Classic" parent="Widget.DuoShield.TextInput">
+        <item name="boxBackgroundColor">@color/classic_surface</item>
+        <item name="boxCornerRadiusTopStart">6dp</item>
+        <item name="boxCornerRadiusTopEnd">6dp</item>
+        <item name="boxCornerRadiusBottomStart">6dp</item>
+        <item name="boxCornerRadiusBottomEnd">6dp</item>
+    </style>
+
+</resources>

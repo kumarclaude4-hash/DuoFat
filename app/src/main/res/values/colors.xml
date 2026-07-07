@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ══ MIDNIGHT SENTINEL: Premium Brand Identity ══ -->
+    <!-- Deep Night background with Electric Teal accents -->
+    <color name="ds_background">#0A0A0F</color>
+    <color name="ds_surface">#1C1C24</color>
+    <color name="ds_surface_2">#242C34</color>
+    <color name="ds_surface_3">#2C3440</color>
+    <color name="ds_surface_elevated">#24282F</color>
+    <color name="ds_divider">#2C2C34</color>
+    <color name="ds_divider_subtle">#1C1C24</color>
+
+    <!-- Premium Electric Teal — hero accent (Midnight Sentinel) -->
+    <color name="ds_accent">#00C8C8</color>
+    <color name="ds_accent_dim">#00A0A0</color>
+    <color name="ds_accent_deep">#007878</color>
+    <color name="ds_accent_ripple">#1800C8C8</color>
+    <color name="ds_accent_glow">#3300C8C8</color>
+
+    <!-- Premium gradient endpoints for buttons / FABs -->
+    <color name="ds_grad_start">#00E5FF</color>
+    <color name="ds_grad_mid">#00B8D4</color>
+    <color name="ds_grad_end">#0077A3</color>
+
+    <!-- Chat bubbles — premium teal-tinted dark -->
+    <color name="ds_bubble_mine">#1a3a3a</color>
+    <color name="ds_bubble_mine_mid">#225050</color>
+    <color name="ds_bubble_mine_border">#2a6666</color>
+    <color name="ds_bubble_theirs">#1C1C24</color>
+    <color name="ds_bubble_theirs_border">#2C2C34</color>
+
+    <!-- Typography hierarchy — Ghost White & Whisper Grey -->
+    <color name="ds_text_primary">#E0E0E0</color>
+    <color name="ds_text_secondary">#A0A0A0</color>
+    <color name="ds_text_tertiary">#707070</color>
+    <color name="ds_text_on_accent">#FFFFFF</color>
+    <color name="ds_text_timestamp">#808080</color>
+    <color name="ds_text_caption">#606060</color>
+
+    <!-- Delivery ticks -->
+    <color name="ds_tick_pending">#606060</color>
+    <color name="ds_tick_sent">#808080</color>
+    <color name="ds_tick_delivered">#A0A0A0</color>
+    <color name="ds_tick_read">#00C8C8</color>
+
+    <!-- App bars and inputs -->
+    <color name="ds_toolbar">#0A0A0F</color>
+    <color name="ds_toolbar_border">#1C1C24</color>
+    <color name="ds_input_bg">#1C1C24</color>
+    <color name="ds_input_border">#2C2C34</color>
+    <color name="ds_input_border_focus">#00C8C8</color>
+
+    <!-- Badges -->
+    <color name="ds_badge_bg">#00C8C8</color>
+    <color name="ds_badge_text">#000000</color>
+
+    <!-- Status -->
+    <color name="ds_online">#4CAF50</color>
+    <color name="ds_danger">#FF6B6B</color>
+    <color name="ds_warning">#FF8C00</color>
+    <color name="ds_pin">#00C8C8</color>
+
+    <!-- Reply / reaction -->
+    <color name="ds_reply_bar">#00C8C8</color>
+    <color name="ds_reply_bg">#1C1C24</color>
+    <color name="ds_reaction_bg">#1C1C24</color>
+    <color name="ds_reaction_border">#2C2C34</color>
+
+    <!-- Avatar gradient set — premium teal tones -->
+    <color name="ds_avatar_a_start">#00C8C8</color>
+    <color name="ds_avatar_a_end">#007878</color>
+    <color name="ds_avatar_b_start">#00A0A0</color>
+    <color name="ds_avatar_b_end">#006060</color>
+    <color name="ds_avatar_c_start">#00D4D4</color>
+    <color name="ds_avatar_c_end">#008888</color>
+    <color name="ds_avatar_d_start">#00B8B8</color>
+    <color name="ds_avatar_d_end">#007070</color>
+
+    <color name="transparent">#00000000</color>
+
+    <!-- ══ Session-style onboarding (entry screens) ══ -->
+    <color name="session_green">#4CAF50</color>
+    <color name="session_green_dark">#2E7D32</color>
+    <color name="session_black">#000000</color>
+    <color name="session_surface">#0A0A0F</color>
+
+    <!-- ══ Flat aliases (backwards-compat with layout refs) ══ -->
+    <color name="accent">#00C8C8</color>
+    <color name="accent_dark">#00A0A0</color>
+    <color name="background">#0A0A0F</color>
+    <color name="surface">#1C1C24</color>
+    <color name="surface_alt">#242C34</color>
+    <color name="toolbar_bg">#0A0A0F</color>
+
+    <color name="text_primary">#E0E0E0</color>
+    <color name="text_secondary">#A0A0A0</color>
+    <color name="text_hint">#707070</color>
+    <color name="text_on_accent">#FFFFFF</color>
+
+    <color name="bubble_mine">#1a3a3a</color>
+    <color name="bubble_theirs">#1C1C24</color>
+
+    <color name="tick_pending">#606060</color>
+    <color name="tick_sent">#808080</color>
+    <color name="tick_read">#00C8C8</color>
+
+    <color name="online_green">#4CAF50</color>
+    <color name="error_red">#FF6B6B</color>
+    <color name="divider">#2C2C34</color>
+
+    <color name="duress_banner">#FF6B6B</color>
+
+    <color name="badge_bg">#00C8C8</color>
+    <color name="badge_text">#000000</color>
+
+    <color name="primary">#00C8C8</color>
+    <color name="primaryVariant">#00A0A0</color>
+    <color name="secondary">#00C8C8</color>
+    <color name="textPrimary">#E0E0E0</color>
+    <color name="white">#FFFFFF</color>
+
+    <!-- ══ Classic mode overrides ══ -->
+    <!-- Flat, neutral dark surfaces — no blue tint -->
+    <color name="classic_background">#0D0D0D</color>
+    <color name="classic_surface">#1A1A1A</color>
+    <!-- Classic chat bubbles — green-tinted mine, neutral theirs -->
+    <color name="classic_bubble_mine">#1E3A28</color>
+    <color name="classic_bubble_mine_border">#2A5238</color>
+    <color name="classic_bubble_theirs">#1E1E1E</color>
+    <color name="classic_bubble_theirs_border">#2A2A2A</color>
+</resources>

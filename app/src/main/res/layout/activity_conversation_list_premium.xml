@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:animateLayoutChanges="true">
+
+        <!-- ── Sanctuary header — integrated, not floating ── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/ds_background"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="@dimen/ds_spacing_xl"
+            android:paddingEnd="@dimen/ds_spacing_l"
+            android:paddingTop="@dimen/ds_spacing_xl"
+            android:paddingBottom="@dimen/ds_spacing_l"
+            android:elevation="0dp">
+
+            <!-- Shield + wordmark group — organic spacing -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@drawable/ic_shield"
+                    android:scaleType="fitCenter"
+                    android:tint="@color/ds_accent"
+                    android:contentDescription="DuoShield"
+                    android:layout_marginEnd="@dimen/ds_spacing_m"/>
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DuoShield"
+                        android:textAppearance="@style/TextAppearance.DuoShield.Subheading"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Sanctuary"
+                        android:textAppearance="@style/TextAppearance.DuoShield.Label"
+                        android:textColor="@color/ds_accent"
+                        android:layout_marginTop="2dp"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Action buttons — generous touch targets -->
+            <ImageView
+                android:id="@+id/btn_search_toggle"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_search"
+                android:padding="12dp"
+                android:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Search"
+                android:layout_marginStart="@dimen/ds_spacing_s"/>
+
+            <ImageView
+                android:id="@+id/btn_menu"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_more_vert"
+                android:padding="12dp"
+                android:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Menu"
+                android:layout_marginStart="@dimen/ds_spacing_xs"/>
+        </LinearLayout>
+
+        <!-- ── Subtle divider ── -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/ds_header_border_width"
+            android:background="@color/ds_divider"/>
+
+        <!-- ── Inline search bar — organic and breathing ── -->
+        <LinearLayout
+            android:id="@+id/searchBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/ds_background"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="@dimen/ds_spacing_xl"
+            android:paddingEnd="@dimen/ds_spacing_xl"
+            android:paddingTop="@dimen/ds_spacing_m"
+            android:paddingBottom="@dimen/ds_spacing_l"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_input_sanctuary"
+                android:paddingStart="@dimen/ds_spacing_l"
+                android:paddingEnd="@dimen/ds_spacing_m">
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_search"
+                    android:tint="@color/ds_text_tertiary"
+                    android:layout_marginEnd="@dimen/ds_spacing_s"
+                    android:contentDescription="Search"/>
+
+                <EditText
+                    android:id="@+id/etSearch"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:hint="Search conversations…"
+                    android:textColorHint="@color/ds_text_tertiary"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="15sp"
+                    android:background="@null"
+                    android:inputType="text"
+                    android:imeOptions="actionSearch"
+                    android:singleLine="true"/>
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/btn_close_search"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_close"
+                android:tint="@color/ds_text_tertiary"
+                android:padding="8dp"
+                android:layout_marginStart="@dimen/ds_spacing_s"
+                android:contentDescription="Close search"/>
+        </LinearLayout>
+
+        <!-- ── Chat list / empty state — breathing space ── -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="@color/ds_background">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclerConversations"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingStart="@dimen/ds_spacing_l"
+                android:paddingEnd="@dimen/ds_spacing_l"
+                android:paddingTop="@dimen/ds_spacing_m"
+                android:paddingBottom="120dp"/>
+
+            <!-- Premium empty state — warm and welcoming -->
+            <LinearLayout
+                android:id="@+id/tvEmpty"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:paddingStart="40dp"
+                android:paddingEnd="40dp"
+                android:visibility="gone">
+
+                <FrameLayout
+                    android:layout_width="100dp"
+                    android:layout_height="100dp"
+                    android:layout_marginBottom="@dimen/ds_spacing_xl">
+
+                    <View
+                        android:layout_width="100dp"
+                        android:layout_height="100dp"
+                        android:background="@drawable/bg_empty_state"/>
+
+                    <ImageView
+                        android:layout_width="46dp"
+                        android:layout_height="46dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_shield"
+                        android:tint="@color/ds_accent"
+                        android:contentDescription="No chats"/>
+                </FrameLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Welcome to DuoShield"
+                    android:textAppearance="@style/TextAppearance.DuoShield.Headline"
+                    android:gravity="center"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/ds_spacing_m"
+                    android:text="Your sanctuary awaits.\nTap + to add your first secure contact."
+                    android:textAppearance="@style/TextAppearance.DuoShield.BodyMedium"
+                    android:gravity="center"
+                    android:lineSpacingMultiplier="1.5"/>
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- ── FAB — premium and protective ── -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabNewChat"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="28dp"
+        android:src="@drawable/ic_edit"
+        android:contentDescription="New chat"
+        app:backgroundTint="@color/ds_accent"
+        app:tint="@color/ds_text_on_accent"
+        app:elevation="8dp"
+        app:fabSize="normal"/>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

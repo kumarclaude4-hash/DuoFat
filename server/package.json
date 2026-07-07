@@ -1,0 +1,18 @@
+{
+  "name": "duoshield-push-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  },
+  "description": "Node.js server deployed on Render.com. It watches Firestore with `onSnapshot()` and sends FCM pushes through the Firebase Admin SDK. Keep the Render service awake with UptimeRobot by polling `/status`.",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

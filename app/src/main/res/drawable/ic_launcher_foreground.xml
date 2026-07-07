@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Shield body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,18 L28,30 L28,52 C28,68 39,82 54,88 C69,82 80,68 80,52 L80,30 Z" />
+
+    <!-- Shield inner highlight (teal) -->
+    <path
+        android:fillColor="#2AABB8"
+        android:pathData="M54,24 L34,34 L34,52 C34,65 43,77 54,82 C65,77 74,65 74,52 L74,34 Z" />
+
+    <!-- Lock shackle -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:fillColor="#00000000"
+        android:pathData="M45,50 L45,44 A9,9 0 0,1 63,44 L63,50" />
+
+    <!-- Lock body (rounded rectangle) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,50 L63,50 C64.1,50 65,50.9 65,52 L65,62 C65,63.1 64.1,64 63,64 L45,64 C43.9,64 43,63.1 43,62 L43,52 C43,50.9 43.9,50 45,50 Z" />
+
+    <!-- Lock keyhole circle -->
+    <path
+        android:fillColor="#2AABB8"
+        android:pathData="M54,53 C55.1,53 56,53.9 56,55 C56,56.1 55.1,57 54,57 C52.9,57 52,56.1 52,55 C52,53.9 52.9,53 54,53 Z" />
+
+    <!-- Lock keyhole stem -->
+    <path
+        android:fillColor="#2AABB8"
+        android:pathData="M52,57 L56,57 L56,62 L52,62 Z" />
+</vector>

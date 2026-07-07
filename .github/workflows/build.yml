@@ -1,0 +1,299 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+# ── Shared setup steps (used as a composite via run steps) ───────────────────
+# Each job repeats the setup because GitHub Actions doesn't support
+# sharing steps across jobs without a composite action. The Gradle
+# cache step handles the heavy lifting so repeated downloads are avoided.
+
+jobs:
+  lint:
+    name: Lint Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - run: chmod +x gradlew
+
+      - name: Write local.properties
+        env:
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                  > local.properties
+          echo "supabase.url=${SUPABASE_URL:-}"            >> local.properties
+          echo "supabase.anon_key=${SUPABASE_ANON_KEY:-}"  >> local.properties
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "Using real google-services.json from secret."
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret not set — using stub for lint (Firebase will not work at runtime)."
+            cat > app/google-services.json << 'STUB'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "duoshield-8caf1",
+              "storage_bucket": "duoshield-8caf1.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.duoshield.app"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "stub_key_lint_only" }],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          STUB
+          fi
+
+      - name: Write stub service-account.json
+        run: |
+          mkdir -p app/src/main/assets
+          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+            > app/src/main/assets/service-account.json
+
+      - name: Lint
+        run: ./gradlew lint --no-daemon
+        continue-on-error: true
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results*.html
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Print lint errors (informational)
+        if: always()
+        continue-on-error: true
+        run: |
+          if grep -q 'severity="Error"' app/build/reports/lint-results*.xml 2>/dev/null; then
+            echo "Lint errors found (informational — build continues):"
+            grep -o 'message="[^"]*"' app/build/reports/lint-results*.xml 2>/dev/null \
+              | sed 's/message="//;s/"//' | sort -u | head -20 || true
+          else
+            echo "No lint errors."
+          fi
+
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - run: chmod +x gradlew
+
+      - name: Write local.properties
+        env:
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY:  ${{ secrets.SUPABASE_ANON_KEY }}
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+          B2_REGION:          ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                          > local.properties
+          echo "supabase.url=${SUPABASE_URL:-}"                    >> local.properties
+          echo "supabase.anon_key=${SUPABASE_ANON_KEY:-}"          >> local.properties
+          echo "b2.key.id=${B2_KEY_ID:-}"                          >> local.properties
+          echo "b2.application.key=${B2_APPLICATION_KEY:-}"        >> local.properties
+          echo "b2.bucket=${B2_BUCKET:-yyush-duoshield}"           >> local.properties
+          echo "b2.region=${B2_REGION:-eu-central-003}"            >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}" >> local.properties
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "Using real google-services.json from secret."
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret not set — using stub (APK builds but Firebase will not work at runtime)."
+            echo "To fix: GitHub repo → Settings → Secrets → Actions → New secret"
+            echo "Name: GOOGLE_SERVICES_JSON  |  Value: contents of app/google-services.json from Firebase console"
+            cat > app/google-services.json << 'STUB'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "duoshield-8caf1",
+              "storage_bucket": "duoshield-8caf1.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.duoshield.app"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "stub_key_ci_build_only" }],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          STUB
+          fi
+
+      - name: Write stub service-account.json
+        run: |
+          mkdir -p app/src/main/assets
+          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+            > app/src/main/assets/service-account.json
+
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-build.log
+
+      - name: Upload Gradle build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: /tmp/gradle-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuoShield-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Signed release APK
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - run: chmod +x gradlew
+
+      - name: Write local.properties
+        env:
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"        > local.properties
+          echo "supabase.url=${SUPABASE_URL}"     >> local.properties
+          echo "supabase.anon_key=${SUPABASE_ANON_KEY}" >> local.properties
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON secret is required for a signed release build."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Write stub service-account.json
+        run: |
+          mkdir -p app/src/main/assets
+          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+            > app/src/main/assets/service-account.json
+
+      - name: Build signed release APK
+        env:
+          KEYSTORE_BASE64:   ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > keystore.jks
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$PWD/keystore.jks" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+      - name: Erase keystore from runner disk
+        if: always()
+        run: rm -f keystore.jks
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/**/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

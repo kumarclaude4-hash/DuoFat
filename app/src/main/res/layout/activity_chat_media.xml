@@ -1,0 +1,562 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background">
+
+    <!-- ── Premium chat header ── -->
+    <LinearLayout
+        android:id="@+id/chatHeader"
+        android:layout_width="match_parent"
+        android:layout_height="66dp"
+        android:background="@color/ds_toolbar"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="2dp"
+        android:paddingEnd="4dp"
+        android:elevation="8dp">
+
+        <ImageView
+            android:id="@+id/btnBack"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_arrow_back"
+            android:padding="10dp"
+            android:tint="@color/text_primary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"/>
+
+        <!-- Avatar with online dot -->
+        <FrameLayout
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="12dp">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/ivPartnerAvatar"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:scaleType="centerCrop"
+                app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.CircleAvatar"/>
+
+            <TextView
+                android:id="@+id/tvAvatarInitial"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:gravity="center"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium"
+                android:background="@drawable/bg_avatar_circle"
+                android:visibility="visible"/>
+
+            <View
+                android:id="@+id/headerOnlineDot"
+                android:layout_width="13dp"
+                android:layout_height="13dp"
+                android:layout_gravity="bottom|end"
+                android:background="@drawable/bg_online_dot"
+                android:visibility="gone"/>
+        </FrameLayout>
+
+        <!-- Name + status -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvPartnerName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium"
+                android:letterSpacing="-0.01"
+                android:maxLines="1"
+                android:ellipsize="end"/>
+
+            <TextView
+                android:id="@+id/tvOnlineStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="tap to view info"
+                android:textColor="@color/accent"
+                android:textSize="12sp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="-1dp"/>
+        </LinearLayout>
+
+        <!-- Voice call -->
+        <ImageView
+            android:id="@+id/btnVoiceCall"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_call_phone"
+            android:padding="10dp"
+            android:tint="@color/text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Voice call"/>
+
+        <!-- Video call -->
+        <ImageView
+            android:id="@+id/btnVideoCall"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_call_video"
+            android:padding="10dp"
+            android:tint="@color/text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Video call"/>
+
+        <!-- Timer -->
+        <ImageView
+            android:id="@+id/btnTimer"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_timer"
+            android:padding="10dp"
+            android:tint="@color/text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Disappearing messages"/>
+
+        <!-- Overflow -->
+        <ImageView
+            android:id="@+id/btnOverflow"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@drawable/ic_more_vert"
+            android:padding="10dp"
+            android:tint="@color/text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="More options"/>
+    </LinearLayout>
+
+    <!-- ── Pinned message banner ── -->
+    <LinearLayout
+        android:id="@+id/pinnedBanner"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:background="#E00C1720"
+        android:paddingStart="16dp"
+        android:paddingEnd="4dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:src="@drawable/ic_pin"
+            android:tint="@color/accent"
+            android:layout_marginEnd="10dp"
+            android:contentDescription="Pinned"/>
+
+        <TextView
+            android:id="@+id/pinnedText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="12sp"
+            android:textColor="#DDFFFFFF"
+            android:maxLines="1"
+            android:ellipsize="end"/>
+
+        <TextView
+            android:id="@+id/pinnedCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="@color/accent"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="4dp"/>
+
+        <ImageView
+            android:id="@+id/pinnedCloseBtn"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@drawable/ic_close"
+            android:padding="9dp"
+            android:tint="@color/text_hint"
+            android:contentDescription="Dismiss"/>
+    </LinearLayout>
+
+    <!-- ── Disappearing messages timer banner ── -->
+    <LinearLayout
+        android:id="@+id/disappearTimerBanner"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_width="match_parent"
+        android:layout_height="34dp"
+        android:background="#CC06101A"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvDisappearTimer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11.5sp"
+            android:textColor="#BDFFFFFF"/>
+    </LinearLayout>
+
+    <!-- ── Safety number changed banner ── -->
+    <LinearLayout
+        android:id="@+id/safetyNumberBanner"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#CC7B3A00"
+        android:paddingStart="16dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚠ Safety number changed — verify your contact"
+            android:textColor="#FFFFFFFF"
+            android:textSize="12.5sp"
+            android:lineSpacingMultiplier="1.3"/>
+
+        <Button
+            android:id="@+id/btnVerifySafetyNumber"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="VERIFY"
+            android:textColor="#FFFFD54F"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"/>
+
+        <ImageView
+            android:id="@+id/btnDismissSafetyNumber"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@drawable/ic_close"
+            android:padding="9dp"
+            android:tint="#99FFFFFF"
+            android:contentDescription="Dismiss safety number warning"/>
+    </LinearLayout>
+
+    <!-- ── Messages + scroll-to-bottom FAB ── -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/messageRecycler"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingTop="10dp"
+            android:paddingBottom="8dp"/>
+
+        <ImageView
+            android:id="@+id/btnScrollToBottom"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="bottom|end"
+            android:layout_marginBottom="12dp"
+            android:layout_marginEnd="14dp"
+            android:src="@drawable/ic_arrow_down"
+            android:padding="10dp"
+            android:background="@drawable/bg_fab"
+            android:elevation="8dp"
+            android:scaleX="0"
+            android:scaleY="0"
+            android:alpha="0"
+            android:visibility="gone"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Scroll to latest message"/>
+    </FrameLayout>
+
+    <!-- ── Typing indicator ── -->
+    <LinearLayout
+        android:id="@+id/typingIndicatorRow"
+        android:layout_width="wrap_content"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:visibility="gone"
+        android:background="@color/transparent">
+
+        <!-- Premium animated bubble -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/bg_bubble_theirs"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp">
+
+            <com.duoshield.app.ui.TypingDotsView
+                android:layout_width="44dp"
+                android:layout_height="20dp"/>
+        </LinearLayout>
+
+        <!-- Hidden compat TextView — Java still holds a ref to this ID -->
+        <TextView
+            android:id="@+id/typingIndicator"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone"/>
+    </LinearLayout>
+
+    <!-- ── Upload progress — circular overlay (WhatsApp / Telegram style) ── -->
+    <FrameLayout
+        android:id="@+id/uploadProgressContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="14dp"
+        android:background="#CC080C14"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="vertical"
+            android:gravity="center">
+
+            <ProgressBar
+                android:id="@+id/uploadProgress"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/accent"/>
+
+            <TextView
+                android:id="@+id/tvUploadPct"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0%"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:fontFamily="sans-serif-medium"
+                android:layout_marginTop="8dp"/>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ── Reply preview bar ── -->
+    <androidx.cardview.widget.CardView
+        android:id="@+id/replyPreviewBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="10dp"
+        android:layout_marginBottom="4dp"
+        app:cardCornerRadius="14dp"
+        app:cardBackgroundColor="@color/ds_surface_2"
+        app:cardElevation="0dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <View
+                android:layout_width="3.5dp"
+                android:layout_height="match_parent"
+                android:background="@color/ds_accent"/>
+
+            <TextView
+                android:id="@+id/replyPreviewBarText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="12.5sp"
+                android:padding="11dp"
+                android:maxLines="1"
+                android:ellipsize="end"/>
+
+            <ImageView
+                android:id="@+id/cancelReplyBtn"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@drawable/ic_close"
+                app:tint="@color/ds_text_tertiary"
+                android:padding="9dp"
+                android:contentDescription="Cancel reply"/>
+        </LinearLayout>
+    </androidx.cardview.widget.CardView>
+
+    <!-- ── Voice recording overlay ── -->
+    <LinearLayout
+        android:id="@+id/voiceRecordingBar"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:background="@color/ds_input_bg"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="10dp"
+        android:layout_marginBottom="8dp"
+        android:elevation="4dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/cancelRecordingBtn"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:src="@drawable/ic_delete"
+            android:padding="9dp"
+            android:tint="@color/error_red"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Cancel recording"/>
+
+        <TextView
+            android:id="@+id/recordingTimer"
+            android:layout_width="42dp"
+            android:layout_height="wrap_content"
+            android:text="0:00"
+            android:textSize="13sp"
+            android:textColor="@color/error_red"
+            android:fontFamily="monospace"
+            android:gravity="center"/>
+
+        <com.duoshield.app.ui.WaveformView
+            android:id="@+id/recordingWaveform"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"/>
+
+        <ImageView
+            android:id="@+id/stopRecordingBtn"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:src="@drawable/ic_send"
+            android:padding="10dp"
+            android:tint="@color/accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Send recording"/>
+    </LinearLayout>
+
+    <!-- ── Message input bar ── -->
+    <LinearLayout
+        android:id="@+id/inputBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="bottom"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="10dp"
+        android:paddingTop="4dp"
+        android:background="@android:color/transparent">
+
+        <!-- Input field with attach icon -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/bg_input_field_whatsapp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="4dp"
+            android:paddingEnd="8dp">
+
+            <ImageView
+                android:id="@+id/uploadButton"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:src="@drawable/ic_attach"
+                android:padding="10dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Attach"/>
+
+            <EditText
+                android:id="@+id/messageInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@android:color/transparent"
+                android:hint="Message"
+                android:textColor="@color/ds_text_primary"
+                android:textColorHint="@color/ds_text_secondary"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:paddingStart="2dp"
+                android:paddingEnd="2dp"
+                android:textSize="16sp"
+                android:maxLines="6"
+                android:inputType="textCapSentences|textMultiLine"/>
+        </LinearLayout>
+
+        <View
+            android:layout_width="8dp"
+            android:layout_height="8dp"/>
+
+        <!-- Send / mic FAB button -->
+        <FrameLayout
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:background="@drawable/bg_send_button_whatsapp">
+
+            <ImageView
+                android:id="@+id/micButton"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:src="@drawable/ic_mic"
+                android:padding="13dp"
+                app:tint="@color/white"
+                android:contentDescription="Voice"/>
+
+            <ImageView
+                android:id="@+id/sendButton"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:src="@drawable/ic_send"
+                android:padding="13dp"
+                app:tint="@color/white"
+                android:visibility="gone"
+                android:contentDescription="Send"/>
+        </FrameLayout>
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingBottom="@dimen/ds_spacing_m">
+
+    <!-- Premium card container — elevated and breathing -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_conversation_item_sanctuary"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="@dimen/ds_spacing_l"
+        android:paddingEnd="@dimen/ds_spacing_l"
+        android:paddingTop="@dimen/ds_spacing_l"
+        android:paddingBottom="@dimen/ds_spacing_l"
+        android:foreground="?attr/selectableItemBackground">
+
+        <!-- Avatar — larger and more prominent -->
+        <FrameLayout
+            android:layout_width="@dimen/ds_avatar_size"
+            android:layout_height="@dimen/ds_avatar_size"
+            android:layout_marginEnd="@dimen/ds_spacing_l"
+            android:layout_gravity="center_vertical">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/iv_avatar"
+                android:layout_width="@dimen/ds_avatar_size"
+                android:layout_height="@dimen/ds_avatar_size"
+                android:scaleType="centerCrop"
+                app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.CircleAvatar"/>
+
+            <TextView
+                android:id="@+id/tv_avatar_initial"
+                android:layout_width="@dimen/ds_avatar_size"
+                android:layout_height="@dimen/ds_avatar_size"
+                android:gravity="center"
+                android:textColor="@color/ds_text_on_accent"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium"
+                android:background="@drawable/bg_avatar_circle"
+                android:visibility="visible"/>
+
+            <!-- Online dot — subtle indicator -->
+            <View
+                android:id="@+id/online_dot"
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_gravity="bottom|end"
+                android:layout_marginEnd="-1dp"
+                android:layout_marginBottom="-1dp"
+                android:background="@drawable/bg_online_dot"
+                android:visibility="gone"/>
+
+            <!-- E2E shield badge — protective indicator -->
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_gravity="top|end"
+                android:layout_marginEnd="-2dp"
+                android:layout_marginTop="-2dp"
+                android:src="@drawable/ic_shield"
+                android:padding="3dp"
+                android:background="@drawable/bg_badge"
+                app:tint="@color/ds_text_on_accent"
+                android:contentDescription="Encrypted"/>
+        </FrameLayout>
+
+        <!-- Content column — generous spacing -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_gravity="center_vertical"
+            android:orientation="vertical">
+
+            <!-- Name + time row — clear hierarchy -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="@dimen/ds_spacing_xs">
+
+                <TextView
+                    android:id="@+id/tv_name"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textAppearance="@style/TextAppearance.DuoShield.Body"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+
+                <TextView
+                    android:id="@+id/tv_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="@style/TextAppearance.DuoShield.Timestamp"
+                    android:layout_marginStart="@dimen/ds_spacing_m"/>
+            </LinearLayout>
+
+            <!-- Preview + badge row — readable secondary text -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tv_preview"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textAppearance="@style/TextAppearance.DuoShield.BodyMedium"
+                    android:maxLines="1"
+                    android:ellipsize="end"/>
+
+                <!-- Unread badge — subtle but clear -->
+                <TextView
+                    android:id="@+id/tv_badge"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:background="@drawable/bg_badge"
+                    android:gravity="center"
+                    android:textColor="@color/ds_badge_text"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-medium"
+                    android:layout_marginStart="@dimen/ds_spacing_s"
+                    android:visibility="gone"/>
+            </LinearLayout>
+
+            <!-- Typing indicator — soft and non-intrusive -->
+            <TextView
+                android:id="@+id/tv_typing"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="typing…"
+                android:textAppearance="@style/TextAppearance.DuoShield.Label"
+                android:textColor="@color/ds_accent"
+                android:layout_marginTop="@dimen/ds_spacing_xs"
+                android:visibility="gone"/>
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

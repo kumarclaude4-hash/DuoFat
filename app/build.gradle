@@ -1,0 +1,243 @@
+plugins {
+    id 'com.android.application'
+    id 'com.google.gms.google-services'
+}
+
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localProps.load(localPropsFile.newDataInputStream())
+}
+
+android {
+    namespace "com.duoshield.app"
+    compileSdk 34
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId "com.duoshield.app"
+        minSdk 26
+        targetSdk 34
+        versionCode 4
+        versionName "1.3"
+
+        // Restrict native libs to mobile ARM only — drops x86/x86_64 (emulator/PC only)
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+
+        // B2 — local.properties first, fall back to Replit Secrets (env vars)
+        def b2KeyId   = (localProps.getProperty('b2.key.id',          '') ?: '').trim()
+        def b2AppKey  = (localProps.getProperty('b2.application.key', '') ?: '').trim()
+        def b2Bucket  = (localProps.getProperty('b2.bucket',          '') ?: '').trim()
+        def b2Region  = (localProps.getProperty('b2.region',          '') ?: '').trim()
+        if (b2KeyId.isEmpty())   b2KeyId   = (System.getenv('B2_KEY_ID')          ?: '').trim()
+        if (b2AppKey.isEmpty())  b2AppKey  = (System.getenv('B2_APPLICATION_KEY') ?: '').trim()
+        if (b2Bucket.isEmpty())  b2Bucket  = (System.getenv('B2_BUCKET')          ?: 'yyush-duoshield').trim()
+        if (b2Region.isEmpty())  b2Region  = (System.getenv('B2_REGION')          ?: 'eu-central-003').trim()
+        def b2Endpoint = "https://s3.${b2Region}.backblazeb2.com"
+        buildConfigField "String", "B2_KEY_ID",          "\"${b2KeyId}\""
+        buildConfigField "String", "B2_APPLICATION_KEY", "\"${b2AppKey}\""
+        buildConfigField "String", "B2_BUCKET",          "\"${b2Bucket}\""
+        buildConfigField "String", "B2_REGION",          "\"${b2Region}\""
+        buildConfigField "String", "B2_ENDPOINT",        "\"${b2Endpoint}\""
+
+        def pushServerUrl = (localProps.getProperty('push.server.url', '') ?: '').trim()
+        if (pushServerUrl.isEmpty()) pushServerUrl = (System.getenv('PUSH_SERVER_URL') ?: '').trim()
+        if (pushServerUrl.isEmpty()) pushServerUrl = 'https://duofat.onrender.com'
+        buildConfigField "String", "PUSH_SERVER_URL", "\"${pushServerUrl}\""
+
+        // TURN relay credentials — local.properties first, fall back to Replit Secrets
+        def turnUrl        = (localProps.getProperty('turn.url',        '') ?: '').trim()
+        def turnUsername   = (localProps.getProperty('turn.username',   '') ?: '').trim()
+        def turnCredential = (localProps.getProperty('turn.credential', '') ?: '').trim()
+        if (turnUrl.isEmpty())        turnUrl        = (System.getenv('TURN_URL')        ?: '').trim()
+        if (turnUsername.isEmpty())   turnUsername   = (System.getenv('TURN_USERNAME')   ?: '').trim()
+        if (turnCredential.isEmpty()) turnCredential = (System.getenv('TURN_CREDENTIAL') ?: '').trim()
+        buildConfigField "String", "TURN_URL",        "\"${turnUrl}\""
+        buildConfigField "String", "TURN_USERNAME",   "\"${turnUsername}\""
+        buildConfigField "String", "TURN_CREDENTIAL", "\"${turnCredential}\""
+    }
+
+    signingConfigs {
+        release {
+            // Credentials read from Replit Secrets (env vars) at build time.
+            // The keystore binary is written to app/duoshield-release.keystore by the
+            // assembleRelease workflow before Gradle runs (base64-decoded from KEYSTORE_BASE64).
+            def ksFile = rootProject.file('app/duoshield-release.keystore')
+            def ksPwd  = System.getenv('KEYSTORE_PASSWORD')
+            def kAlias = System.getenv('KEY_ALIAS')
+            def kPwd   = System.getenv('KEY_PASSWORD')
+            if (ksFile.exists() && ksPwd != null) {
+                storeFile     ksFile
+                storePassword ksPwd.trim()
+                keyAlias      kAlias != null ? kAlias.trim().toLowerCase() : ''
+                keyPassword   kPwd   != null ? kPwd.trim()   : ''
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            debuggable false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+            // ndk.abiFilters omitted: splits.abi handles per-ABI APK delivery.
+            // Adding abiFilters here conflicts with the splits configuration.
+        }
+        debug {
+            minifyEnabled false
+            // ndk.abiFilters omitted: splits.abi already restricts ABIs and
+            // having both causes a Gradle configuration conflict.
+        }
+    }
+
+    // ABI splits disabled for debug sideloading — produces one fat app-debug.apk.
+    // Re-enable for Play Store releases: splits { abi { enable true; universalApk false } }
+    splits {
+        abi {
+            enable false
+        }
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lintOptions {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    packagingOptions {
+        resources {
+            excludes += [
+                'META-INF/INDEX.LIST',
+                'META-INF/DEPENDENCIES',
+                'META-INF/LICENSE',
+                'META-INF/LICENSE.txt',
+                'META-INF/NOTICE',
+                'META-INF/NOTICE.txt',
+                'META-INF/*.kotlin_module'
+            ]
+        }
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'androidx.gridlayout:gridlayout:1.0.0'
+
+    // Biometric (alpha needed for BiometricPrompt.AuthenticationCallback)
+    implementation 'androidx.biometric:biometric:1.2.0-alpha05'
+
+    // Security — EncryptedSharedPreferences
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
+    // Room (local encrypted DB)
+    implementation 'androidx.room:room-runtime:2.6.1'
+    annotationProcessor 'androidx.room:room-compiler:2.6.1'
+
+    // ViewModel + LiveData
+    implementation 'androidx.lifecycle:lifecycle-viewmodel:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-livedata:2.7.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime:2.7.0'
+
+    // Firebase
+    implementation platform('com.google.firebase:firebase-bom:32.7.0')
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.google.firebase:firebase-storage'
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-messaging'
+
+
+
+    // WorkManager for self-destruct scheduler
+    implementation 'androidx.work:work-runtime:2.9.0'
+
+    // Material Design
+    implementation 'com.google.android.material:material:1.11.0'
+
+    // Glide — image loading in chat
+    implementation 'com.github.bumptech.glide:glide:4.16.0'
+    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
+
+    // PhotoView — pinch-zoom for full-screen images
+    implementation 'com.github.chrisbanes:PhotoView:2.3.0'
+
+    // ZXing — QR code generation + scanning
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'com.google.zxing:core:3.5.3'
+
+    // Signal Protocol — end-to-end encryption (Double Ratchet + X3DH)
+    //
+    // libsignal-android 0.54.x AAR = native .so ONLY (arm64-v8a / armeabi-v7a / x86 / x86_64).
+    //                                It does NOT ship Java classes in its classes.jar.
+    // libsignal-client  0.54.x JAR = all Java protocol classes (Curve, IdentityKeyPair,
+    //                                SessionCipher, PreKeyBundle, etc.)
+    //
+    // DEPENDENCY RULES — three lines, all three required:
+    //
+    // 1. libsignal-android is `implementation` — provides the native JNI .so files.
+    //    libsignal-client is excluded from its transitive graph so Gradle does not pull
+    //    the full JAR in twice (once transitively, once via line 3 below), which would
+    //    cause duplicate-class dexing errors.
+    //
+    // 2. libsignal-client is `compileOnly` — lets javac resolve all org.signal.* imports
+    //    at compile time.  NOT included in the DEX (that is line 3's job).
+    //
+    // 3. libs/libsignal-client-0.54.1-stripped.jar is `implementation` — a copy of the
+    //    Maven JAR with 6 java.lang.Record subclasses removed:
+    //      ChatService${DebugInfo,Request,Response,ResponseAndDebugInfo}
+    //      Svr3$RestoredSecret
+    //      GroupSendEndorsementsResponse$ReceivedEndorsements
+    //    These classes are from the libsignal.net / zkgroup packages that DuoShield never
+    //    uses.  Removing them avoids the D8 crash:
+    //      "Attempt to create a global synthetic for 'Record desugaring' without a consumer"
+    //    which occurs because DexingNoClasspathTransform (used for external Maven JARs)
+    //    runs with enableGlobalSynthetics=false and cannot desugar java.lang.Record.
+    //    The stripped local file goes through a different Gradle transform path that is
+    //    not subject to that restriction.
+    //    To regenerate: python3 scripts/strip_signal_records.py  (see that file for details)
+    //
+    // 4. No DuoShield source file imports org.signal.libsignal.protocol.kdf.HKDF.
+    //    SeedPhraseHelper implements RFC 5869 HKDF using javax.crypto.Mac so that
+    //    this libsignal-internal class is never needed at runtime.
+    implementation('org.signal:libsignal-android:0.54.1') {
+        exclude group: 'org.signal', module: 'libsignal-client'
+    }
+    compileOnly 'org.signal:libsignal-client:0.54.1'
+    implementation files('libs/libsignal-client-0.54.1-stripped.jar')
+
+    // SQLCipher — full Room database encryption (BUG-D01).
+    // AES-256-CBC per-page encryption; passphrase derived in DatabaseKeyProvider.
+    // Requires net.sqlcipher artifact for the SupportFactory Room integration.
+    implementation 'net.zetetic:android-database-sqlcipher:4.5.4'
+    implementation 'androidx.sqlite:sqlite:2.4.0'
+
+    // ExoPlayer (Media3) — full-screen encrypted video playback with basic controls
+    implementation 'androidx.media3:media3-exoplayer:1.3.1'
+    implementation 'androidx.media3:media3-ui:1.3.1'
+
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // WebRTC — voice & video calling
+    implementation 'io.getstream:stream-webrtc-android:1.1.1'
+
+    // Local broadcast for in-process call_invite delivery
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+
+    // Unit tests
+    testImplementation 'junit:junit:4.13.2'
+}

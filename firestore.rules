@@ -1,0 +1,292 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users: anyone authenticated can read (needed for ECDH key exchange,
+    // partner display info, FCM token delivery). Only the owner can write.
+    match /users/{uid} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
+
+      // public_keys subcollection: owner can write their own bundle.
+      // Any authenticated user can UPDATE (not create/delete) the bundle to
+      // consume a one-time prekey — required for X3DH forward secrecy.
+      // Without this rule, consumeOtpkOnFirestore() always gets PERMISSION_DENIED
+      // and index-0 is silently reused for every new session (BUG-F01 / BUG-F05).
+      match /public_keys/{doc} {
+        allow read:   if request.auth != null;
+        allow create: if request.auth != null && request.auth.uid == uid;
+        // Cross-user update is scoped to ONLY the one-time-prekey list (and its
+        // update timestamp) so a stranger consuming a prekey can never also
+        // overwrite identityKey/signedPreKey (which would enable an X3DH MITM).
+        allow update: if request.auth != null
+                      && (
+                        request.auth.uid == uid
+                        || request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(['oneTimePreKeys', 'updatedAt'])
+                      );
+        allow delete: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+
+    // Helper: given a 2-element participants array, return the UID that is NOT myUid.
+    // Used by the F38 fix below to identify the partner's presence-field keys.
+    function otherUid(participants, myUid) {
+      return participants[0] == myUid ? participants[1] : participants[0];
+    }
+
+    // Chats: participants can read and update, but NOT create from the client.
+    // F6 fix: chats/{chatId} docs are created exclusively by the server endpoint
+    // POST /createChat (Admin SDK, bypasses rules) which verifies both UIDs exist in
+    // identities before writing. The client-side create rule is deny so a malicious
+    // client cannot forge a chat doc to satisfy the calls create gate.
+    match /chats/{chatId} {
+      allow create: if false;  // server-only via Admin SDK (/createChat endpoint)
+      allow read: if request.auth != null
+                  && request.auth.uid in resource.data.participants;
+      // F38 fix: prevent a participant from spoofing the partner's presence fields.
+      // The participants list is immutable via client updates. Each participant may
+      // update their own typing_/online_/lastSeen_/unread_ keys and shared fields
+      // (disappear_ms, pinnedMessages, lastMessage, etc.), but NOT the partner's
+      // presence keys.
+      allow update: if request.auth != null
+                    && request.auth.uid in resource.data.participants
+                    && request.resource.data.participants == resource.data.participants
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                         'typing_'   + otherUid(resource.data.participants, request.auth.uid),
+                         'online_'   + otherUid(resource.data.participants, request.auth.uid),
+                         'lastSeen_' + otherUid(resource.data.participants, request.auth.uid),
+                         'unread_'   + otherUid(resource.data.participants, request.auth.uid)
+                       ]);
+
+      match /messages/{msgId} {
+        // F19/F21 fix: split the monolithic write rule into scoped create/update/delete.
+        allow read: if request.auth != null
+                    && request.auth.uid in
+                       get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        // create: the writer must be the declared sender and the message must be encrypted.
+        allow create: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+                      && request.resource.data.sender == request.auth.uid
+                      && request.resource.data.isEncrypted == true;
+        // update: sender field is immutable; either participant may update reactions,
+        // delivery status, expiresAt, etc. Only the original sender may set
+        // deletedForAll=true (F21 fix: prevents recipient from silently erasing
+        // the sender's messages on both devices).
+        allow update: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+                      && request.resource.data.sender == resource.data.sender
+                      && (!('deletedForAll' in request.resource.data.diff(resource.data).affectedKeys())
+                          || resource.data.sender == request.auth.uid);
+        // delete: only the original sender may delete their own message, OR either
+        // participant may delete a message whose expiresAt deadline has already passed
+        // (required by SelfDestructWorker which runs as the authenticated user).
+        allow delete: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+                      && (resource.data.sender == request.auth.uid
+                          || (resource.data.expiresAt is number
+                              && resource.data.expiresAt > 0
+                              && resource.data.expiresAt < request.time.toMillis()));
+      }
+    }
+
+    // Groups: only members can read or write; creator can create the document.
+    // Members list is stored as an array of Firebase UIDs in groups/{groupId}.members.
+    match /groups/{groupId} {
+      allow create: if request.auth != null
+                    && request.auth.uid in request.resource.data.members;
+      allow read:   if request.auth != null
+                    && request.auth.uid in resource.data.members;
+      // createdBy is immutable after creation. Without this, any member could
+      // rewrite createdBy to themselves and then pass the "creator-only" check
+      // on the keys/{memberUid} subcollection below, defeating that rule's
+      // protection against group key substitution (F27).
+      allow update: if request.auth != null
+                    && request.auth.uid in resource.data.members
+                    && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if request.auth != null
+                    && request.auth.uid == resource.data.createdBy;
+
+      match /messages/{msgId} {
+        allow read: if request.auth != null
+                    && request.auth.uid in
+                       get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+        // F28 fix: enforce server-side that each message's sender field equals the writer's
+        // auth UID, and that the message is marked encrypted. Without these constraints a
+        // member could write a forged sender or send a plaintext (isEncrypted:false) message
+        // that bypasses decryption on the receiver.
+        allow create: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/groups/$(groupId)).data.members
+                      && request.resource.data.sender == request.auth.uid
+                      && request.resource.data.isEncrypted == true;
+        // Messages are append-only — no update allowed (prevents silent edit injection).
+        // delete is restricted to the original sender so they can retract their own messages.
+        allow delete: if request.auth != null
+                      && resource.data.sender == request.auth.uid;
+      }
+
+      // Group key distribution: each member's encrypted copy of the group key.
+      // Read restricted to the member whose key it is (prevents cross-member key reads).
+      // Write restricted to the group's creator ONLY — any other member being able to
+      // write here would let them plant a substitute key in another member's slot and
+      // silently hijack that member's group traffic (a targeted Signal MITM requiring
+      // nothing but ordinary co-membership). If a future admin/re-keying flow needs a
+      // non-creator to write here, it must be paired with client-side verification that
+      // the writer is who they claim to be, not just "any member."
+      match /keys/{memberUid} {
+        allow read:  if request.auth != null
+                     && request.auth.uid == memberUid;
+        allow write: if request.auth != null
+                     && request.auth.uid ==
+                        get(/databases/$(database)/documents/groups/$(groupId)).data.createdBy;
+      }
+    }
+
+    // Calls: voice & video signaling.
+    // F6 fix: gate call creation on a pre-existing bilateral chat doc.
+    // The caller must supply a chatId (deterministic: SHA-256 of sorted UIDs) that:
+    //   a) exists as a chats/{chatId} document, AND
+    //   b) lists the caller as a participant, AND
+    //   c) lists the callee as a participant.
+    // A chats doc is only created via ContactManager.addContact() after both UIDs are
+    // resolved through identities lookups, so its existence is proof of mutual contact.
+    // This closes the "any UID can ring any other UID" gap (F6).
+    match /calls/{callId} {
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.callerId
+                    && request.resource.data.chatId != null
+                    && request.resource.data.chatId != ""
+                    && exists(/databases/$(database)/documents/chats/$(request.resource.data.chatId))
+                    && request.auth.uid in
+                         get(/databases/$(database)/documents/chats/$(request.resource.data.chatId)).data.participants
+                    && request.resource.data.calleeId in
+                         get(/databases/$(database)/documents/chats/$(request.resource.data.chatId)).data.participants;
+      allow read, write: if request.auth != null
+                         && (request.auth.uid == resource.data.callerId
+                             || request.auth.uid == resource.data.calleeId);
+
+      // ICE candidates restricted to call participants only.
+      // Previously open to any authenticated user — that allowed any signed-in
+      // account to inject candidates into or eavesdrop on any call (BUG-S-CALL01).
+      match /callerCandidates/{candId} {
+        allow read, write: if request.auth != null
+                           && (request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.callerId
+                               || request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
+      }
+      match /calleeCandidates/{candId} {
+        allow read, write: if request.auth != null
+                           && (request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.callerId
+                               || request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
+      }
+    }
+
+    // Server health-check collection written by the push server's Admin SDK.
+    // Admin SDK bypasses these rules entirely, but we explicitly deny all
+    // client-side access so no app client can read, pollute, or enumerate it.
+    match /_server_health/{doc} {
+      allow read, write: if false;
+    }
+
+    // Legacy pairing rooms (kept for backwards compatibility).
+    // Read is restricted to the creator and joiner — open read leaks both
+    // parties' legacy ECDH public keys to any authenticated user (BUG-F07).
+    match /rooms/{code} {
+      allow create: if request.auth != null;
+      allow read:   if request.auth != null
+                    && (request.auth.uid == resource.data.creatorUid
+                        || request.auth.uid == resource.data.joinerUid);
+      allow update: if request.auth != null
+                    && resource.data.status == "waiting"
+                    && resource.data.joinerUid == "";
+      allow delete: if request.auth != null
+                    && (request.auth.uid == resource.data.creatorUid
+                        || request.auth.uid == resource.data.joinerUid);
+    }
+
+    // Legacy conversations (kept for backwards compatibility)
+    match /conversations/{convId} {
+      allow create: if request.auth != null
+                    && request.auth.uid in request.resource.data.participants;
+      allow read, update: if request.auth != null
+                          && request.auth.uid in resource.data.participants;
+
+      match /messages/{msgId} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid in
+                              get(/databases/$(database)/documents/conversations/$(convId)).data.participants;
+      }
+    }
+
+    // User ID → Firebase UID mapping (used for pairing by DS-XXXXXXXX).
+    // Write is restricted to the document owner — the `uid` field in the written
+    // document must match the authenticated user's UID.  This prevents any
+    // authenticated user from redirecting a victim's identity to their own UID
+    // (BUG-S06 / BUG-F03 / BUG-F06 / BUG-ID01).
+    match /identities/{userId} {
+      allow read:  if request.auth != null;
+      allow write: if request.auth != null
+                   && request.auth.uid == userId
+                   && request.resource.data.uid == request.auth.uid;
+    }
+
+    // Passphrase recovery blob: AES-GCM({email, passphrase}, PBKDF2(recoveryCode)).
+    // Even though the blob is encrypted, restricting to the owner prevents offline
+    // brute-force attacks against the full corpus.
+    match /recovery/{uid} {
+      allow read:  if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // ── Backup collections ────────────────────────────────────────────────────
+
+    // Cloud backup: owner-only access.
+    // All message content is AES-256-GCM encrypted on-device before upload;
+    // the server never sees plaintext.  Hard-deny delete on message and contact
+    // sub-docs — deletions are handled via soft-delete (isDeleted:true) so that
+    // a restore on a new device never silently loses a message due to a race
+    // between a delete and a restore fetch.
+    match /backups/{userId} {
+      // Meta document (lastBackupTs, count) — owner read/write only.
+      allow read:   if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;  // meta doc never deleted via client
+
+      // Encrypted message backups — owner read/write; delete hard-denied.
+      match /messages/{msgId} {
+        allow read:   if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId;
+        allow update: if request.auth != null && request.auth.uid == userId;
+        allow delete: if false;  // use isDeleted:true soft-delete instead
+      }
+
+      // Contact backups (display name + conversationId) — owner read/write.
+      match /contacts/{contactId} {
+        allow read:   if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId;
+        allow update: if request.auth != null && request.auth.uid == userId;
+        allow delete: if false;
+      }
+    }
+
+    // Backup event log: write-only for the owning user; no client-side reads.
+    // Logs backup_started / backup_complete / backup_failed events for
+    // server-side monitoring.  Clients never need to read these back.
+    match /backup_logs/{logId} {
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow read:   if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+  }
+}

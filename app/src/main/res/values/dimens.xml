@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Organic Curves -->
+    <dimen name="ds_corner_radius_card">20dp</dimen>
+    <dimen name="ds_corner_radius_input">16dp</dimen>
+    <dimen name="ds_corner_radius_button">12dp</dimen>
+    <dimen name="ds_corner_radius_bubble">20dp</dimen>
+    
+    <!-- Organic Spacing -->
+    <dimen name="ds_spacing_xs">4dp</dimen>
+    <dimen name="ds_spacing_s">8dp</dimen>
+    <dimen name="ds_spacing_m">12dp</dimen>
+    <dimen name="ds_spacing_l">16dp</dimen>
+    <dimen name="ds_spacing_xl">24dp</dimen>
+    <dimen name="ds_spacing_xxl">32dp</dimen>
+    
+    <!-- Components -->
+    <dimen name="ds_avatar_size">56dp</dimen>
+    <dimen name="ds_input_border_width">1.5dp</dimen>
+    <dimen name="ds_header_border_width">0.5dp</dimen>
+    <dimen name="ds_button_padding_h">16dp</dimen>
+    <dimen name="ds_button_padding_v">12dp</dimen>
+    <dimen name="ds_bubble_padding_h">12dp</dimen>
+    <dimen name="ds_bubble_padding_v">10dp</dimen>
+</resources>

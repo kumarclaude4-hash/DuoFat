@@ -1,0 +1,115 @@
+name: Build Release APK (Manual)
+
+on:
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Signed Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON secret is required for a release build."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Write service-account.json (FCM)
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          mkdir -p app/src/main/assets
+          if [ -n "$SERVICE_ACCOUNT" ]; then
+            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
+          else
+            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
+            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' > app/src/main/assets/service-account.json
+          fi
+
+      - name: Grant Gradle execute permission
+        run: chmod +x gradlew
+
+      - name: Build Signed Release APK
+        env:
+          # Signing Secrets
+          KEYSTORE_BASE64:    ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS:          ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:       ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD:  ${{ secrets.KEYSTORE_PASSWORD }}
+          # B2 Secrets
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+          B2_REGION:          ${{ secrets.B2_REGION }}
+          # Push Server URL
+          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/duoshield-release.keystore
+
+          # Write local.properties so build.gradle picks up all B2 + server values
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                          > local.properties
+          echo "b2.key.id=${B2_KEY_ID:-}"                          >> local.properties
+          echo "b2.application.key=${B2_APPLICATION_KEY:-}"        >> local.properties
+          echo "b2.bucket=${B2_BUCKET:-yyush-duoshield}"           >> local.properties
+          echo "b2.region=${B2_REGION:-eu-central-003}"            >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}" >> local.properties
+
+          ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Erase keystore
+        if: always()
+        run: rm -f app/duoshield-release.keystore
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle | grep -oP '"\K[^"]+')
+          echo "tag=v${VERSION_NAME}-release-$(date +%Y%m%d%H%M)" >> $GITHUB_OUTPUT
+          echo "name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuoShield-Release-APK
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "DuoShield ${{ steps.version.outputs.name }} (Release)"
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

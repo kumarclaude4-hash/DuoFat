@@ -1,0 +1,48 @@
+# Android SDK (installed locally, do not commit)
+.android-sdk/
+
+# Gradle files
+.gradle/
+build/
+
+# Local configuration
+local.properties
+
+# Log files
+*.log
+
+# Android Studio
+.idea/
+*.iml
+
+# APKs
+*.apk
+*.ap_
+
+# Setup helper — contains new keystore b64 for KEYSTORE_BASE64 secret; must not be committed
+KEYSTORE_BASE64_VALUE.txt
+
+# Release signing keystores — must never be committed (F1 security review finding).
+# app/duoshield-release.keystore was already tracked before this rule was added;
+# see replit.md / SECURITY_ROADMAP.md F1 for the required manual untracking + rotation
+# decision, which needs explicit user sign-off before acting.
+*.keystore
+*.jks
+
+# Keep the pre-stripped libsignal JAR (needed for CI builds — see scripts/strip_signal_records.py)
+!app/libs/libsignal-client-0.54.1-stripped.jar
+
+# Generated files
+captures/
+
+# Firebase — service account (server-side only, keep out of repo)
+app/src/main/assets/service-account.json
+
+# Firebase — google-services.json (Bug 19 fix: must not be committed — contains API keys)
+# Copy from Firebase console: Project settings → google-services.json
+# See app/google-services.json.template for the required structure.
+app/google-services.json
+
+# Replit attached_assets — screenshots and files uploaded during chat sessions.
+# These are workspace-only scratch files and must never be committed.
+attached_assets/

@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background">
+
+    <!-- ── Sanctuary chat header — integrated, not floating ── -->
+    <LinearLayout
+        android:id="@+id/chatHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/ds_background"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="@dimen/ds_spacing_s"
+        android:paddingEnd="@dimen/ds_spacing_m"
+        android:paddingTop="@dimen/ds_spacing_l"
+        android:paddingBottom="@dimen/ds_spacing_m"
+        android:elevation="0dp">
+
+        <!-- Back button -->
+        <ImageView
+            android:id="@+id/btnBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_arrow_back"
+            android:padding="12dp"
+            android:tint="@color/ds_text_primary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"/>
+
+        <!-- Avatar with online dot — prominent and personal -->
+        <FrameLayout
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="@dimen/ds_spacing_xs"
+            android:layout_marginEnd="@dimen/ds_spacing_m">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:id="@+id/ivPartnerAvatar"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:scaleType="centerCrop"
+                app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.CircleAvatar"/>
+
+            <TextView
+                android:id="@+id/tvAvatarInitial"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:gravity="center"
+                android:textColor="@color/ds_text_on_accent"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium"
+                android:background="@drawable/bg_avatar_circle"
+                android:visibility="visible"/>
+
+            <!-- Online dot — subtle indicator -->
+            <View
+                android:id="@+id/headerOnlineDot"
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_gravity="bottom|end"
+                android:layout_marginEnd="-1dp"
+                android:layout_marginBottom="-1dp"
+                android:background="@drawable/bg_online_dot"
+                android:visibility="gone"/>
+        </FrameLayout>
+
+        <!-- Name + status — clear hierarchy -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvPartnerName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textAppearance="@style/TextAppearance.DuoShield.Body"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end"/>
+
+            <TextView
+                android:id="@+id/tvOnlineStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="tap to view info"
+                android:textAppearance="@style/TextAppearance.DuoShield.Label"
+                android:textColor="@color/ds_accent"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:layout_marginTop="2dp"/>
+        </LinearLayout>
+
+        <!-- Action buttons — generous touch targets -->
+        <ImageView
+            android:id="@+id/btnTimer"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_timer"
+            android:padding="12dp"
+            android:tint="@color/ds_text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Disappearing messages"
+            android:layout_marginStart="@dimen/ds_spacing_xs"/>
+
+        <ImageView
+            android:id="@+id/btnOverflow"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_more_vert"
+            android:padding="12dp"
+            android:tint="@color/ds_text_secondary"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="More options"
+            android:layout_marginStart="@dimen/ds_spacing_xs"/>
+    </LinearLayout>
+
+    <!-- ── Subtle divider ── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/ds_header_border_width"
+        android:background="@color/ds_divider"/>
+
+    <!-- ── Message list — breathing space ── -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerMessages"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="@dimen/ds_spacing_s"
+        android:paddingEnd="@dimen/ds_spacing_s"
+        android:paddingTop="@dimen/ds_spacing_m"
+        android:paddingBottom="@dimen/ds_spacing_m"
+        android:clipToPadding="false"
+        android:overScrollMode="never"/>
+
+    <!-- ── Input area — premium and intuitive ── -->
+    <LinearLayout
+        android:id="@+id/inputContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="@dimen/ds_spacing_m"
+        android:paddingEnd="@dimen/ds_spacing_m"
+        android:paddingTop="@dimen/ds_spacing_m"
+        android:paddingBottom="@dimen/ds_spacing_m"
+        android:background="@color/ds_background">
+
+        <!-- Attachment button -->
+        <ImageView
+            android:id="@+id/btnAttach"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_attach"
+            android:padding="12dp"
+            android:tint="@color/ds_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Attach file"/>
+
+        <!-- Message input — organic and breathing -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/bg_input_sanctuary"
+            android:paddingStart="@dimen/ds_spacing_l"
+            android:paddingEnd="@dimen/ds_spacing_m"
+            android:layout_marginStart="@dimen/ds_spacing_s"
+            android:layout_marginEnd="@dimen/ds_spacing_s"
+            android:minHeight="48dp">
+
+            <EditText
+                android:id="@+id/etMessage"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Message…"
+                android:textColorHint="@color/ds_text_tertiary"
+                android:textColor="@color/ds_text_primary"
+                android:textSize="16sp"
+                android:background="@null"
+                android:inputType="textMultiLine|textCapSentences"
+                android:maxLines="4"
+                android:imeOptions="actionSend"
+                android:paddingTop="@dimen/ds_spacing_m"
+                android:paddingBottom="@dimen/ds_spacing_m"/>
+        </LinearLayout>
+
+        <!-- Send button -->
+        <ImageView
+            android:id="@+id/btnSend"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_send"
+            android:padding="12dp"
+            android:tint="@color/ds_accent"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Send"/>
+    </LinearLayout>
+
+</LinearLayout>

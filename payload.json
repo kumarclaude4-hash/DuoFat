@@ -1,0 +1,13 @@
+{
+  "model": "moonshotai/kimi-k2.6",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Please perform a comprehensive codebase review on the following code. Identify any bugs, security vulnerabilities, or performance optimizations:\n\n"
+    }
+  ],
+  "max_tokens": 16384,
+  "temperature": 0.20,
+  "top_p": 1.00,
+  "stream": false
+}

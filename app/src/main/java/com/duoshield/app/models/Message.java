@@ -1,0 +1,114 @@
+package com.duoshield.app.models;
+
+import androidx.room.Entity;
+import androidx.room.PrimaryKey;
+import androidx.room.ColumnInfo;
+import androidx.room.Ignore;
+import androidx.annotation.NonNull;
+import java.util.List;
+
+@Entity(tableName = "messages")
+public class Message {
+
+    @PrimaryKey @NonNull @ColumnInfo(name = "id")      public String  id;
+    @ColumnInfo(name = "conversationId")               public String  conversationId;
+    @ColumnInfo(name = "sender")                       public String  sender;
+    @ColumnInfo(name = "text")                         public String  text;
+    @ColumnInfo(name = "timestamp")                    public long    timestamp;
+    @ColumnInfo(name = "isEncrypted")                  public boolean isEncrypted;
+    @ColumnInfo(name = "mediaUrl")                     public String  mediaUrl;
+    @ColumnInfo(name = "mediaType")                    public String  mediaType;
+    @ColumnInfo(name = "delivered")                    public boolean delivered;
+    @ColumnInfo(name = "seen")                         public boolean seen;
+    @ColumnInfo(name = "replyToId")                    public String  replyToId;
+    @ColumnInfo(name = "replyPreview")                 public String  replyPreview;
+    @ColumnInfo(name = "expiresAt")                    public long    expiresAt;
+    @ColumnInfo(name = "reaction")                     public String  reaction;
+    @ColumnInfo(name = "edited")                       public boolean edited;
+    @ColumnInfo(name = "starred")                      public boolean starred;
+    @ColumnInfo(name = "status")                       public String  status;
+    @ColumnInfo(name = "sigType", defaultValue = "0")  public int     sigType;
+    @ColumnInfo(name = "mediaKey")                     public String  mediaKey;
+    @ColumnInfo(name = "isDeleted", defaultValue = "0") public boolean isDeleted;
+
+    /**
+     * Millisecond timestamp when the partner read this message.
+     * Populated from Firestore {@code readAt} field on a MODIFIED event.
+     * Not stored in Room (marked @Ignore) — it is live data shown only in the
+     * current session, and it only matters for outgoing messages the sender can see.
+     */
+    @androidx.room.Ignore
+    public long readAt;
+
+    /**
+     * Downsampled amplitude bars for waveform display on voice messages.
+     * Populated from Firestore {@code amplitudes} field — not persisted to Room.
+     */
+    @Ignore
+    public List<Integer> waveAmplitudes;
+    public List<Integer> getWaveAmplitudes() { return waveAmplitudes; }
+    public void setWaveAmplitudes(List<Integer> v) { waveAmplitudes = v; }
+
+    public Message() {}
+
+    /** 6-arg convenience constructor (no media). */
+    public Message(@NonNull String id, String conversationId, String sender,
+                   String text, long timestamp, boolean isEncrypted) {
+        this.id             = id;
+        this.conversationId = conversationId;
+        this.sender         = sender;
+        this.text           = text;
+        this.timestamp      = timestamp;
+        this.isEncrypted    = isEncrypted;
+        this.status         = "sent";
+    }
+
+    /** 8-arg convenience constructor (with media). */
+    public Message(@NonNull String id, String conversationId, String sender,
+                   String text, long timestamp, boolean isEncrypted,
+                   String mediaUrl, String mediaType) {
+        this(id, conversationId, sender, text, timestamp, isEncrypted);
+        this.mediaUrl  = mediaUrl;
+        this.mediaType = mediaType;
+    }
+
+    @NonNull public String getId()           { return id; }
+    public String  getConversationId()       { return conversationId; }
+    public String  getSender()               { return sender; }
+    public String  getText()                 { return text; }
+    public long    getTimestamp()            { return timestamp; }
+    public boolean isEncrypted()             { return isEncrypted; }
+    public String  getMediaUrl()             { return mediaUrl; }
+    public String  getMediaType()            { return mediaType; }
+    public boolean isDelivered()             { return delivered; }
+    public boolean isSeen()                  { return seen; }
+    public String  getReplyToId()            { return replyToId; }
+    public String  getReplyPreview()         { return replyPreview; }
+    public long    getExpiresAt()            { return expiresAt; }
+    public String  getReaction()             { return reaction; }
+    public boolean isEdited()                { return edited; }
+    public String  getStatus()               { return status != null ? status : "sent"; }
+    public String  getMediaKey()             { return mediaKey; }
+
+    public void setId(@NonNull String v)     { id = v; }
+    public void setConversationId(String v)  { conversationId = v; }
+    public void setSender(String v)          { sender = v; }
+    public void setText(String v)            { text = v; }
+    public void setTimestamp(long v)         { timestamp = v; }
+    public void setEncrypted(boolean v)      { isEncrypted = v; }
+    public void setMediaUrl(String v)        { mediaUrl = v; }
+    public void setMediaType(String v)       { mediaType = v; }
+    public void setDelivered(boolean v)      { delivered = v; }
+    public void setSeen(boolean v)           { seen = v; }
+    public void setReplyToId(String v)       { replyToId = v; }
+    public void setReplyPreview(String v)    { replyPreview = v; }
+    public void setExpiresAt(long v)         { expiresAt = v; }
+    public void setReaction(String v)        { reaction = v; }
+    public void setEdited(boolean v)         { edited = v; }
+    public void setStatus(String v)          { status = v; }
+    public void setMediaKey(String v)        { mediaKey = v; }
+    public boolean isDeleted()               { return isDeleted; }
+    public void setDeleted(boolean v)        { isDeleted = v; }
+    public long    getReadAt()               { return readAt; }
+    public void    setReadAt(long v)         { readAt = v; }
+}

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: DuoFat
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false
+      - key: MAX_INITIAL_MESSAGE_AGE_MS
+        value: "300000"

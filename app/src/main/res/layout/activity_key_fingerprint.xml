@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/ds_background"
+    android:fitsSystemWindows="true">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar" android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        style="@style/Widget.DuoShield.Toolbar"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/key_fingerprint"/>
+    <ScrollView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scrollbars="none">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="24dp">
+            <ImageView android:layout_width="56dp" android:layout_height="56dp"
+                android:layout_gravity="center_horizontal"
+                android:src="@drawable/ic_lock" app:tint="@color/ds_accent"
+                android:contentDescription="key"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:gravity="center"
+                android:text="@string/fingerprint_info"
+                android:textColor="@color/ds_text_secondary" android:textSize="14sp"
+                android:lineSpacingMultiplier="1.4"/>
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                app:cardBackgroundColor="@color/ds_surface" app:cardCornerRadius="12dp"
+                app:cardElevation="0dp" app:strokeColor="@color/ds_divider" app:strokeWidth="1dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:padding="16dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="@string/your_fingerprint"
+                        android:textColor="@color/ds_accent" android:textSize="11sp"
+                        android:textAllCaps="true" android:letterSpacing="0.08"
+                        android:fontFamily="sans-serif-medium"/>
+                    <TextView android:id="@+id/tv_my_fingerprint"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/ds_text_primary" android:textSize="13sp"
+                        android:fontFamily="monospace" android:lineSpacingMultiplier="1.6"
+                        android:letterSpacing="0.04"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                app:cardBackgroundColor="@color/ds_surface" app:cardCornerRadius="12dp"
+                app:cardElevation="0dp" app:strokeColor="@color/ds_divider" app:strokeWidth="1dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:padding="16dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="@string/partner_fingerprint"
+                        android:textColor="@color/ds_text_secondary" android:textSize="11sp"
+                        android:textAllCaps="true" android:letterSpacing="0.08"
+                        android:fontFamily="sans-serif-medium"/>
+                    <TextView android:id="@+id/tv_partner_fingerprint"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/ds_text_primary" android:textSize="13sp"
+                        android:fontFamily="monospace" android:lineSpacingMultiplier="1.6"
+                        android:letterSpacing="0.04"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_show_qr"
+                android:layout_width="match_parent" android:layout_height="52dp"
+                android:layout_marginTop="28dp"
+                android:text="Show My QR Code"
+                android:textAllCaps="false"
+                app:backgroundTint="@color/ds_accent" app:cornerRadius="12dp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_scan_partner"
+                android:layout_width="match_parent" android:layout_height="52dp"
+                android:layout_marginTop="12dp"
+                android:text="Scan Partner's QR to Verify"
+                android:textAllCaps="false"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/ds_accent"
+                app:strokeWidth="1dp"
+                android:textColor="@color/ds_accent"
+                app:backgroundTint="#00000000"
+                app:cornerRadius="12dp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_share"
+                android:layout_width="match_parent" android:layout_height="52dp"
+                android:layout_marginTop="12dp"
+                android:text="@string/share_fingerprint"
+                android:textAllCaps="false"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/ds_accent"
+                app:strokeWidth="1dp"
+                android:textColor="@color/ds_accent"
+                app:backgroundTint="#00000000"
+                app:cornerRadius="12dp"/>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

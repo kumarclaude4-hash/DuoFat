@@ -1,0 +1,135 @@
+name: Build & Release Debug APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES" ]; then
+            printf '%s' "$GOOGLE_SERVICES" > app/google-services.json
+            echo "Using real google-services.json from secret."
+          else
+            echo "::warning::GOOGLE_SERVICES_JSON secret not set — using stub (APK builds but Firebase will not work at runtime)."
+            cat > app/google-services.json << 'STUB'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "duoshield-8caf1",
+              "storage_bucket": "duoshield-8caf1.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.duoshield.app"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "stub_key_ci_build_only" }],
+                "services": {
+                  "appinvite_service": { "other_platform_oauth_client": [] }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          STUB
+          fi
+
+      - name: Write service-account.json (FCM)
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p app/src/main/assets
+          if [ -n "$SERVICE_ACCOUNT" ]; then
+            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
+          else
+            echo "::warning::SERVICE_ACCOUNT_JSON secret not set — using stub."
+            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+              > app/src/main/assets/service-account.json
+          fi
+
+      - name: Grant Gradle execute permission
+        run: chmod +x gradlew
+
+      - name: Write local.properties (SDK + Supabase + B2)
+        env:
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY:  ${{ secrets.SUPABASE_ANON_KEY }}
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+          B2_REGION:          ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                          > local.properties
+          echo "supabase.url=${SUPABASE_URL:-}"                    >> local.properties
+          echo "supabase.anon_key=${SUPABASE_ANON_KEY:-}"          >> local.properties
+          echo "b2.key.id=${B2_KEY_ID:-}"                          >> local.properties
+          echo "b2.application.key=${B2_APPLICATION_KEY:-}"        >> local.properties
+          echo "b2.bucket=${B2_BUCKET:-yyush-duoshield}"           >> local.properties
+          echo "b2.region=${B2_REGION:-eu-central-003}"            >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}" >> local.properties
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION_CODE=$(grep -m1 'versionCode' app/build.gradle | grep -o '[0-9]*')
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle | grep -oP '"\K[^"]+')
+          TIMESTAMP=$(date +%Y%m%d%H%M)
+          echo "code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION_NAME}-debug-${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - name: Upload APK artifact (always available for 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuoShield-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "DuoShield ${{ steps.version.outputs.name }} (debug build)"
+          body: |
+            Auto-built debug APK from commit ${{ github.sha }}.
+            Version: ${{ steps.version.outputs.name }} (code ${{ steps.version.outputs.code }})
+
+            **Install on device:**
+            ```
+            adb install app-debug.apk
+            ```
+            > Debug build — not for production use.
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

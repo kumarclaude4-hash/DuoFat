@@ -1,0 +1,49 @@
+modules = ["java-graalvm22.3", "python-3.12", "nodejs-20", "bash", "nix"]
+
+[agent]
+expertMode = true
+stack = "BEST_EFFORT_FALLBACK"
+
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "cloudrun"
+
+[userenv]
+
+[userenv.shared]
+B2_REGION = "ca-east-006"
+PORT = "3000"
+PUSH_SERVER_URL = "https://duoshield.onrender.com"
+KEY_ALIAS = "duoshield"
+
+[workflows]
+runButton = "Push Server"
+
+[[workflows.workflow]]
+name = "Push Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd server && node index.js"
+waitForPort = 3000
+
+[[workflows.workflow]]
+name = "Build APKs"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace && bash build-apks.sh"
+
+[[ports]]
+localPort = 3000
+externalPort = 3000

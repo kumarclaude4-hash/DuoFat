@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/reset_passphrase_description"
+            android:textColor="@color/ds_text_secondary"
+            android:textSize="13sp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- User ID (replaces email) -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/tilResetUserId"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/hint_user_id"
+            app:startIconDrawable="@drawable/ic_person"
+            app:startIconTint="@color/ds_text_secondary">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etResetUserId"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textNoSuggestions"
+                android:textColor="@color/ds_text_primary"
+                android:fontFamily="monospace"
+                android:imeOptions="actionNext" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Recovery code -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/tilResetRecovery"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="@string/hint_recovery_code"
+            app:startIconDrawable="@drawable/ic_lock"
+            app:startIconTint="@color/ds_text_secondary"
+            app:endIconMode="password_toggle"
+            app:endIconTint="@color/ds_text_secondary">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etResetRecovery"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:textColor="@color/ds_text_primary"
+                android:imeOptions="actionNext" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- New passphrase -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/tilNewPassphrase"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="@string/hint_new_passphrase"
+            app:startIconDrawable="@drawable/ic_lock"
+            app:startIconTint="@color/ds_text_secondary"
+            app:endIconMode="password_toggle"
+            app:endIconTint="@color/ds_text_secondary">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etNewPassphrase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:textColor="@color/ds_text_primary"
+                android:imeOptions="actionNext" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Confirm new passphrase -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/tilConfirmPassphrase"
+            style="@style/Widget.DuoShield.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="@string/hint_confirm_passphrase"
+            app:startIconDrawable="@drawable/ic_lock"
+            app:startIconTint="@color/ds_text_secondary"
+            app:endIconMode="password_toggle"
+            app:endIconTint="@color/ds_text_secondary">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etConfirmPassphrase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:textColor="@color/ds_text_primary"
+                android:imeOptions="actionDone" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:id="@+id/tvResetError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:textColor="@color/ds_danger"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+</ScrollView>
