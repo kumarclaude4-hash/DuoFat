@@ -5,6 +5,9 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
@@ -82,6 +85,19 @@ public class SignInActivity extends AppCompatActivity {
 
         btnRestore.setOnClickListener(v ->
                 startActivity(new Intent(this, RestoreFromSeedActivity.class)));
+
+        // Style Terms/Privacy links in the footer
+        TextView tvTerms = findViewById(R.id.tvTerms);
+        if (tvTerms != null) {
+            String full = "By using this service, you agree to our\nTerms of Service and Privacy Policy";
+            SpannableString ss = new SpannableString(full);
+            int accentColor = 0xFF7B63FB;
+            int tosStart = full.indexOf("Terms of Service");
+            ss.setSpan(new ForegroundColorSpan(accentColor), tosStart, tosStart + 16, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            int ppStart = full.indexOf("Privacy Policy");
+            ss.setSpan(new ForegroundColorSpan(accentColor), ppStart, ppStart + 14, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            tvTerms.setText(ss);
+        }
 
         // Animate chat bubbles in after a short delay
         animateBubbles();
