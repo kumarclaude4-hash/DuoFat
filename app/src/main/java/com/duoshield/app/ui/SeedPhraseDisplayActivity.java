@@ -104,7 +104,7 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
             tv.setText(words[i]);
             tv.setTypeface(Typeface.MONOSPACE);
             tv.setTextSize(15f);
-            tv.setTextColor(0xFF00F782); // Session green
+            tv.setTextColor(0xFF9A81FF); // Session green
             tv.setPadding(12, 6, 12, 6);
             tv.setGravity(Gravity.START);
 
@@ -166,7 +166,7 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
             TextView warning = new TextView(this);
             warning.setText("⚠ Keep this QR private. Anyone who scans it can restore your account.");
             warning.setTextSize(13f);
-            warning.setTextColor(0xFFFF9800);
+            warning.setTextColor(0xFFE7B15D);
             warning.setPadding(0, 0, 0, dp16);
             container.addView(warning);
 
@@ -183,7 +183,7 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
             TextView hint = new TextView(this);
             hint.setText("Scan with DuoShield on your new device to restore your account.");
             hint.setTextSize(12f);
-            hint.setTextColor(0xFF888888);
+            hint.setTextColor(0xFF9A8FB0);
             hint.setPadding(0, dp8, 0, 0);
             container.addView(hint);
 

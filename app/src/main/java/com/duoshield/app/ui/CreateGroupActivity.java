@@ -249,7 +249,7 @@ public class CreateGroupActivity extends BaseActivity {
 
         /** Teal palette to colour avatar initials. */
         private static final int[] COLORS = {
-            0xFF1A5C6E, 0xFF1E7B6A, 0xFF1E5C9E, 0xFF5C1E6E, 0xFF6E3A1E
+            0xFF3A2898, 0xFF4A38B0, 0xFF6654E8, 0xFF5040C0, 0xFF2A1880
         };
 
         void setContacts(List<Contact> contacts) {

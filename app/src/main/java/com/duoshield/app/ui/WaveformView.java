@@ -22,8 +22,8 @@ public class WaveformView extends View {
     private static final int   MAX_BARS      = 60;
     private static final int   BAR_GAP_DP    = 2;
     private static final int   MIN_BAR_H_DP  = 3;
-    private static final int   COLOR_PLAYED  = 0xFF00C9E0;
-    private static final int   COLOR_UNPLAYED = 0xFF4A5568;
+    private static final int   COLOR_PLAYED  = 0xFF9A81FF;
+    private static final int   COLOR_UNPLAYED = 0xFF3A3548;
 
     private final Paint  paintPlayed   = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint  paintUnplayed = new Paint(Paint.ANTI_ALIAS_FLAG);

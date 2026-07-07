@@ -14,7 +14,7 @@ import com.duoshield.app.R;
 public abstract class SwipeToDeleteCallback
         extends ItemTouchHelper.SimpleCallback {
 
-    private final ColorDrawable background = new ColorDrawable(0xFFB00020);
+    private final ColorDrawable background = new ColorDrawable(0xFFD96A7C);
     private final Drawable      icon;
 
     protected SwipeToDeleteCallback(Context ctx) {

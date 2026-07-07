@@ -16,7 +16,7 @@
         android:layout_height="48dp"
         android:layout_gravity="center"
         android:indeterminate="true"
-        android:indeterminateTint="#00C9E0"
+        android:indeterminateTint="#9A81FF"
         android:visibility="gone" />
 
     <ImageButton

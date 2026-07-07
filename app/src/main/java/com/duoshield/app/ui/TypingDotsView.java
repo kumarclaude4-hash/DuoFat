@@ -38,7 +38,7 @@ public class TypingDotsView extends View {
         float density = ctx.getResources().getDisplayMetrics().density;
         dotRadius = DOT_RADIUS_DP * density;
         bounce    = BOUNCE_DP * density;
-        paint.setColor(0xFF00C8E8);
+        paint.setColor(0xFF9A81FF);
     }
 
     @Override

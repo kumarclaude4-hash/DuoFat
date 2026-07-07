@@ -579,13 +579,13 @@ public class ChatMediaActivity extends BaseActivity {
         headerOnlineDot.setVisibility(online ? View.VISIBLE : View.GONE);
         if (online) {
             tvOnlineStatus.setText("online");
-            tvOnlineStatus.setTextColor(0xFF4CAF50);
+            tvOnlineStatus.setTextColor(0xFF6BBF8A);
         } else if (lastSeenMs > 0) {
             tvOnlineStatus.setText("last seen " + formatLastSeen(lastSeenMs));
-            tvOnlineStatus.setTextColor(0xFF888888);
+            tvOnlineStatus.setTextColor(0xFF9A8FB0);
         } else {
             tvOnlineStatus.setText("🔒 end-to-end encrypted");
-            tvOnlineStatus.setTextColor(0xFF888888);
+            tvOnlineStatus.setTextColor(0xFF9A8FB0);
         }
     }
 
@@ -1743,7 +1743,7 @@ public class ChatMediaActivity extends BaseActivity {
         android.widget.TextView  text = row.findViewById(R.id.tvActionLabel);
         icon.setImageResource(iconRes);
         text.setText(label);
-        int color = danger ? 0xFFFF5252 : getColor(R.color.ds_text_primary);
+        int color = danger ? 0xFFD96A7C : getColor(R.color.ds_text_primary);
         icon.setColorFilter(color);
         text.setTextColor(color);
         row.setOnClickListener(v -> { action.run(); sheet.dismiss(); });
@@ -2032,7 +2032,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     private void showWallpaperDialog() {
         String[] opts   = {"None", "Soft Blue", "Forest Green", "Dark Night", "Blush Pink", "Pick from gallery…"};
-        int[]    colors = {0, 0xFFDCEEFB, 0xFFD7EDDC, 0xFF1A1A2E, 0xFFFDE8EC};
+        int[]    colors = {0, 0xFFDCEEFB, 0xFFD7EDDC, 0xFF191620, 0xFFFDE8EC};
         new MaterialAlertDialogBuilder(this).setTitle("Chat wallpaper")
             .setItems(opts, (d, w) -> {
                 SharedPreferences.Editor ed = getSharedPreferences("duoshield_prefs", MODE_PRIVATE).edit();

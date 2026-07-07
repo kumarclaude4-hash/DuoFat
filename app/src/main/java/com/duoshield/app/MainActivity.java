@@ -47,7 +47,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         FrameLayout splash = new FrameLayout(this);
-        splash.setBackgroundColor(0xFFFFFFFF);
+        splash.setBackgroundColor(0xFF191620);
         ProgressBar spinner = new ProgressBar(this);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,

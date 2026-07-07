@@ -239,7 +239,7 @@ public class AddContactActivity extends BaseActivity {
             android.widget.TextView subtitle = new android.widget.TextView(this);
             subtitle.setText("Share your QR code or Account ID with your contact.");
             subtitle.setTextSize(13f);
-            subtitle.setTextColor(0xFFAAAAAA);
+            subtitle.setTextColor(0xFFC8C2D8);
             subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
             subtitle.setPadding(0, 0, 0, dp16);
             container.addView(subtitle);
@@ -258,7 +258,7 @@ public class AddContactActivity extends BaseActivity {
             idLabel.setText(myUserId);
             idLabel.setTextSize(15f);
             idLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
-            idLabel.setTextColor(0xFFE6EDF3);
+            idLabel.setTextColor(0xFFF4F1FA);
             idLabel.setGravity(Gravity.CENTER_HORIZONTAL);
             idLabel.setLetterSpacing(0.06f);
             idLabel.setPadding(0, dp8, 0, 0);

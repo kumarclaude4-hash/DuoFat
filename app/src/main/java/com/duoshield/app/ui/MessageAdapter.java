@@ -420,7 +420,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     h.replyAuthorText.setText(authorLabel);
                     // Tint: green for "You", accent for partner
                     h.replyAuthorText.setTextColor(originalSenderUid.equals(myUid)
-                            ? 0xFF4CAF50
+                            ? 0xFF6BBF8A
                             : ContextCompat.getColor(ctx, R.color.ds_accent));
                     h.replyAuthorText.setVisibility(View.VISIBLE);
                 }

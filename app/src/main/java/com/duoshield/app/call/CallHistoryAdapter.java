@@ -73,19 +73,19 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
         if (missed) {
             h.ivType.setImageResource(R.drawable.ic_call_missed);
             h.tvDetail.setText("Missed");
-            h.tvDetail.setTextColor(0xFFFF5252);
+            h.tvDetail.setTextColor(0xFFD96A7C);
         } else if (CallRecord.DIRECTION_INCOMING.equals(r.direction)) {
             h.ivType.setImageResource(R.drawable.ic_call_incoming);
             h.tvDetail.setText(formatDuration(r.durationSeconds));
-            h.tvDetail.setTextColor(0xFF888888);
+            h.tvDetail.setTextColor(0xFF9A8FB0);
         } else if (CallRecord.OUTCOME_FAILED.equals(r.outcome)) {
             h.ivType.setImageResource(R.drawable.ic_call_missed);
             h.tvDetail.setText("Failed");
-            h.tvDetail.setTextColor(0xFFFF5252);
+            h.tvDetail.setTextColor(0xFFD96A7C);
         } else {
             h.ivType.setImageResource(R.drawable.ic_call_outgoing);
             h.tvDetail.setText(formatDuration(r.durationSeconds));
-            h.tvDetail.setTextColor(0xFF888888);
+            h.tvDetail.setTextColor(0xFF9A8FB0);
         }
 
         h.itemView.setOnLongClickListener(v -> {

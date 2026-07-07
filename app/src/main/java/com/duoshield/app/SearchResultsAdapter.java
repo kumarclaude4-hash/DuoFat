@@ -130,7 +130,7 @@ public class SearchResultsAdapter extends RecyclerView.Adapter<SearchResultsAdap
             int idx = lowerSnip.indexOf(query, start);
             if (idx < 0) break;
             int end = idx + query.length();
-            ss.setSpan(new ForegroundColorSpan(0xFF00C9E0), idx, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ss.setSpan(new ForegroundColorSpan(0xFF9A81FF), idx, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             ss.setSpan(new BackgroundColorSpan(0x1A00C9E0),  idx, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             ss.setSpan(new StyleSpan(Typeface.BOLD),          idx, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             start = end;

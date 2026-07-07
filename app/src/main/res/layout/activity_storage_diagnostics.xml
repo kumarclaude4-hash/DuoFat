@@ -302,7 +302,7 @@
                 android:id="@+id/tvErrorDetail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#FF6B6B"
+                android:textColor="#D96A7C"
                 android:textSize="13sp"
                 android:fontFamily="monospace"
                 android:lineSpacingMultiplier="1.4"/>

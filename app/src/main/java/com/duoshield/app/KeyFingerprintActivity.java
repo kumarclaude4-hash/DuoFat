@@ -207,7 +207,7 @@ public class KeyFingerprintActivity extends BaseActivity {
             TextView subtitle = new TextView(this);
             subtitle.setText("Show this to your partner so they can scan and verify your identity key.");
             subtitle.setTextSize(13f);
-            subtitle.setTextColor(0xFFAAAAAA);
+            subtitle.setTextColor(0xFFC8C2D8);
             subtitle.setPadding(0, 0, 0, dp16);
             container.addView(subtitle);
 
@@ -225,7 +225,7 @@ public class KeyFingerprintActivity extends BaseActivity {
             fpLabel.setText(formatFingerprint(myFingerprintHex));
             fpLabel.setTextSize(12f);
             fpLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
-            fpLabel.setTextColor(0xFF00F782);
+            fpLabel.setTextColor(0xFF9A81FF);
             fpLabel.setGravity(Gravity.CENTER_HORIZONTAL);
             fpLabel.setPadding(0, dp8, 0, 0);
             container.addView(fpLabel);

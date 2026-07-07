@@ -20,9 +20,9 @@ import java.util.concurrent.Executors;
 
 public class StorageDiagnosticsActivity extends BaseActivity {
 
-    private static final int COLOR_OK      = 0xFF4CAF50;
-    private static final int COLOR_ERROR   = 0xFFFF5252;
-    private static final int COLOR_NEUTRAL = 0xFF888888;
+    private static final int COLOR_OK      = 0xFF6BBF8A;
+    private static final int COLOR_ERROR   = 0xFFD96A7C;
+    private static final int COLOR_NEUTRAL = 0xFF9A8FB0;
 
     private TextView       tvStatusLabel, tvLatency, tvBucket, tvRegion,
                            tvEndpoint, tvKeyId, tvCredentials,

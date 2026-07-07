@@ -131,15 +131,15 @@ public class SessionLogActivity extends BaseActivity {
             switch (e.eventType == null ? "" : e.eventType) {
                 case SessionLogger.SIGN_IN:
                     label = "Signed in";
-                    color = Color.parseColor("#4CAF50"); // green
+                    color = Color.parseColor("#6BBF8A"); // success green
                     break;
                 case SessionLogger.SIGN_OUT:
                     label = "Signed out";
-                    color = Color.parseColor("#9E9E9E"); // grey
+                    color = Color.parseColor("#9A8FB0"); // disabled grey
                     break;
                 case SessionLogger.AUTO_SIGN_OUT:
                     label = "Auto sign-out (inactivity)";
-                    color = Color.parseColor("#FF9800"); // amber
+                    color = Color.parseColor("#E7B15D"); // warning amber
                     break;
                 case SessionLogger.DURESS_LOGOUT:
                     // F35 fix: Render any legacy DURESS_LOGOUT row identically to a normal
@@ -147,11 +147,11 @@ public class SessionLogActivity extends BaseActivity {
                     // SIGN_OUT via DuressManager.performLogout → SessionLogger.logSync), but
                     // rows that existed before this fix must not betray the user.
                     label = "Signed out";
-                    color = Color.parseColor("#9E9E9E"); // grey — same as SIGN_OUT
+                    color = Color.parseColor("#9A8FB0"); // disabled grey — same as SIGN_OUT
                     break;
                 default:
                     label = e.eventType != null ? e.eventType : "Unknown";
-                    color = Color.parseColor("#607D8B"); // blue-grey
+                    color = Color.parseColor("#7A6E90"); // muted lavender-grey
             }
 
             h.tvEventType.setText(label);

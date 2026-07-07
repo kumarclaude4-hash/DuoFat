@@ -30,7 +30,7 @@ public class ConversationAdapter
 
     /** Teal-palette shades for avatar initials when no photo is available. */
     private static final int[] AVATAR_COLORS = {
-        0xFF1A5C6E, 0xFF1E7B6A, 0xFF1E5C9E, 0xFF5C1E6E, 0xFF6E3A1E
+        0xFF3A2898, 0xFF4A38B0, 0xFF6654E8, 0xFF5040C0, 0xFF2A1880
     };
 
     public ConversationAdapter(OnConversationClickListener listener, boolean sanctuaryMode) {
@@ -115,11 +115,11 @@ public class ConversationAdapter
             if (c.isOnline) {
                 h.tvLastSeen.setVisibility(View.VISIBLE);
                 h.tvLastSeen.setText("Online");
-                h.tvLastSeen.setTextColor(0xFF4CAF50);
+                h.tvLastSeen.setTextColor(0xFF6BBF8A);
             } else if (c.lastSeen > 0) {
                 h.tvLastSeen.setVisibility(View.VISIBLE);
                 h.tvLastSeen.setText(LastSeenFormatter.format(c.lastSeen, false));
-                h.tvLastSeen.setTextColor(0xFF888888);
+                h.tvLastSeen.setTextColor(0xFF9A8FB0);
             } else {
                 h.tvLastSeen.setVisibility(View.GONE);
             }

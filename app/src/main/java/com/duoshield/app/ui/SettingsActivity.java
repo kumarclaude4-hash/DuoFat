@@ -334,10 +334,10 @@ public class SettingsActivity extends BaseActivity {
                         if (tvB2Status != null) {
                             if (err == null) {
                                 tvB2Status.setText("✓ B2 connection OK — bucket reachable");
-                                tvB2Status.setTextColor(0xFF4CAF50);
+                                tvB2Status.setTextColor(0xFF6BBF8A);
                             } else {
                                 tvB2Status.setText("✗ " + err.split("\n")[0]);
-                                tvB2Status.setTextColor(0xFFFF5252);
+                                tvB2Status.setTextColor(0xFFD96A7C);
                             }
                         }
                     });
@@ -420,12 +420,12 @@ public class SettingsActivity extends BaseActivity {
                 } else if (unsynced == 0) {
                     tvBackupHealth.setVisibility(android.view.View.VISIBLE);
                     tvBackupHealth.setText("✓ All messages backed up");
-                    tvBackupHealth.setTextColor(0xFF4CAF50); // green
+                    tvBackupHealth.setTextColor(0xFF6BBF8A); // green
                 } else {
                     tvBackupHealth.setVisibility(android.view.View.VISIBLE);
                     tvBackupHealth.setText(unsynced + " message" + (unsynced == 1 ? "" : "s")
                             + " pending sync");
-                    tvBackupHealth.setTextColor(0xFFFFA726); // amber
+                    tvBackupHealth.setTextColor(0xFFE7B15D); // amber
                 }
             });
         });

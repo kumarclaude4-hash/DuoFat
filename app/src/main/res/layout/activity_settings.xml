@@ -50,7 +50,7 @@
                         android:scaleType="centerCrop"
                         android:background="@drawable/bg_profile_avatar"
                         android:src="@drawable/ic_person"
-                        android:tint="#00C8E8"
+                        android:tint="#9A81FF"
                         android:padding="20dp"/>
 
                     <FrameLayout
@@ -67,7 +67,7 @@
                             android:layout_height="15dp"
                             android:layout_gravity="center"
                             android:src="@drawable/ic_camera"
-                            android:tint="#FF04080F"/>
+                            android:tint="#FF191620"/>
                     </FrameLayout>
                 </FrameLayout>
 
@@ -99,7 +99,7 @@
                         android:layout_width="16dp"
                         android:layout_height="16dp"
                         android:src="@drawable/ic_edit"
-                        android:tint="#00C8E8"
+                        android:tint="#9A81FF"
                         android:alpha="0.8"/>
                 </LinearLayout>
 
@@ -214,7 +214,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_settings"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <TextView
@@ -302,7 +302,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_send"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <TextView
@@ -342,7 +342,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_lock"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -398,7 +398,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_lock"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <TextView
@@ -539,7 +539,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_fingerprint"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -594,7 +594,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_lock"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -651,7 +651,7 @@
                         android:layout_width="22dp"
                         android:layout_height="22dp"
                         android:src="@drawable/ic_timer"
-                        android:tint="#00C8E8"
+                        android:tint="#9A81FF"
                         android:layout_marginEnd="18dp"/>
 
                     <TextView
@@ -691,7 +691,7 @@
                         android:layout_width="22dp"
                         android:layout_height="22dp"
                         android:src="@drawable/ic_lock"
-                        android:tint="#00C8E8"
+                        android:tint="#9A81FF"
                         android:layout_marginEnd="18dp"/>
 
                     <TextView
@@ -771,7 +771,7 @@
                             android:layout_width="22dp"
                             android:layout_height="22dp"
                             android:src="@drawable/ic_shield"
-                            android:tint="#00C8E8"
+                            android:tint="#9A81FF"
                             android:layout_marginEnd="18dp"/>
 
                         <LinearLayout
@@ -885,7 +885,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_shield"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -943,7 +943,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_image"
-                    android:tint="#00C8E8"
+                    android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -1024,7 +1024,7 @@
                         android:layout_width="22dp"
                         android:layout_height="22dp"
                         android:src="@drawable/ic_arrow_down"
-                        android:tint="#00C8E8"
+                        android:tint="#9A81FF"
                         android:layout_marginEnd="18dp"/>
 
                     <LinearLayout

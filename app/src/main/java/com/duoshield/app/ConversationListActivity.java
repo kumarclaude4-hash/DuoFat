@@ -105,8 +105,8 @@ public class ConversationListActivity extends BaseActivity {
                 View root = getWindow().getDecorView().getRootView();
                 Snackbar.make(root, "🎉 Welcome to DuoShield! Your account has been created.",
                         Snackbar.LENGTH_LONG)
-                        .setBackgroundTint(0xFF00F782)
-                        .setTextColor(0xFF000000)
+                        .setBackgroundTint(0xFF9A81FF)
+                        .setTextColor(0xFFFFFFFF)
                         .show();
             }, 600);
         }
