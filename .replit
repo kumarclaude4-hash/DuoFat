@@ -19,7 +19,7 @@ PUSH_SERVER_URL = "https://duoshield.onrender.com"
 KEY_ALIAS = "duoshield"
 
 [workflows]
-runButton = "Push Server"
+runButton = "Project"
 
 [[workflows.workflow]]
 name = "Push Server"
@@ -47,3 +47,7 @@ args = "cd /home/runner/workspace && bash build-apks.sh"
 [[ports]]
 localPort = 3000
 externalPort = 3000
+
+[[ports]]
+localPort = 23636
+externalPort = 80
