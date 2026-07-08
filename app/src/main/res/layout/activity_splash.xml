@@ -28,18 +28,5 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
 
-    <!-- ── Bottom-right sparkle decoration ── -->
-    <ImageView
-        android:id="@+id/ivSparkle"
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:src="@drawable/ic_sparkle"
-        android:contentDescription=""
-        android:alpha="0.9"
-        app:tint="#9A81FF"
-        android:layout_marginEnd="36dp"
-        android:layout_marginBottom="80dp"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"/>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
