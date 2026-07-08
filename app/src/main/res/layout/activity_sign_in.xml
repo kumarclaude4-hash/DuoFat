@@ -76,11 +76,11 @@
             android:layout_gravity="end"
             android:maxWidth="280dp"
             android:text="DuoShield is engineered to protect your privacy."
-            android:textColor="#13112A"
+            android:textColor="#FFFFFF"
             android:textSize="15sp"
             android:paddingHorizontal="18dp"
             android:paddingVertical="13dp"
-            android:background="@drawable/bg_bubble_mine"
+            android:background="@drawable/bg_bubble_onboarding"
             android:visibility="invisible"/>
     </LinearLayout>
 
@@ -110,6 +110,7 @@
 
     <!-- ── Restore / sign in ── -->
     <com.google.android.material.button.MaterialButton
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:id="@+id/btnRestore"
         android:layout_width="0dp"
         android:layout_height="58dp"
@@ -118,7 +119,7 @@
         android:textSize="16sp"
         android:fontFamily="sans-serif-medium"
         android:textAllCaps="false"
-        android:backgroundTint="#00000000"
+        app:backgroundTint="@android:color/transparent"
         app:strokeColor="#7B63FB"
         app:strokeWidth="1.5dp"
         app:cornerRadius="28dp"
