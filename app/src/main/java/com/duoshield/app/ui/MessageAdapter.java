@@ -41,6 +41,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     public interface OnVoicePlayListener {
         void onVoicePlay(Message m, ImageView playPauseBtn, WaveformView waveform, TextView durationView);
     }
+    public interface OnVoiceSpeedToggleListener {
+        /** Tapped the speed pill on a currently-playing voice note. */
+        void onVoiceSpeedToggle(Message m, TextView pillView);
+    }
     public interface OnMessageLongPressListener {
         void onLongPress(Message m, View anchor);
     }
@@ -64,8 +68,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private final Set<String>                pinnedIds      = new HashSet<>();
     private String                           playingMsgId   = null;
     private String                           partnerName    = null;
+    private String                           partnerAvatarUrl = null;
+    private String                           partnerInitial   = "?";
+    private String                           currentSpeedLabel = "1x";
     private String                           highlightedMsgId = null;
     private OnReplyTapListener               replyTapListener = null;
+    private OnVoiceSpeedToggleListener       voiceSpeedListener = null;
     /** O(1) msgId → senderUid lookup built in rebuildDisplay(); eliminates O(n) scan in onBindViewHolder. */
     private final Map<String, String>        senderByMsgId  = new HashMap<>();
 
@@ -84,6 +92,28 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     /** Called from ChatMediaActivity once the partner's display name is loaded from Firestore. */
     public void setPartnerName(String name) {
         this.partnerName = name;
+    }
+
+    /**
+     * Called from ChatMediaActivity once the partner's avatar (or fallback initial) is
+     * known, so the voice-note trailing slot can show it. Rebinds visible voice rows.
+     */
+    public void setPartnerAvatar(String photoUrl, String initial) {
+        this.partnerAvatarUrl = (photoUrl != null && !photoUrl.isEmpty()) ? photoUrl : null;
+        this.partnerInitial   = (initial != null && !initial.isEmpty()) ? initial : "?";
+        notifyItemRangeChanged(0, displayItems.size());
+    }
+
+    public void setOnVoiceSpeedToggleListener(OnVoiceSpeedToggleListener l) {
+        this.voiceSpeedListener = l;
+    }
+
+    /**
+     * Called after the speed is cycled so future binds (e.g. re-entering the screen
+     * or scrolling the currently-playing row off/on screen) show the right label.
+     */
+    public void setCurrentSpeedLabel(String label) {
+        this.currentSpeedLabel = label;
     }
 
     public void setOnReplyTapListener(OnReplyTapListener l) {
@@ -506,6 +536,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // not from animating the bubble itself.
             stopBreathingAnim(h.bubble);
 
+            // ── Trailing slot: partner avatar at rest, speed pill while playing ──
+            // Own outgoing notes show nothing at rest (no point avatar-ing yourself)
+            // but still surface the speed pill once playing, since it's a genuinely
+            // useful control regardless of who sent the note.
+            bindVoiceTrailingSlot(h, msg, ctx, mine, playing);
+
         } else if ("contact_card".equals(type)) {
             h.contactCardContainer.setVisibility(View.VISIBLE);
             String[] p = (msg.getText() != null ? msg.getText() : "").split("\\|", 2);
@@ -739,10 +775,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                      timestampView, voiceDuration,
                      linkPreviewDomain, linkPreviewTitle,
                      tvSeenAt;
+        TextView     voiceAvatarInitial, voiceSpeedPill;
         ImageView    imageView, videoThumbnail, videoPlayBtn,
-                     tickIcon, starIcon, voicePlayPauseBtn, linkPreviewImage;
+                     tickIcon, starIcon, voicePlayPauseBtn, linkPreviewImage, voiceAvatarImg;
         LinearLayout bubble, voiceNoteContainer, pinIndicatorRow, linkPreviewCard;
-        FrameLayout  bubbleWrapper;
+        FrameLayout  bubbleWrapper, voiceTrailingSlot;
         View         videoContainer, contactCardContainer, replyPreviewContainer;
         WaveformView voiceWaveform;
         Button       cardCopyBtn;
@@ -774,12 +811,71 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             voicePlayPauseBtn     = v.findViewById(R.id.voicePlayPauseBtn);
             voiceWaveform         = v.findViewById(R.id.voiceWaveform);
             voiceDuration         = v.findViewById(R.id.voiceDuration);
+            voiceTrailingSlot     = v.findViewById(R.id.voiceTrailingSlot);
+            voiceAvatarImg        = v.findViewById(R.id.voiceAvatarImg);
+            voiceAvatarInitial    = v.findViewById(R.id.voiceAvatarInitial);
+            voiceSpeedPill        = v.findViewById(R.id.voiceSpeedPill);
             // Link preview
             linkPreviewCard       = v.findViewById(R.id.linkPreviewCard);
             linkPreviewImage      = v.findViewById(R.id.linkPreviewImage);
             linkPreviewDomain     = v.findViewById(R.id.linkPreviewDomain);
             linkPreviewTitle      = v.findViewById(R.id.linkPreviewTitle);
             tvSeenAt              = v.findViewById(R.id.tvSeenAt);
+        }
+    }
+
+    /**
+     * Binds the voice-note trailing slot (avatar / initial / speed pill).
+     *
+     * <p>Recycling correctness: every branch below either issues a fresh Glide
+     * {@code load().into(voiceAvatarImg)} call or explicitly {@code clear()}s the
+     * target. Glide cancels any prior request already attached to a given target
+     * view as soon as a new request is issued against it (or cleared), so a stale
+     * async load from whatever message previously occupied this recycled row can
+     * never land on the ImageView after it's been reused — as long as we never skip
+     * touching {@code voiceAvatarImg} for a bind. We deliberately never skip it.
+     */
+    private void bindVoiceTrailingSlot(MsgViewHolder h, Message msg, Context ctx,
+                                        boolean mine, boolean playing) {
+        h.voiceSpeedPill.setTag(msg.getId());
+
+        if (playing) {
+            h.voiceTrailingSlot.setVisibility(View.VISIBLE);
+            h.voiceAvatarImg.setVisibility(View.GONE);
+            h.voiceAvatarInitial.setVisibility(View.GONE);
+            h.voiceSpeedPill.setVisibility(View.VISIBLE);
+            h.voiceSpeedPill.setText(currentSpeedLabel);
+            Glide.with(ctx).clear(h.voiceAvatarImg);
+            h.voiceSpeedPill.setOnClickListener(v -> {
+                if (voiceSpeedListener != null) voiceSpeedListener.onVoiceSpeedToggle(msg, h.voiceSpeedPill);
+            });
+            return;
+        }
+
+        h.voiceSpeedPill.setOnClickListener(null);
+
+        if (mine) {
+            // Own idle note — nothing to show in the trailing slot.
+            h.voiceTrailingSlot.setVisibility(View.GONE);
+            h.voiceSpeedPill.setVisibility(View.GONE);
+            h.voiceAvatarImg.setVisibility(View.GONE);
+            h.voiceAvatarInitial.setVisibility(View.GONE);
+            Glide.with(ctx).clear(h.voiceAvatarImg);
+            return;
+        }
+
+        // Partner's idle note — show their avatar, falling back to their initial.
+        h.voiceTrailingSlot.setVisibility(View.VISIBLE);
+        h.voiceSpeedPill.setVisibility(View.GONE);
+        if (partnerAvatarUrl != null) {
+            h.voiceAvatarInitial.setVisibility(View.GONE);
+            h.voiceAvatarImg.setVisibility(View.VISIBLE);
+            Glide.with(ctx).load(partnerAvatarUrl).circleCrop().into(h.voiceAvatarImg);
+        } else {
+            h.voiceAvatarImg.setVisibility(View.GONE);
+            Glide.with(ctx).clear(h.voiceAvatarImg);
+            h.voiceAvatarInitial.setVisibility(View.VISIBLE);
+            h.voiceAvatarInitial.setText(partnerInitial);
         }
     }
 

@@ -259,6 +259,52 @@
                     android:fontFamily="monospace"
                     android:minWidth="28dp"
                     android:gravity="end"/>
+
+                <!-- Trailing slot: partner avatar (idle) swaps to a speed pill while
+                     this note is playing. Hidden entirely for the sender's own idle
+                     notes — see MessageAdapter#bindMessage voice branch. -->
+                <FrameLayout
+                    android:id="@+id/voiceTrailingSlot"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/voiceAvatarImg"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:scaleType="centerCrop"
+                        android:visibility="gone"
+                        android:contentDescription="Sender avatar"/>
+
+                    <TextView
+                        android:id="@+id/voiceAvatarInitial"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:gravity="center"
+                        android:background="@drawable/bg_avatar_circle"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"/>
+
+                    <TextView
+                        android:id="@+id/voiceSpeedPill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/bg_voice_speed_pill"
+                        android:gravity="center"
+                        android:minWidth="36dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="1x"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"/>
+                </FrameLayout>
             </LinearLayout>
 
             <!-- Link preview card -->

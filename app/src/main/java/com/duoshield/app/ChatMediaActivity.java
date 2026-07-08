@@ -398,6 +398,7 @@ public class ChatMediaActivity extends BaseActivity {
             (msg, anchor) -> showMessageActionDialog(msg),
             this::retryMessage);
         adapter.setOnReplyTapListener(this::scrollToAndHighlight);
+        adapter.setOnVoiceSpeedToggleListener(this::onVoiceSpeedToggle);
         LinearLayoutManager llm = new LinearLayoutManager(this);
         llm.setStackFromEnd(true);
         llm.setInitialPrefetchItemCount(12);
@@ -514,6 +515,7 @@ public class ChatMediaActivity extends BaseActivity {
                 && !storedName.equals("DuoShield User")) {
             tvPartnerName.setText(storedName);
             setAvatarInitial(storedName);
+            if (adapter != null) adapter.setPartnerAvatar(storedPhoto, initialFrom(storedName));
         }
         if (storedPhoto != null && !storedPhoto.isEmpty()) {
             tvAvatarInitial.setVisibility(View.GONE);
@@ -549,6 +551,7 @@ public class ChatMediaActivity extends BaseActivity {
                       tvPartnerName.setText(finalName);
                       setAvatarInitial(finalName);
                       if (adapter != null) adapter.setPartnerName(finalName);
+                      if (adapter != null) adapter.setPartnerAvatar(storedPhoto, initialFrom(finalName));
                       getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
                           .edit()
                           .putString("partner_name", finalName)
@@ -560,6 +563,11 @@ public class ChatMediaActivity extends BaseActivity {
                       tvAvatarInitial.setVisibility(View.GONE);
                       ivPartnerAvatar.setVisibility(View.VISIBLE);
                       Glide.with(this).load(photoStr).circleCrop().into(ivPartnerAvatar);
+                      if (adapter != null) {
+                          String initial = tvAvatarInitial.getText() != null
+                                  ? tvAvatarInitial.getText().toString() : "?";
+                          adapter.setPartnerAvatar(photoStr, initial);
+                      }
                       getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
                           .edit()
                           .putString("partner_photo_url", photoStr)
@@ -578,10 +586,14 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     private void setAvatarInitial(String name) {
-        String initial = name.isEmpty() ? "?" : String.valueOf(name.charAt(0)).toUpperCase();
+        String initial = initialFrom(name);
         tvAvatarInitial.setText(initial);
         tvAvatarInitial.setVisibility(View.VISIBLE);
         ivPartnerAvatar.setVisibility(View.INVISIBLE);
+    }
+
+    private static String initialFrom(String name) {
+        return (name == null || name.isEmpty()) ? "?" : String.valueOf(name.charAt(0)).toUpperCase();
     }
 
     private void updateOnlineStatus(boolean online, long lastSeenMs) {
@@ -869,6 +881,25 @@ public class ChatMediaActivity extends BaseActivity {
     // ══════════════════════════════════════════════════════════════
     // VOICE PLAYBACK
     // ══════════════════════════════════════════════════════════════
+
+    /**
+     * Tapped the "1x"-style pill on a currently-playing voice note. Cycles
+     * 1x → 1.5x → 2x → 1x and applies it to whichever note is actually playing
+     * (which is always the one this pill belongs to, since the pill only shows
+     * up on the playing row — see MessageAdapter#bindVoiceTrailingSlot).
+     */
+    private void onVoiceSpeedToggle(Message msg, TextView pillView) {
+        float newSpeed = player.cycleSpeed();
+        String label = (newSpeed == Math.floor(newSpeed))
+                ? ((int) newSpeed) + "x"
+                : newSpeed + "x";
+        // Immediate feedback on the tapped view...
+        if (msg.getId() != null && msg.getId().equals(pillView.getTag())) {
+            pillView.setText(label);
+        }
+        // ...and persist it so future binds of any voice row show the right label.
+        adapter.setCurrentSpeedLabel(label);
+    }
 
     private void onVoicePlay(Message msg, ImageView playPauseBtn,
                              WaveformView waveform, TextView durationView) {
