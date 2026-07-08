@@ -1,38 +1,41 @@
-/* ── DuoShield Chat — light + dark tokens ─────────────────── */
+/* ── DuoShield Chat — class-based dark / light themes ─────── */
 
-.chat-root {
-  /* dark defaults */
-  --bg:         #191620;
-  --surface:    #24202E;
-  --surface2:   #2D2938;
-  --bubble-in:  #2A2540;
-  --bubble-out: #332D4A;
-  --accent:     #7C6BFF;
-  --accent2:    #9A81FF;
-  --text:       #F4F1FA;
-  --text2:      #C8C2D8;
-  --border:     #3A3548;
-  --status-fg:  #F4F1FA;
-  --online:     #5CC97A;
-  --shadow-send: rgba(124,107,255,.35);
+/* Dark theme */
+.chat-root.theme-dark {
+  --bg:           #191620;
+  --surface:      #24202E;
+  --surface2:     #2D2938;
+  --bubble-in:    #2A2540;
+  --bubble-out:   #332D4A;
+  --accent:       #7C6BFF;
+  --accent2:      #9A81FF;
+  --text:         #F4F1FA;
+  --text2:        #C8C2D8;
+  --border:       #3A3548;
+  --status-fg:    #F4F1FA;
+  --online:       #5CC97A;
+  --shadow-send:  rgba(124,107,255,.35);
+  --toggle-bg:    rgba(255,255,255,.1);
+  --toggle-color: #F4F1FA;
 }
 
-@media (prefers-color-scheme: light) {
-  .chat-root {
-    --bg:         #FAF8F5;   /* warm white */
-    --surface:    #FFFFFF;
-    --surface2:   #F3F0FB;
-    --bubble-in:  #FFFFFF;
-    --bubble-out: #EDE8FF;
-    --accent:     #7C6BFF;
-    --accent2:    #6C5CE7;
-    --text:       #1A1625;
-    --text2:      #7A7090;
-    --border:     #E5E0F0;
-    --status-fg:  #1A1625;
-    --online:     #3DB866;
-    --shadow-send: rgba(124,107,255,.28);
-  }
+/* Light theme */
+.chat-root.theme-light {
+  --bg:           #FAF8F5;
+  --surface:      #FFFFFF;
+  --surface2:     #F3F0FB;
+  --bubble-in:    #FFFFFF;
+  --bubble-out:   #EDE8FF;
+  --accent:       #7C6BFF;
+  --accent2:      #6C5CE7;
+  --text:         #1A1625;
+  --text2:        #7A7090;
+  --border:       #E5E0F0;
+  --status-fg:    #1A1625;
+  --online:       #3DB866;
+  --shadow-send:  rgba(124,107,255,.28);
+  --toggle-bg:    rgba(0,0,0,.07);
+  --toggle-color: #1A1625;
 }
 
 /* ── Shell ───────────────────────────────────────────────── */
@@ -42,6 +45,7 @@
   font-family: 'Inter', 'Roboto', system-ui, sans-serif;
   display: flex; flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 /* ── Status bar ──────────────────────────────────────────── */
@@ -64,7 +68,7 @@
 .header {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 10px 12px 10px;
+  padding: 10px 12px;
   display: flex; align-items: center; gap: 10px;
   flex-shrink: 0;
 }
@@ -150,7 +154,10 @@
   display: flex; align-items: flex-end;
   padding: 7px 8px; gap: 4px; min-height: 46px;
 }
-.input-placeholder { flex: 1; font-size: 14px; color: var(--text2); opacity: .55; padding: 4px 3px; line-height: 1.45; }
+.input-placeholder {
+  flex: 1; font-size: 14px; color: var(--text2);
+  opacity: .55; padding: 4px 3px; line-height: 1.45;
+}
 .send-btn {
   width: 48px; height: 48px; border-radius: 50%;
   background: var(--accent); border: none;
@@ -158,3 +165,18 @@
   cursor: pointer; flex-shrink: 0;
   box-shadow: 0 3px 14px var(--shadow-send);
 }
+
+/* ── Theme toggle ────────────────────────────────────────── */
+.theme-toggle {
+  position: absolute; bottom: 84px; right: 14px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--toggle-bg);
+  border: 1px solid var(--border);
+  color: var(--toggle-color);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.2s, color 0.2s;
+  z-index: 10;
+}
+.theme-toggle:hover { background: var(--accent); color: #fff; border-color: transparent; }
