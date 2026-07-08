@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 4-pointed star sparkle used as corner decoration on the splash screen -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <!--
+        Classic 4-pointed star (elongated diamond cross):
+        top spike → right spike → bottom spike → left spike → back to top.
+        The shape is slightly asymmetric (taller than wide) to match the
+        reference frames where the sparkle reads as a gem/star glyph.
+    -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M50,0
+            C50,0 54,38 62,46
+            C70,54 100,50 100,50
+            C100,50 70,54 62,62
+            C54,70 50,100 50,100
+            C50,100 46,70 38,62
+            C30,54 0,50 0,50
+            C0,50 30,46 38,38
+            C46,30 50,0 50,0
+            Z"/>
+</vector>
