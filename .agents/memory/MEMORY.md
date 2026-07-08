@@ -58,3 +58,5 @@
 - [DuoShield premium UI overhaul](duoshield-premium-ui.md) — Obsidian Dark redesign: 16 drawables, 9 layouts, TypingDotsView; NEVER change layout IDs; zip APKs via python3 zipfile (zip CLI absent)
 - [DuoShield security review plan](security-review-plan.md) — 44 findings; all clusters A–J done; open: F1/F2/F3/F5/F6/F8/F9/F11/F12/F15/F34 (arch); F21 rules fix needs `firebase deploy`
 - [DuoShield duress wipe guard](duoshield-duress-wipe-guard.md) — duress_wipe_in_progress flag in duoshield_prefs (commit before intent, remove after signOut); checked in SignInActivity/SplashActivity/MainActivity; logSync() before clearInstance()
+- [DuoShield status race guard](duoshield-status-race-guard.md) — any write of message `status` must transaction-guard against downgrading "read" back to "delivered"; applies to client FCM ACK and server push dispatch alike
+- [DuoShield push server broken](duoshield-push-server-broken.md) — Push Server workflow fails on missing/invalid Firebase service-account credential (GOOGLE_APPLICATION_CREDENTIALS_JSON); pre-existing, user deferred fixing it
