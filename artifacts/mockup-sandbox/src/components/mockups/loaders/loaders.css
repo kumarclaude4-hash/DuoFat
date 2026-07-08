@@ -1,0 +1,256 @@
+/* ── DuoShield Loaders Showcase ───────────────────────────── */
+
+.showcase-root.theme-dark {
+  --bg:       #191620;
+  --surface:  #24202E;
+  --surface2: #2D2938;
+  --accent:   #7C6BFF;
+  --accent2:  #9A81FF;
+  --text:     #F4F1FA;
+  --text2:    #C8C2D8;
+  --border:   #3A3548;
+  --glow:     rgba(124,107,255,.45);
+}
+.showcase-root.theme-light {
+  --bg:       #FAF8F5;
+  --surface:  #FFFFFF;
+  --surface2: #F0EDF8;
+  --accent:   #7C6BFF;
+  --accent2:  #6C5CE7;
+  --text:     #1A1625;
+  --text2:    #7A7090;
+  --border:   #E5E0F0;
+  --glow:     rgba(124,107,255,.25);
+}
+
+.showcase-root {
+  width: 390px;
+  min-height: 560px;
+  background: var(--bg);
+  font-family: 'Inter', 'Roboto', system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.showcase-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.showcase-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.2px;
+}
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  cursor: pointer;
+}
+.toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Grid ── */
+.showcase-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  flex: 1;
+}
+
+/* ── Card ── */
+.loader-card {
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px 28px;
+  gap: 14px;
+}
+.loader-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.1px;
+}
+.loader-sub {
+  font-size: 11px;
+  color: var(--text2);
+  text-align: center;
+  line-height: 1.4;
+  margin-top: -8px;
+}
+
+/* ════════════════════════════════════════════════════════════
+   1. SIGNAL PULSE
+   ════════════════════════════════════════════════════════════ */
+.sp-wrap {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sp-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  animation: spPulse 2.4s ease-out infinite;
+}
+.sp-r1 { width: 40px;  height: 40px;  animation-delay: 0s; }
+.sp-r2 { width: 40px;  height: 40px;  animation-delay: .7s; }
+.sp-r3 { width: 40px;  height: 40px;  animation-delay: 1.4s; }
+
+@keyframes spPulse {
+  0%   { transform: scale(1);   opacity: .8; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+.sp-core {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 0 16px var(--glow);
+}
+
+/* ════════════════════════════════════════════════════════════
+   2. KEY EXCHANGE ORBIT
+   ════════════════════════════════════════════════════════════ */
+.ko-wrap {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ko-track {
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--border);
+}
+.ko-center {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+}
+.ko-dot {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--glow);
+  top: 50%;
+  left: 50%;
+  margin: -5.5px 0 0 -5.5px;
+  transform-origin: 0 0;
+}
+.ko-dot-a {
+  animation: koOrbit 2s linear infinite;
+}
+.ko-dot-b {
+  background: var(--accent2);
+  animation: koOrbit 2s linear infinite reverse;
+  animation-delay: -1s;
+}
+
+@keyframes koOrbit {
+  from { transform: rotate(0deg)   translateX(35px); }
+  to   { transform: rotate(360deg) translateX(35px); }
+}
+
+/* ════════════════════════════════════════════════════════════
+   3. SHIELD FILL
+   ════════════════════════════════════════════════════════════ */
+.sf-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sf-svg { overflow: visible; }
+
+.sf-clip-rect {
+  animation: sfFill 2s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+@keyframes sfFill {
+  0%   { transform: scaleY(0);   transform-box: fill-box; transform-origin: bottom; }
+  60%  { transform: scaleY(1);   transform-box: fill-box; transform-origin: bottom; }
+  85%  { transform: scaleY(1);   transform-box: fill-box; transform-origin: bottom; }
+  100% { transform: scaleY(0);   transform-box: fill-box; transform-origin: bottom; }
+}
+
+.sf-check {
+  stroke-dasharray: 50;
+  stroke-dashoffset: 50;
+  animation: sfCheck 2s ease-in-out infinite;
+}
+@keyframes sfCheck {
+  0%,  45% { stroke-dashoffset: 50; opacity: 0; }
+  70%       { stroke-dashoffset: 0;  opacity: 1; }
+  85%       { stroke-dashoffset: 0;  opacity: 1; }
+  100%      { stroke-dashoffset: 50; opacity: 0; }
+}
+
+/* ════════════════════════════════════════════════════════════
+   4. CIPHER DOTS
+   ════════════════════════════════════════════════════════════ */
+.cd-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+}
+.cd-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: block;
+  animation: cdMorph 1.6s ease-in-out infinite;
+}
+.cd-d1 { animation-delay: 0s; }
+.cd-d2 { animation-delay: .2s; }
+.cd-d3 { animation-delay: .4s; }
+
+@keyframes cdMorph {
+  0%,  100% { transform: scale(1)    translateY(0);    border-radius: 50%;  background: var(--accent);  box-shadow: none; }
+  25%        { transform: scale(1.25) translateY(-7px); border-radius: 3px;  background: var(--accent2); box-shadow: 0 4px 12px var(--glow); }
+  50%        { transform: scale(.85)  translateY(0);    border-radius: 50%;  background: var(--accent);  box-shadow: none; }
+  75%        { transform: scale(1.1)  translateY(-3px); border-radius: 6px;  background: var(--accent2); box-shadow: 0 2px 8px var(--glow); }
+}
