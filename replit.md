@@ -197,4 +197,5 @@ Any column addition requires:
 
 ## User Preferences
 
-_Add explicit remembered preferences here._
+- **Git push after every change**: After completing any code change, push to `origin/main` using the `GIT` secret (PAT). Commit author must be `kumarclaude4-hash <kumarclaude4@gmail.com>`. Use `gitPush({})` via the git-remote skill.
+- **Push server**: Do not attempt to set up or fix the Push Server workflow — user does not require it on Replit.

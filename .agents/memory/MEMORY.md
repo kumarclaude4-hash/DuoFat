@@ -60,3 +60,4 @@
 - [DuoShield duress wipe guard](duoshield-duress-wipe-guard.md) — duress_wipe_in_progress flag in duoshield_prefs (commit before intent, remove after signOut); checked in SignInActivity/SplashActivity/MainActivity; logSync() before clearInstance()
 - [DuoShield status race guard](duoshield-status-race-guard.md) — any write of message `status` must transaction-guard against downgrading "read" back to "delivered"; applies to client FCM ACK and server push dispatch alike
 - [DuoShield push server broken](duoshield-push-server-broken.md) — Push Server workflow fails on missing/invalid Firebase service-account credential (GOOGLE_APPLICATION_CREDENTIALS_JSON); pre-existing, user deferred fixing it
+- [DuoShield git push preference](duoshield-git-push-pref.md) — push every change to origin/main via GIT PAT secret; use existing git config author; never fix Push Server on Replit
