@@ -1,0 +1,160 @@
+/* ── DuoShield Chat — light + dark tokens ─────────────────── */
+
+.chat-root {
+  /* dark defaults */
+  --bg:         #191620;
+  --surface:    #24202E;
+  --surface2:   #2D2938;
+  --bubble-in:  #2A2540;
+  --bubble-out: #332D4A;
+  --accent:     #7C6BFF;
+  --accent2:    #9A81FF;
+  --text:       #F4F1FA;
+  --text2:      #C8C2D8;
+  --border:     #3A3548;
+  --status-fg:  #F4F1FA;
+  --online:     #5CC97A;
+  --shadow-send: rgba(124,107,255,.35);
+}
+
+@media (prefers-color-scheme: light) {
+  .chat-root {
+    --bg:         #FAF8F5;   /* warm white */
+    --surface:    #FFFFFF;
+    --surface2:   #F3F0FB;
+    --bubble-in:  #FFFFFF;
+    --bubble-out: #EDE8FF;
+    --accent:     #7C6BFF;
+    --accent2:    #6C5CE7;
+    --text:       #1A1625;
+    --text2:      #7A7090;
+    --border:     #E5E0F0;
+    --status-fg:  #1A1625;
+    --online:     #3DB866;
+    --shadow-send: rgba(124,107,255,.28);
+  }
+}
+
+/* ── Shell ───────────────────────────────────────────────── */
+.chat-root {
+  width: 390px; height: 844px;
+  background: var(--bg);
+  font-family: 'Inter', 'Roboto', system-ui, sans-serif;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Status bar ──────────────────────────────────────────── */
+.status-bar {
+  height: 30px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding-inline: 18px; flex-shrink: 0;
+}
+.status-time { font-size: 12px; font-weight: 700; color: var(--status-fg); letter-spacing: .1px; }
+.status-icons { display: flex; gap: 5px; align-items: center; }
+.status-svg-fill     { fill: var(--status-fg); }
+.status-svg-stroke   { stroke: var(--status-fg); }
+.status-svg-fill-el  { fill: var(--status-fg); }
+.battery-border { stroke: var(--status-fg); stroke-width: 1.2; }
+.battery-fill   { fill: var(--status-fg); }
+.battery-nub    { stroke: var(--status-fg); }
+
+/* ── Header ──────────────────────────────────────────────── */
+.header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px 10px;
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+.avatar-wrap { position: relative; flex-shrink: 0; }
+.header-avatar {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: var(--surface2); border: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.online-dot {
+  position: absolute; bottom: 1px; right: 1px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--online); border: 1.5px solid var(--surface);
+  display: block;
+}
+.header-info { flex: 1; min-width: 0; }
+.header-name-row { display: flex; align-items: center; gap: 5px; }
+.header-name { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
+.header-status { font-size: 12px; color: var(--accent2); font-weight: 500; margin-top: 1px; display: block; }
+.header-actions { display: flex; gap: 2px; align-items: center; }
+.icon-btn { background: none; border: none; padding: 7px 5px; cursor: pointer; display: flex; align-items: center; }
+
+/* ── Messages area ───────────────────────────────────────── */
+.messages {
+  flex: 1; overflow-y: auto; scrollbar-width: none;
+  padding: 16px 12px 8px;
+  display: flex; flex-direction: column;
+}
+.messages::-webkit-scrollbar { display: none; }
+
+.date-chip-wrap { display: flex; justify-content: center; margin-bottom: 16px; }
+.date-chip {
+  font-size: 11.5px; color: var(--text2); font-weight: 500;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; padding: 3px 14px;
+}
+
+.msg-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 6px; }
+.msg-in  { justify-content: flex-start; }
+.msg-out { justify-content: flex-end; }
+
+.in-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--surface2); border: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; overflow: hidden;
+}
+.avatar-spacer { width: 34px; flex-shrink: 0; }
+
+.bubble {
+  max-width: 70%;
+  padding: 10px 13px 8px;
+  border: 1px solid var(--border);
+}
+.bubble-in  {
+  background: var(--bubble-in);
+  border-radius: 4px 18px 18px 18px;
+}
+.bubble-out {
+  background: var(--bubble-out);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 18px 4px 18px 18px;
+}
+.bubble-text { font-size: 14.5px; color: var(--text); line-height: 1.5; word-break: break-word; display: block; }
+.bubble-meta {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 4px; margin-top: 4px;
+}
+.bubble-time { font-size: 10.5px; color: var(--text2); }
+
+/* ── Composer ────────────────────────────────────────────── */
+.composer {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 8px 12px 22px;
+  display: flex; align-items: flex-end; gap: 9px;
+  flex-shrink: 0;
+}
+.input-pill {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 26px;
+  display: flex; align-items: flex-end;
+  padding: 7px 8px; gap: 4px; min-height: 46px;
+}
+.input-placeholder { flex: 1; font-size: 14px; color: var(--text2); opacity: .55; padding: 4px 3px; line-height: 1.45; }
+.send-btn {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--accent); border: none;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+  box-shadow: 0 3px 14px var(--shadow-send);
+}
