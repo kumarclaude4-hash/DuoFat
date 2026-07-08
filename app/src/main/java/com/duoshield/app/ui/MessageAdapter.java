@@ -1,6 +1,5 @@
 package com.duoshield.app.ui;
 
-import android.animation.ObjectAnimator;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -39,7 +38,7 @@ import java.util.Set;
 public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     public interface OnVoicePlayListener {
-        void onVoicePlay(Message m, ImageView playPauseBtn, WaveformView waveform, TextView durationView);
+        void onVoicePlay(Message m, ImageView playPauseBtn, WaveformView waveform, TextView durationView, View bubble);
     }
     public interface OnVoiceSpeedToggleListener {
         /** Tapped the speed pill on a currently-playing voice note. */
@@ -529,12 +528,16 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.voicePlayPauseBtn.setOnClickListener(v -> {
                 if (voiceListener != null)
                     voiceListener.onVoicePlay(msg, h.voicePlayPauseBtn,
-                        h.voiceWaveform, h.voiceDuration);
+                        h.voiceWaveform, h.voiceDuration, h.bubble);
             });
-            // WhatsApp's voice bubble stays static — all the "is this playing" feedback
-            // comes from the play/pause icon swap and the waveform's own progress thumb,
-            // not from animating the bubble itself.
-            stopBreathingAnim(h.bubble);
+            // Bubble "breathes" (subtly scales) in sync with the live audio amplitude
+            // while this note is playing — driven tick-by-tick from ChatMediaActivity's
+            // playback progress callback via applyBreathingAmplitude(). Tag it so stale
+            // async ticks from a recycled/switched row can detect the mismatch and no-op.
+            h.bubble.setTag(msg.getId());
+            if (!playing) {
+                stopBreathingAnim(h.bubble);
+            }
 
             // ── Trailing slot: partner avatar at rest, speed pill while playing ──
             // Own outgoing notes show nothing at rest (no point avatar-ing yourself)
@@ -731,21 +734,39 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         });
     }
 
-    // ── Legacy bubble animation cleanup ────────────────────────────────────────
-    // Voice bubbles used to "breathe" (scale-pulse) while playing; that's been
-    // dropped in favor of WhatsApp's static-bubble look. stopBreathingAnim() is
-    // kept so any bubble that was mid-animation before this change (or a recycled
-    // view holder) always gets reset back to scale 1.0.
+    // ── Voice message "breathing" bubble ────────────────────────────────────────
+    // While a voice note plays, its bubble gently expands/contracts in sync with
+    // the actual audio amplitude at the current playback position. Driven by
+    // ChatMediaActivity's playback progress ticks via applyBreathingAmplitude();
+    // stopBreathingAnim() resets a bubble back to rest (paused/stopped/recycled).
 
-    /** Tag key used to store the running ObjectAnimator on the bubble view. */
+    /** Tag key used to store the running ViewPropertyAnimator state on the bubble view. */
     private static final int TAG_BREATHING_ANIM = R.id.voicePlayPauseBtn;
 
+    /** Max extra scale at full amplitude — keeps the effect subtle, not jumpy. */
+    private static final float BREATH_MAX_SCALE_DELTA = 0.06f;
+
+    /**
+     * Scales the bubble toward a target derived from the current audio amplitude
+     * (0f–1f). Called on every playback progress tick (~200ms) for a smooth,
+     * "breathing" expand/contract rather than a discrete jump.
+     */
+    public static void applyBreathingAmplitude(View bubbleView, float amplitude) {
+        if (bubbleView == null) return;
+        float clamped = Math.max(0f, Math.min(1f, amplitude));
+        float target = 1f + clamped * BREATH_MAX_SCALE_DELTA;
+        bubbleView.setTag(TAG_BREATHING_ANIM, Boolean.TRUE);
+        bubbleView.animate().cancel();
+        bubbleView.animate()
+            .scaleX(target).scaleY(target)
+            .setDuration(180)
+            .start();
+    }
+
     /** Stops the breathing animation and resets scale to 1.0. */
-    private static void stopBreathingAnim(View bubbleView) {
-        Object tag = bubbleView.getTag(TAG_BREATHING_ANIM);
-        if (tag instanceof ObjectAnimator) {
-            ((ObjectAnimator) tag).cancel();
-        }
+    public static void stopBreathingAnim(View bubbleView) {
+        if (bubbleView == null) return;
+        bubbleView.animate().cancel();
         bubbleView.setScaleX(1f);
         bubbleView.setScaleY(1f);
         bubbleView.setTag(TAG_BREATHING_ANIM, null);

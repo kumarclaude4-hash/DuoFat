@@ -902,7 +902,7 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     private void onVoicePlay(Message msg, ImageView playPauseBtn,
-                             WaveformView waveform, TextView durationView) {
+                             WaveformView waveform, TextView durationView, View bubble) {
         final String msgId = msg.getId();
 
         // ── Pause: same message is currently playing ──────────────────────
@@ -913,6 +913,8 @@ public class ChatMediaActivity extends BaseActivity {
             adapter.setPlayingMessageId(null);
             if (msgId.equals(playPauseBtn.getTag()))
                 playPauseBtn.setImageResource(R.drawable.ic_play_audio);
+            if (msgId.equals(bubble.getTag()))
+                MessageAdapter.stopBreathingAnim(bubble);
             return;
         }
 
@@ -926,6 +928,8 @@ public class ChatMediaActivity extends BaseActivity {
             player.resume();
             return;
         }
+        // The previously-playing row (if any) gets rebound to rest via
+        // adapter.setPlayingMessageId() below, which resets its bubble scale.
 
         // ── New voice note: release previous, start fresh ─────────────────
         player.release();
@@ -948,8 +952,16 @@ public class ChatMediaActivity extends BaseActivity {
                 runOnUiThread(() -> {
                     if (msgId.equals(durationView.getTag()))
                         durationView.setText(MessageAdapter.formatDuration(posMs));
-                    if (totalDurHolder[0] > 0 && msgId.equals(waveform.getTag()))
-                        waveform.setProgress((float) posMs / totalDurHolder[0]);
+                    if (totalDurHolder[0] > 0 && msgId.equals(waveform.getTag())) {
+                        float fraction = (float) posMs / totalDurHolder[0];
+                        waveform.setProgress(fraction);
+                        // "Breathe" the bubble with the actual amplitude at this
+                        // point in the track — same data the waveform bars show.
+                        if (msgId.equals(bubble.getTag())) {
+                            MessageAdapter.applyBreathingAmplitude(
+                                bubble, waveform.getAmplitudeAt(fraction));
+                        }
+                    }
                 });
             }
             @Override public void onComplete() {
@@ -961,6 +973,8 @@ public class ChatMediaActivity extends BaseActivity {
                         playPauseBtn.setImageResource(R.drawable.ic_play_audio);
                     if (msgId.equals(waveform.getTag()))
                         waveform.setProgress(0f);
+                    if (msgId.equals(bubble.getTag()))
+                        MessageAdapter.stopBreathingAnim(bubble);
                     if (totalDurHolder[0] > 0 && msgId.equals(durationView.getTag()))
                         durationView.setText(MessageAdapter.formatDuration(totalDurHolder[0]));
                 });
@@ -973,6 +987,8 @@ public class ChatMediaActivity extends BaseActivity {
                     adapter.setPlayingMessageId(null);
                     if (msgId.equals(playPauseBtn.getTag()))
                         playPauseBtn.setImageResource(R.drawable.ic_play_audio);
+                    if (msgId.equals(bubble.getTag()))
+                        MessageAdapter.stopBreathingAnim(bubble);
                 });
             }
         };

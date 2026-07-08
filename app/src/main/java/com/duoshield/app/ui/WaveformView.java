@@ -75,6 +75,20 @@ public class WaveformView extends View {
         invalidate();
     }
 
+    /**
+     * Returns the normalised amplitude (0f–1f) of the bar nearest the given
+     * playback fraction (0–1). Used to drive the "breathing" bubble scale in
+     * sync with the actual audio, not just a generic pulse.
+     */
+    public float getAmplitudeAt(float fraction) {
+        if (bars.isEmpty()) return 0f;
+        float clamped = Math.max(0f, Math.min(1f, fraction));
+        int idx = (int) (clamped * bars.size());
+        if (idx >= bars.size()) idx = bars.size() - 1;
+        if (idx < 0) idx = 0;
+        return bars.get(idx);
+    }
+
     /** Set playback progress fraction (0–1). Triggers redraw. */
     public void setProgress(float fraction) {
         progress = Math.max(0f, Math.min(1f, fraction));
