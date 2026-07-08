@@ -166,6 +166,35 @@
   box-shadow: 0 3px 14px var(--shadow-send);
 }
 
+/* ── Typing indicator ────────────────────────────────────── */
+.typing-row {
+  display: flex; align-items: flex-end; gap: 8px;
+  margin-bottom: 10px; margin-top: 4px;
+}
+.typing-bubble {
+  background: var(--bubble-in);
+  border: 1px solid var(--border);
+  border-radius: 4px 18px 18px 18px;
+  padding: 12px 16px;
+  display: flex; align-items: center; gap: 7px;
+}
+.cd-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); display: block;
+  animation: cdMorph 1.6s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.cd-d1 { animation-delay: 0s; }
+.cd-d2 { animation-delay: .2s; }
+.cd-d3 { animation-delay: .4s; }
+
+@keyframes cdMorph {
+  0%,  100% { transform: scale(1)    translateY(0);    border-radius: 50%; background: var(--accent);  box-shadow: none; }
+  25%        { transform: scale(1.3)  translateY(-5px); border-radius: 3px; background: var(--accent2); box-shadow: 0 3px 10px var(--shadow-send); }
+  50%        { transform: scale(.8)   translateY(0);    border-radius: 50%; background: var(--accent);  box-shadow: none; }
+  75%        { transform: scale(1.1)  translateY(-2px); border-radius: 5px; background: var(--accent2); box-shadow: 0 2px 6px var(--shadow-send); }
+}
+
 /* ── Theme toggle ────────────────────────────────────────── */
 .theme-toggle {
   position: absolute; bottom: 84px; right: 14px;
@@ -180,3 +209,18 @@
   z-index: 10;
 }
 .theme-toggle:hover { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* ── Typing toggle ───────────────────────────────────────── */
+.typing-toggle {
+  position: absolute; bottom: 84px; right: 58px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--toggle-bg);
+  border: 1px solid var(--border);
+  color: var(--toggle-color);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 0.2s, color 0.2s;
+  z-index: 10;
+}
+.typing-toggle:hover { background: var(--accent); color: #fff; border-color: transparent; }
