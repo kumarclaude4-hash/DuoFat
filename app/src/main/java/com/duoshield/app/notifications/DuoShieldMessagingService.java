@@ -136,14 +136,29 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
     }
 
     private void acknowledgeDelivery(String chatId, String messageId) {
-        Map<String, Object> update = new HashMap<>();
-        update.put("status", "delivered");
-        update.put("deliveredAt", FieldValue.serverTimestamp());
-
-        FirebaseFirestore.getInstance()
+        // The FCM data payload can still land after the recipient has already opened
+        // the chat and marked the message "read" (e.g. the push was delayed, or the
+        // chat was foregrounded from a different trigger). An unconditional
+        // update({"status":"delivered"}) here would clobber that "read" status back
+        // down to "delivered", which is what caused the sender's tick to silently
+        // revert / never show real-time read receipts on one side. Guard the write
+        // in a transaction so delivery ACKs can only ever move the status forward.
+        com.google.firebase.firestore.DocumentReference ref = FirebaseFirestore.getInstance()
                 .collection("chats").document(chatId)
-                .collection("messages").document(messageId)
-                .update(update)
+                .collection("messages").document(messageId);
+
+        FirebaseFirestore.getInstance().runTransaction(txn -> {
+            com.google.firebase.firestore.DocumentSnapshot snap = txn.get(ref);
+            String currentStatus = snap.getString("status");
+            if ("read".equals(currentStatus) || "delivered".equals(currentStatus)) {
+                return null; // already at or past "delivered" — never downgrade
+            }
+            Map<String, Object> update = new HashMap<>();
+            update.put("status", "delivered");
+            update.put("deliveredAt", FieldValue.serverTimestamp());
+            txn.update(ref, update);
+            return null;
+        })
                 .addOnSuccessListener(v ->
                         Log.d(TAG, "Delivery ACK written: " + messageId))
                 .addOnFailureListener(e ->

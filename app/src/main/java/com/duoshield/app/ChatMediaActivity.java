@@ -440,13 +440,22 @@ public class ChatMediaActivity extends BaseActivity {
         });
 
         // Attach right-swipe-to-reply callback
+        //
+        // NOTE: do NOT call adapter.notifyItemChanged() here. ItemTouchHelper is still
+        // actively tracking this ViewHolder's translationX while the user's finger is
+        // down; forcing a rebind mid-gesture rips the view out from under the touch
+        // (re-binding resets translationX to 0 while the helper still thinks it owns
+        // an in-flight drag), which is what produced the visible arrow/row flicker.
+        // ItemTouchHelper animates the row back to rest on its own once the finger
+        // lifts (clearView), so no manual reset is needed.
         new androidx.recyclerview.widget.ItemTouchHelper(new SwipeToReplyCallback(this) {
             @Override
             public void onSwipeTriggered(int position) {
                 Object item = adapter.getItemAt(position);
                 if (item instanceof Message) {
+                    recyclerView.performHapticFeedback(
+                            android.view.HapticFeedbackConstants.VIRTUAL_KEY);
                     enterReplyMode((Message) item);
-                    adapter.notifyItemChanged(position); // reset the swipe state
                 }
             }
         }).attachToRecyclerView(recyclerView);

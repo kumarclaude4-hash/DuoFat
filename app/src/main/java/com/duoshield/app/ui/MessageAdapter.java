@@ -1,8 +1,6 @@
 package com.duoshield.app.ui;
 
 import android.animation.ObjectAnimator;
-import android.animation.PropertyValuesHolder;
-import android.animation.ValueAnimator;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -12,7 +10,6 @@ import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -429,17 +426,40 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
         // ── Content ─────────────────────────────────────────────────
         if ("video".equals(type)) {
-            // Media goes edge-to-edge — remove start/top/end padding but keep bottom
-            // so the timestamp/tick row inside the bubble is not clipped.
+            // Media goes edge-to-edge on start/top like WhatsApp, but the meta row
+            // (timestamp + ticks) lives inside this same padding box — a hard 0 end
+            // padding left it glued to the bubble's rounded corner with no breathing
+            // room at all, which read as "the video bubble has no padding". Keep a
+            // small end/bottom margin so the media still hugs the bubble while the
+            // timestamp/ticks get a bit of clearance.
             int bottomPad = (int)(7 * ctx.getResources().getDisplayMetrics().density);
-            h.bubble.setPadding(0, 0, 0, bottomPad);
+            int endPad    = (int)(6 * ctx.getResources().getDisplayMetrics().density);
+            h.bubble.setPadding(0, 0, endPad, bottomPad);
             h.videoContainer.setVisibility(View.VISIBLE);
             String vidRef = msg.getMediaUrl();
             String vidKey = msg.getMediaKey();
             if (com.duoshield.app.util.B2StorageHelper.isB2Path(vidRef)) {
-                // B2 encrypted video — tap opens MediaViewerActivity (ExoPlayer)
+                // B2 encrypted video — tap opens MediaViewerActivity (ExoPlayer).
+                // Real thumbnails require downloading + decrypting the video, so show a
+                // neutral placeholder immediately and swap in the extracted frame once ready.
                 h.videoThumbnail.setTag(vidRef);
                 Glide.with(ctx).load(R.drawable.ic_play_video).into(h.videoThumbnail);
+                byte[] cachedThumb = com.duoshield.app.util.B2StorageHelper.getCachedThumb(vidRef);
+                if (cachedThumb != null) {
+                    Glide.with(ctx).load(cachedThumb).centerCrop().into(h.videoThumbnail);
+                } else {
+                    com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(ctx, vidRef, vidKey,
+                            new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {
+                        @Override public void onLoaded(byte[] jpegBytes) {
+                            if (vidRef.equals(h.videoThumbnail.getTag())) {
+                                Glide.with(ctx).load(jpegBytes).centerCrop().into(h.videoThumbnail);
+                            }
+                        }
+                        @Override public void onError(Exception e) {
+                            // Keep the static placeholder — non-fatal, video still plays fine.
+                        }
+                    });
+                }
                 h.videoContainer.setOnClickListener(v -> {
                     Intent i = new Intent(ctx, com.duoshield.app.MediaViewerActivity.class);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_URL, vidRef);
@@ -481,12 +501,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     voiceListener.onVoicePlay(msg, h.voicePlayPauseBtn,
                         h.voiceWaveform, h.voiceDuration);
             });
-            // Breathing bubble — gently scale the bubble while audio is playing
-            if (playing) {
-                startBreathingAnim(h.bubble);
-            } else {
-                stopBreathingAnim(h.bubble);
-            }
+            // WhatsApp's voice bubble stays static — all the "is this playing" feedback
+            // comes from the play/pause icon swap and the waveform's own progress thumb,
+            // not from animating the bubble itself.
+            stopBreathingAnim(h.bubble);
 
         } else if ("contact_card".equals(type)) {
             h.contactCardContainer.setVisibility(View.VISIBLE);
@@ -506,7 +524,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         } else if (msg.getMediaUrl() != null && !msg.getMediaUrl().isEmpty()) {
             // Media goes edge-to-edge — remove start/top/end padding, keep bottom for timestamp
             int bottomPad = (int)(7 * ctx.getResources().getDisplayMetrics().density);
-            h.bubble.setPadding(0, 0, 0, bottomPad);
+            int endPad    = (int)(6 * ctx.getResources().getDisplayMetrics().density);
+            h.bubble.setPadding(0, 0, endPad, bottomPad);
             h.imageView.setVisibility(View.VISIBLE);
             String imgRef = msg.getMediaUrl();
             String imgKey = msg.getMediaKey();
@@ -676,27 +695,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         });
     }
 
-    // ── Breathing bubble animation ────────────────────────────────────────────
+    // ── Legacy bubble animation cleanup ────────────────────────────────────────
+    // Voice bubbles used to "breathe" (scale-pulse) while playing; that's been
+    // dropped in favor of WhatsApp's static-bubble look. stopBreathingAnim() is
+    // kept so any bubble that was mid-animation before this change (or a recycled
+    // view holder) always gets reset back to scale 1.0.
 
     /** Tag key used to store the running ObjectAnimator on the bubble view. */
     private static final int TAG_BREATHING_ANIM = R.id.voicePlayPauseBtn;
-
-    /** Starts a gentle repeating scale pulse on {@code bubbleView} while a voice note plays. */
-    private static void startBreathingAnim(View bubbleView) {
-        Object prev = bubbleView.getTag(TAG_BREATHING_ANIM);
-        if (prev instanceof ObjectAnimator) ((ObjectAnimator) prev).cancel();
-
-        ObjectAnimator anim = ObjectAnimator.ofPropertyValuesHolder(
-                bubbleView,
-                PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.026f),
-                PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.026f));
-        anim.setDuration(1600);
-        anim.setRepeatMode(ValueAnimator.REVERSE);
-        anim.setRepeatCount(ValueAnimator.INFINITE);
-        anim.setInterpolator(new AccelerateDecelerateInterpolator());
-        anim.start();
-        bubbleView.setTag(TAG_BREATHING_ANIM, anim);
-    }
 
     /** Stops the breathing animation and resets scale to 1.0. */
     private static void stopBreathingAnim(View bubbleView) {

@@ -24,9 +24,12 @@ public class WaveformView extends View {
     private static final int   MIN_BAR_H_DP  = 3;
     private static final int   COLOR_PLAYED  = 0xFF9A81FF;
     private static final int   COLOR_UNPLAYED = 0xFF3A3548;
+    private static final int   COLOR_THUMB   = 0xFFFFFFFF;
+    private static final float THUMB_RADIUS_DP = 5.5f;
 
     private final Paint  paintPlayed   = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint  paintUnplayed = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint  paintThumb    = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final List<Float> bars     = new ArrayList<>();
 
     private float progress = 0f;
@@ -38,6 +41,7 @@ public class WaveformView extends View {
         density = ctx.getResources().getDisplayMetrics().density;
         paintPlayed.setColor(COLOR_PLAYED);
         paintUnplayed.setColor(COLOR_UNPLAYED);
+        paintThumb.setColor(COLOR_THUMB);
     }
 
     /**
@@ -124,6 +128,15 @@ public class WaveformView extends View {
 
             Paint paint = (i < playedUpTo) ? paintPlayed : paintUnplayed;
             canvas.drawRoundRect(left, top, right, bottom, barW / 2f, barW / 2f, paint);
+        }
+
+        // WhatsApp-style scrubber dot riding the played/unplayed boundary, so the
+        // waveform reads as an actual playback position rather than a static graphic.
+        if (progress > 0f) {
+            float trackWidth = totalBarsWidth + totalGapWidth;
+            float thumbX      = offsetX + progress * trackWidth;
+            float thumbR      = THUMB_RADIUS_DP * density;
+            canvas.drawCircle(Math.min(thumbX, w - thumbR), h / 2f, thumbR, paintThumb);
         }
     }
 }

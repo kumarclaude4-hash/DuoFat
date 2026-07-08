@@ -1,6 +1,8 @@
 package com.duoshield.app.util;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.media.MediaMetadataRetriever;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
@@ -575,6 +577,90 @@ public final class B2StorageHelper {
     /** Returns cached decrypted bytes for {@code b2Path}, or {@code null} if not cached. */
     public static byte[] getCached(String b2Path) {
         return b2Path != null ? MEDIA_CACHE.get(b2Path) : null;
+    }
+
+    // ── Video thumbnail generation (encrypted videos) ──────────────────────────
+    //
+    // Encrypted B2 videos can't be handed to Glide directly — Glide's frame
+    // extraction only understands a real URI/URL, not an AES-256-GCM blob. Since
+    // the video already has to be downloaded + decrypted for playback anyway, we
+    // reuse that same pipeline here, then pull a single frame with
+    // MediaMetadataRetriever and cache the resulting JPEG bytes separately so
+    // repeat binds (RecyclerView scroll) never redo the decode.
+
+    private static final LruCache<String, byte[]> THUMB_CACHE =
+            new LruCache<String, byte[]>(8 * 1024 * 1024) {
+                @Override protected int sizeOf(String key, byte[] value) { return value.length; }
+            };
+
+    public interface ThumbnailCallback {
+        void onLoaded(byte[] jpegBytes);
+        void onError(Exception e);
+    }
+
+    /** Returns a cached JPEG thumbnail for {@code b2Path}, or {@code null} if not yet generated. */
+    public static byte[] getCachedThumb(String b2Path) {
+        return b2Path != null ? THUMB_CACHE.get(b2Path) : null;
+    }
+
+    /**
+     * Downloads + decrypts the video at {@code b2Path} (sharing the same cache as
+     * {@link #loadMedia}) and extracts a single JPEG thumbnail frame. Delivers on
+     * the main thread.
+     */
+    public static void loadVideoThumbnail(Context ctx, String b2Path, String keyBase64,
+                                           ThumbnailCallback cb) {
+        if (b2Path == null || b2Path.isEmpty()) {
+            new Handler(Looper.getMainLooper()).post(() ->
+                    cb.onError(new IOException("B2 path is null or empty")));
+            return;
+        }
+        byte[] cachedThumb = THUMB_CACHE.get(b2Path);
+        if (cachedThumb != null) {
+            new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(cachedThumb));
+            return;
+        }
+        loadMedia(ctx, b2Path, keyBase64, new MediaCallback() {
+            @Override public void onLoaded(byte[] plainVideoBytes) {
+                MEDIA_POOL.execute(() -> {
+                    try {
+                        byte[] jpeg = extractThumbnailJpeg(ctx, b2Path, plainVideoBytes);
+                        if (jpeg == null) throw new IOException("no frame extracted");
+                        THUMB_CACHE.put(b2Path, jpeg);
+                        new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(jpeg));
+                    } catch (Exception e) {
+                        Log.w(TAG, "loadVideoThumbnail: extraction failed for " + b2Path, e);
+                        new Handler(Looper.getMainLooper()).post(() -> cb.onError(e));
+                    }
+                });
+            }
+            @Override public void onError(Exception e) {
+                cb.onError(e);
+            }
+        });
+    }
+
+    /** Writes {@code plainVideoBytes} to a scratch file and pulls a frame near the start. */
+    private static byte[] extractThumbnailJpeg(Context ctx, String b2Path, byte[] plainVideoBytes)
+            throws Exception {
+        File tmp = File.createTempFile("thumb_", ".mp4", ctx.getCacheDir());
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            try (FileOutputStream fos = new FileOutputStream(tmp)) {
+                fos.write(plainVideoBytes);
+            }
+            retriever.setDataSource(tmp.getAbsolutePath());
+            Bitmap frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            if (frame == null) return null;
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            frame.compress(Bitmap.CompressFormat.JPEG, 82, baos);
+            frame.recycle();
+            return baos.toByteArray();
+        } finally {
+            retriever.release();
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
     }
 
     /** Removes a single entry from the in-memory cache (call after delete). */

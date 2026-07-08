@@ -166,10 +166,20 @@ async function sendPush({ recipientUid, senderUid, chatId, messageId, type, body
 }
 
 async function markDelivered(ref, messageId) {
+  // Belt-and-suspenders ACK sent right after the push dispatch. If the recipient's
+  // device already raced ahead and marked the message "read" (chat was open when
+  // the push arrived), an unconditional update would stomp that back down to
+  // "delivered" and the sender would never see the real-time read tick. Guard the
+  // write in a transaction so it can only move status forward, never backward.
   try {
-    await ref.update({
-      status: "delivered",
-      deliveredAt: FieldValue.serverTimestamp(),
+    await db.runTransaction(async (txn) => {
+      const snap = await txn.get(ref);
+      const currentStatus = snap.exists ? snap.get("status") : null;
+      if (currentStatus === "read" || currentStatus === "delivered") return;
+      txn.update(ref, {
+        status: "delivered",
+        deliveredAt: FieldValue.serverTimestamp(),
+      });
     });
   } catch (updateErr) {
     console.warn(`Status update failed for ${messageId} (non-fatal):`, updateErr.message);
