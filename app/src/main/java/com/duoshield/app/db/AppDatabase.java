@@ -11,7 +11,6 @@ import com.duoshield.app.models.Contact;
 import com.duoshield.app.models.Group;
 import com.duoshield.app.models.GroupMember;
 import com.duoshield.app.models.Message;
-import com.duoshield.app.models.SessionEvent;
 import com.duoshield.app.models.SignalSessionRecord;
 import com.duoshield.app.db.CallRecord;
 import net.sqlcipher.database.SQLiteDatabase;
@@ -19,17 +18,16 @@ import net.sqlcipher.database.SupportFactory;
 
 @Database(
     entities = {
-        Message.class, SessionEvent.class, SignalSessionRecord.class,
+        Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 16
+    version = 17
 )
 public abstract class AppDatabase extends RoomDatabase {
 
     private static volatile AppDatabase instance;
 
     public abstract MessageDao      messageDao();
-    public abstract SessionEventDao sessionEventDao();
     public abstract SignalSessionDao signalSessionDao();
     public abstract ContactDao      contactDao();
     public abstract GroupDao        groupDao();
@@ -82,7 +80,8 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                 MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+                MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+                MIGRATION_16_17)
             .build();
     }
 
@@ -228,6 +227,13 @@ public abstract class AppDatabase extends RoomDatabase {
     static final Migration MIGRATION_13_14 = new Migration(13, 14) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN isDeleted INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+
+    // v17: Remove session_events table (session logging removed — privacy principle).
+    static final Migration MIGRATION_16_17 = new Migration(16, 17) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("DROP TABLE IF EXISTS session_events");
         }
     };
 

@@ -8,7 +8,6 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.PinManager;
-import com.duoshield.app.util.SessionLogger;
 import com.duoshield.app.util.ShakeDetector;
 import com.google.firebase.auth.FirebaseAuth;
 
@@ -87,7 +86,6 @@ public class BaseActivity extends AppCompatActivity {
 
         // 1. Auto sign-out — kills Firebase session after prolonged inactivity.
         if (AppLockManager.shouldAutoSignOut(this)) {
-            SessionLogger.log(this, SessionLogger.AUTO_SIGN_OUT);
             // Clear conversation-linked prefs so a subsequent "Create Account" flow
             // doesn't route straight back to the old conversation (BUG-D-AS01).
             prefs.edit()

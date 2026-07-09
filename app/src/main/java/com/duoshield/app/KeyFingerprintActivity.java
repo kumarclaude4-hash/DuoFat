@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import android.view.Gravity;
 import android.widget.ImageView;
@@ -17,6 +19,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
+import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.WriterException;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
@@ -107,16 +110,37 @@ public class KeyFingerprintActivity extends BaseActivity {
                 partnerIdentityB64 = sp.getString("signal_partner_identity_key", null);
             }
             if (partnerIdentityB64 != null) {
-                byte[] raw = Base64.decode(partnerIdentityB64, Base64.NO_WRAP);
-                IdentityKey partnerKey = new IdentityKey(raw, 0);
-                partnerFingerprintHex = sha256Hex(partnerKey.serialize());
-                if (tvPartnerFingerprint != null) {
-                    tvPartnerFingerprint.setText(formatFingerprint(partnerFingerprintHex));
-                }
+                applyPartnerKey(tvPartnerFingerprint, partnerIdentityB64);
+            } else if (partnerUid != null) {
+                // Key not in local storage yet (session not yet established) — fetch from Firestore.
+                if (tvPartnerFingerprint != null)
+                    tvPartnerFingerprint.setText("Loading…");
+                final String uid = partnerUid;
+                final TextView tv = tvPartnerFingerprint;
+                FirebaseFirestore.getInstance()
+                        .collection("users").document(uid)
+                        .collection("public_keys").document("bundle")
+                        .get()
+                        .addOnSuccessListener(doc -> {
+                            if (doc == null || !doc.exists()) {
+                                if (tv != null) tv.setText("Partner's key not found. Ask them to open the app.");
+                                return;
+                            }
+                            String b64 = doc.getString("identityKey");
+                            if (b64 == null) {
+                                if (tv != null) tv.setText("Partner's key not found. Ask them to open the app.");
+                                return;
+                            }
+                            // Cache it locally for next time
+                            SecurePrefs.get(KeyFingerprintActivity.this)
+                                    .edit().putString("signal_partner_identity_key_" + uid, b64).apply();
+                            new Handler(Looper.getMainLooper()).post(() -> applyPartnerKey(tv, b64));
+                        })
+                        .addOnFailureListener(e -> {
+                            if (tv != null) tv.setText("Could not load partner's key — check connection.");
+                        });
             } else if (tvPartnerFingerprint != null) {
-                // F22: if still unresolved (no partner context at all), guide the user
-                // to open the fingerprint screen from inside a specific chat.
-                tvPartnerFingerprint.setText("Not available — open from a chat conversation to verify a specific contact.");
+                tvPartnerFingerprint.setText("Open from a chat conversation to verify a specific contact.");
             }
         } catch (Exception e) {
             if (tvPartnerFingerprint != null) tvPartnerFingerprint.setText("Error reading partner key.");
@@ -253,6 +277,17 @@ public class KeyFingerprintActivity extends BaseActivity {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void applyPartnerKey(TextView tv, String identityB64) {
+        try {
+            byte[] raw = Base64.decode(identityB64, Base64.NO_WRAP);
+            IdentityKey partnerKey = new IdentityKey(raw, 0);
+            partnerFingerprintHex = sha256Hex(partnerKey.serialize());
+            if (tv != null) tv.setText(formatFingerprint(partnerFingerprintHex));
+        } catch (Exception e) {
+            if (tv != null) tv.setText("Error reading partner key.");
+        }
+    }
 
     private String sha256Hex(byte[] input) {
         try {

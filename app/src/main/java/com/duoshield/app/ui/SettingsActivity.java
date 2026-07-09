@@ -1,7 +1,5 @@
 package com.duoshield.app.ui;
 
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -25,7 +23,6 @@ import com.duoshield.app.BaseActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.appcompat.widget.Toolbar;
-import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.duoshield.app.util.B2StorageHelper;
 import java.io.ByteArrayOutputStream;
@@ -95,16 +92,7 @@ public class SettingsActivity extends BaseActivity {
 
         // ── Find views ────────────────────────────────────────────────────────
 
-        // Account ID section
-        TextView tvAccountId        = findViewById(R.id.tvAccountId);
-        Button   btnCopyAccountId   = findViewById(R.id.btnCopyAccountId);
-        Button   btnShareAccountId  = findViewById(R.id.btnShareAccountId);
-        TextView tvDisplayName      = findViewById(R.id.tvDisplayName);
-
-        if (tvAccountId != null) {
-            String accountId = SignalKeyManager.getAccountId(this);
-            tvAccountId.setText(accountId != null ? accountId : "Keys not yet generated");
-        }
+        TextView tvDisplayName = findViewById(R.id.tvDisplayName);
 
         if (tvDisplayName != null) {
             String name = prefs.getString("my_display_name", null);
@@ -137,31 +125,6 @@ public class SettingsActivity extends BaseActivity {
         if (btnChangePhoto != null)
             btnChangePhoto.setOnClickListener(v -> pickPhotoLauncher.launch("image/*"));
 
-        if (btnCopyAccountId != null) {
-            btnCopyAccountId.setOnClickListener(v -> {
-                String accountId = SignalKeyManager.getAccountId(this);
-                if (accountId != null) {
-                    ClipboardManager cm = (ClipboardManager)
-                            getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) {
-                        cm.setPrimaryClip(ClipData.newPlainText("account_id", accountId));
-                        Toast.makeText(this, R.string.settings_id_copied, Toast.LENGTH_SHORT).show();
-                    }
-                }
-            });
-        }
-
-        if (btnShareAccountId != null) {
-            btnShareAccountId.setOnClickListener(v -> {
-                String accountId = SignalKeyManager.getAccountId(this);
-                if (accountId != null) {
-                    Intent shareIntent = new Intent(Intent.ACTION_SEND);
-                    shareIntent.setType("text/plain");
-                    shareIntent.putExtra(Intent.EXTRA_TEXT, accountId);
-                    startActivity(Intent.createChooser(shareIntent, "Share Account ID"));
-                }
-            });
-        }
 
         switchNotifications   = findViewById(R.id.switchNotifications);
         switchBiometric       = findViewById(R.id.switchBiometric);
@@ -307,11 +270,6 @@ public class SettingsActivity extends BaseActivity {
         // ── Lock timeout ──────────────────────────────────────────────────────
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
 
-        // ── Session log ───────────────────────────────────────────────────────
-        Button btnViewSessionLog = findViewById(R.id.btnViewSessionLog);
-        if (btnViewSessionLog != null)
-            btnViewSessionLog.setOnClickListener(v ->
-                startActivity(new Intent(this, SessionLogActivity.class)));
 
         // ── Unpair ────────────────────────────────────────────────────────────
         btnUnpair.setOnClickListener(v -> confirmUnpair());

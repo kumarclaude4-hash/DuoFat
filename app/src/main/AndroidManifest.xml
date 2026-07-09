@@ -108,12 +108,6 @@
             android:name=".ui.SettingsActivity"
             android:exported="false" />
 
-        <!-- ── Session log ────────────────────────────────── -->
-        <activity
-            android:name=".ui.SessionLogActivity"
-            android:exported="false"
-            android:parentActivityName=".ui.SettingsActivity" />
-
         <!-- ── Utility screens ────────────────────────────── -->
         <activity
             android:name=".KeyFingerprintActivity"

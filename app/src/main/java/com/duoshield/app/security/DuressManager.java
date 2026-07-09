@@ -11,7 +11,6 @@ import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.util.ContactBackupHelper;
 import com.duoshield.app.util.SecurePrefs;
-import com.duoshield.app.util.SessionLogger;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
@@ -174,7 +173,6 @@ public class DuressManager {
             // guarantees the insert lands in the database before we delete it.
             // Event type is SIGN_OUT — indistinguishable from a voluntary sign-out,
             // preserving plausible deniability in the Session Log.
-            SessionLogger.logSync(context, SessionLogger.SIGN_OUT);
 
             // 3. Destructive local wipe ─────────────────────────────────────────
 

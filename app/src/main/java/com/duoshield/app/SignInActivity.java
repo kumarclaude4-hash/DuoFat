@@ -20,7 +20,6 @@ import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.ui.RestoreFromSeedActivity;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
-import com.duoshield.app.util.SessionLogger;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -144,7 +143,6 @@ public class SignInActivity extends AppCompatActivity {
     // ── Returning-user routing ────────────────────────────────────────────────
 
     private void route(String uid) {
-        SessionLogger.log(this, SessionLogger.SIGN_IN);
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         prefs.edit().putString("my_uid", uid).apply();
         AppLockManager.onAppForegrounded(this);
