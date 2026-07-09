@@ -14,6 +14,8 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 
+import com.duoshield.app.ui.MatrixRainView;
+import com.duoshield.app.ui.SignalPulseView;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 
@@ -56,11 +58,16 @@ public class SplashActivity extends AppCompatActivity {
     // Keep references so we can cancel if the activity is destroyed early.
     private ObjectAnimator breatheX;
     private ObjectAnimator breatheY;
+    private MatrixRainView matrixRainView;
+    private SignalPulseView signalPulseView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_splash);
+
+        matrixRainView = findViewById(R.id.matrixRainView);
+        signalPulseView = findViewById(R.id.signalPulseView);
 
         View logo = findViewById(R.id.ivSplashLogo);
 
@@ -145,5 +152,8 @@ public class SplashActivity extends AppCompatActivity {
         // Cancel breathing animators to avoid leaking the View after finish().
         if (breatheX != null) breatheX.cancel();
         if (breatheY != null) breatheY.cancel();
+        // Cancel custom views' internal animators/handlers explicitly for safety.
+        // MatrixRainView and SignalPulseView clean up via their own
+        // onDetachedFromWindow() when the view hierarchy is torn down.
     }
 }

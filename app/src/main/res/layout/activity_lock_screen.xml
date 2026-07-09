@@ -22,21 +22,35 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintVertical_bias="0.2"/>
 
-    <!-- Shield icon -->
-    <ImageView
-        android:id="@+id/ivLockShield"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:src="@drawable/ic_shield"
-        app:tint="@color/ds_accent"
-        android:contentDescription="DuoShield"
+    <!-- Shield icon wrapped in FrameLayout for FingerprintScanView overlay -->
+    <FrameLayout
+        android:id="@+id/lockIconFrame"
+        android:layout_width="120dp"
+        android:layout_height="140dp"
         android:layout_marginTop="0dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toTopOf="@id/tvLockTitle"
         app:layout_constraintVertical_chainStyle="packed"
-        app:layout_constraintVertical_bias="0.3"/>
+        app:layout_constraintVertical_bias="0.3">
+
+        <com.duoshield.app.ui.FingerprintScanView
+            android:id="@+id/fingerprintScanView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"/>
+
+        <ImageView
+            android:id="@+id/ivLockShield"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="center"
+            android:src="@drawable/ic_shield"
+            app:tint="@color/ds_accent"
+            android:contentDescription="DuoShield"/>
+
+    </FrameLayout>
 
     <!-- App name -->
     <TextView
@@ -50,7 +64,7 @@
         android:textStyle="bold"
         android:fontFamily="sans-serif-medium"
         android:letterSpacing="-0.01"
-        app:layout_constraintTop_toBottomOf="@id/ivLockShield"
+        app:layout_constraintTop_toBottomOf="@id/lockIconFrame"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toTopOf="@id/tvLockSubtitle"/>

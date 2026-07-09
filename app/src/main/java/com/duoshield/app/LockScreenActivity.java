@@ -8,10 +8,12 @@ import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import com.duoshield.app.security.BiometricHelper;
 import com.duoshield.app.security.DuressManager;
+import com.duoshield.app.ui.FingerprintScanView;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.HapticHelper;
 import com.duoshield.app.util.PinManager;
@@ -51,6 +53,8 @@ public class LockScreenActivity extends AppCompatActivity {
     private EditText etPin;
     private TextView tvError;
     private Button   btnUnlock, btnBiometric;
+    private FingerprintScanView fingerprintScanView;
+    private ImageView ivLockShield;
     /** Guard against multiple concurrent PBKDF2 threads on rapid button taps (BUG-U01). */
     private boolean isVerifying = false;
 
@@ -68,10 +72,12 @@ public class LockScreenActivity extends AppCompatActivity {
         }
         setContentView(R.layout.activity_lock_screen);
 
-        etPin        = findViewById(R.id.etPin);
-        tvError      = findViewById(R.id.tvError);
-        btnUnlock    = findViewById(R.id.btnUnlock);
-        btnBiometric = findViewById(R.id.btnBiometric);
+        etPin               = findViewById(R.id.etPin);
+        tvError             = findViewById(R.id.tvError);
+        btnUnlock           = findViewById(R.id.btnUnlock);
+        btnBiometric        = findViewById(R.id.btnBiometric);
+        fingerprintScanView = findViewById(R.id.fingerprintScanView);
+        ivLockShield        = findViewById(R.id.ivLockShield);
 
         // If no app PIN has been set yet, skip the lock screen entirely
         if (!PinManager.hasPinSet(this)) {
@@ -99,7 +105,18 @@ public class LockScreenActivity extends AppCompatActivity {
         });
     }
 
+    private void showScanAnim() {
+        ivLockShield.setVisibility(View.GONE);
+        fingerprintScanView.setVisibility(View.VISIBLE);
+    }
+
+    private void hideScanAnim() {
+        fingerprintScanView.setVisibility(View.GONE);
+        ivLockShield.setVisibility(View.VISIBLE);
+    }
+
     private void showBiometric() {
+        showScanAnim();
         BiometricHelper.authenticate(this, new BiometricHelper.AuthCallback() {
             @Override public void onSuccess() {
                 // F31 fix: Reset the PIN fail counter on ANY successful authentication,
@@ -108,9 +125,13 @@ public class LockScreenActivity extends AppCompatActivity {
                 // 5-strike duress trigger to fire on an unrelated future typo.
                 getSharedPreferences(PREFS_SECURITY, MODE_PRIVATE)
                         .edit().putInt(KEY_FAIL_COUNT, 0).apply();
+                hideScanAnim();
                 unlock();
             }
-            @Override public void onFailure() { etPin.requestFocus(); }
+            @Override public void onFailure() {
+                hideScanAnim();
+                etPin.requestFocus();
+            }
         });
     }
 
@@ -130,6 +151,7 @@ public class LockScreenActivity extends AppCompatActivity {
         setInputEnabled(false);
         tvError.setText("Verifying…");
         tvError.setVisibility(View.VISIBLE);
+        showScanAnim();
 
         new Thread(() -> {
             // Both calls are PBKDF2 — must NOT run on the UI thread
@@ -149,6 +171,7 @@ public class LockScreenActivity extends AppCompatActivity {
                 isVerifying = false;
                 setInputEnabled(true);
                 tvError.setVisibility(View.GONE);
+                hideScanAnim();
 
                 if (correct) {
                     // Reset fail counter on successful unlock

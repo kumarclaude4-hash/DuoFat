@@ -53,6 +53,33 @@
                 android:paddingTop="@dimen/ds_spacing_xxl"
                 android:paddingBottom="@dimen/ds_spacing_l">
 
+                <!-- Key orbit animation shown during contact exchange -->
+                <FrameLayout
+                    android:id="@+id/keyOrbitFrame"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:layout_marginBottom="16dp"
+                    android:paddingTop="16dp">
+
+                    <com.duoshield.app.ui.KeyOrbitView
+                        android:id="@+id/keyOrbitView"
+                        android:layout_width="100dp"
+                        android:layout_height="100dp"
+                        android:layout_gravity="center"/>
+
+                    <TextView
+                        android:id="@+id/tvOrbitLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Exchanging keys…"
+                        android:textColor="@color/ds_text_secondary"
+                        android:textSize="12sp"
+                        android:layout_gravity="center"
+                        android:layout_marginTop="112dp"/>
+
+                </FrameLayout>
+
                 <!-- Account ID input -->
                 <com.google.android.material.textfield.TextInputLayout
                     style="@style/Widget.DuoShield.TextInput"

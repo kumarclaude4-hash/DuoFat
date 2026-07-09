@@ -81,6 +81,12 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private LinearProgressIndicator   progressRestore;
     private LinearProgressIndicator   progressMediaCacheBar;
 
+    // Restore loader views
+    private View                      restoreLoaderFrame;
+    private ShieldFillView            shieldFillView;
+    private DecryptGridView           decryptGridView;
+    private TextView                  tvRestoreStep;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -97,6 +103,11 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         btnRestore           = findViewById(R.id.btnRestore);
         progressRestore      = findViewById(R.id.progressRestore);
         progressMediaCacheBar = findViewById(R.id.progressMediaCacheBar);
+
+        restoreLoaderFrame = findViewById(R.id.restoreLoaderFrame);
+        shieldFillView     = findViewById(R.id.shieldFillView);
+        decryptGridView    = findViewById(R.id.decryptGridView);
+        tvRestoreStep      = findViewById(R.id.tvRestoreStep);
 
         if (tvStep != null) tvStep.setVisibility(View.GONE);
 
@@ -315,6 +326,10 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
                                 progressMediaCacheBar.setVisibility(View.VISIBLE);
                                 int pct = (int) ((done / (float) total) * 100);
                                 progressMediaCacheBar.setProgress(pct);
+                                // Drive shield fill in sync with media progress bar
+                                if (shieldFillView != null) {
+                                    shieldFillView.setProgress(pct / 100f);
+                                }
                             }
                             if (tvMediaProgress != null) {
                                 tvMediaProgress.setVisibility(View.VISIBLE);
@@ -560,10 +575,19 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
                 tvStep.setVisibility(View.VISIBLE);
             });
         }
+        if (tvRestoreStep != null) {
+            runOnUiThread(() -> tvRestoreStep.setText(label));
+        }
     }
 
     private void setLoading(boolean loading) {
         btnRestore.setEnabled(!loading);
         progressRestore.setVisibility(loading ? View.VISIBLE : View.GONE);
+        if (restoreLoaderFrame != null) {
+            restoreLoaderFrame.setVisibility(loading ? View.VISIBLE : View.GONE);
+        }
+        if (!loading && shieldFillView != null) {
+            shieldFillView.setProgress(0f);
+        }
     }
 }

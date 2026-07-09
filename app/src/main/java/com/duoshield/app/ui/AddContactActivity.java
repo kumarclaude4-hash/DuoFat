@@ -24,6 +24,7 @@ import androidx.appcompat.widget.Toolbar;
 import com.duoshield.app.BaseActivity;
 import com.duoshield.app.ChatMediaActivity;
 import com.duoshield.app.R;
+import com.duoshield.app.ui.KeyOrbitView;
 import com.duoshield.app.contacts.ContactManager;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.button.MaterialButton;
@@ -64,6 +65,8 @@ public class AddContactActivity extends BaseActivity {
     private MaterialButton              btnPair;
     private MaterialButton              btnScanQr;
     private MaterialButton              btnGallery;
+    private View                        keyOrbitFrame;
+    private KeyOrbitView                keyOrbitView;
 
     private final ActivityResultLauncher<ScanOptions> scanLauncher =
             registerForActivityResult(new ScanContract(), this::onScanResult);
@@ -95,6 +98,8 @@ public class AddContactActivity extends BaseActivity {
         btnPair           = findViewById(R.id.btnPair);
         btnScanQr         = findViewById(R.id.btnScanQr);
         btnGallery        = findViewById(R.id.btnGallery);
+        keyOrbitFrame     = findViewById(R.id.keyOrbitFrame);
+        keyOrbitView      = findViewById(R.id.keyOrbitView);
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         myUserId = prefs.getString("my_user_id", null);
@@ -375,16 +380,21 @@ public class AddContactActivity extends BaseActivity {
     private void startAddContact(String partnerId) {
         showLoading(true);
         setInputsEnabled(false);
+        if (keyOrbitFrame != null) keyOrbitFrame.setVisibility(View.VISIBLE);
 
         contactManager.addContact(partnerId, new ContactManager.ContactCallback() {
             @Override
             public void onAdded(String chatId, String partnerUid, String partnerDisplayName) {
-                runOnUiThread(() -> openChat(chatId, partnerUid));
+                runOnUiThread(() -> {
+                    if (keyOrbitFrame != null) keyOrbitFrame.setVisibility(View.GONE);
+                    openChat(chatId, partnerUid);
+                });
             }
 
             @Override
             public void onError(String message) {
                 runOnUiThread(() -> {
+                    if (keyOrbitFrame != null) keyOrbitFrame.setVisibility(View.GONE);
                     showLoading(false);
                     setInputsEnabled(true);
                     Toast.makeText(AddContactActivity.this, message, Toast.LENGTH_LONG).show();

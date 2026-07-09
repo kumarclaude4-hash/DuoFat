@@ -195,6 +195,40 @@
             android:gravity="end"
             android:visibility="gone"/>
 
+        <!-- Restore loader frame (shield + decrypt grid + step label) -->
+        <LinearLayout
+            android:id="@+id/restoreLoaderFrame"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginBottom="16dp"
+            android:visibility="gone">
+
+            <com.duoshield.app.ui.ShieldFillView
+                android:id="@+id/shieldFillView"
+                android:layout_width="80dp"
+                android:layout_height="90dp"
+                android:layout_gravity="center"
+                android:layout_marginBottom="16dp"/>
+
+            <com.duoshield.app.ui.DecryptGridView
+                android:id="@+id/decryptGridView"
+                android:layout_width="108dp"
+                android:layout_height="108dp"
+                android:layout_gravity="center"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/tvRestoreStep"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Restoring…"
+                android:textSize="12sp"
+                android:textColor="@color/ds_text_secondary"/>
+
+        </LinearLayout>
+
         <!-- Restore button -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnRestore"
