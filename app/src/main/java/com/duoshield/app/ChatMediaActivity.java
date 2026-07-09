@@ -1936,8 +1936,20 @@ public class ChatMediaActivity extends BaseActivity {
         pendingReplyId      = msg.getId();
         pendingReplyPreview = (msg.getText() != null && !msg.getText().isEmpty()) ? msg.getText() : "[media]";
         replyPreviewBarText.setText("↩  " + pendingReplyPreview);
-        replyPreviewBar.setVisibility(View.VISIBLE);
-        messageInput.requestFocus();
+
+        // Swipe-to-reply calls this from *inside* ItemTouchHelper's onChildDraw,
+        // while the gesture is still active and the swiped row's translationX is
+        // still owned by ItemTouchHelper (it hasn't called clearView() yet).
+        // Showing replyPreviewBar (adds height above the input) and focusing the
+        // EditText (opens the IME) both shrink the RecyclerView's height *right
+        // now*, forcing a relayout/rebind pass while ItemTouchHelper's drag state
+        // is still live — that's what produced messages flashing away. Posting
+        // defers this layout-mutating work until after the current touch/draw
+        // cycle, once ItemTouchHelper has released and settled the row.
+        recyclerView.post(() -> {
+            replyPreviewBar.setVisibility(View.VISIBLE);
+            messageInput.requestFocus();
+        });
     }
 
     private void clearReplyMode() {
