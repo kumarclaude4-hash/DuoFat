@@ -139,7 +139,6 @@ public class DecryptGridView extends View {
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     @Override
-    @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         float cellSize = dp(30f);
