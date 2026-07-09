@@ -17,6 +17,8 @@ B2_REGION = "ca-east-006"
 PORT = "3000"
 PUSH_SERVER_URL = "https://duoshield.onrender.com"
 KEY_ALIAS = "duoshield"
+GOOGLE_SERVICES_JSON = "{\"project_info\":{\"project_number\":\"000000000000\",\"project_id\":\"duoshield-8caf1\",\"storage_bucket\":\"duoshield-8caf1.appspot.com\"},\"client\":[{\"client_info\":{\"mobilesdk_app_id\":\"1:000000000000:android:0000000000000000\",\"android_client_info\":{\"package_name\":\"com.duoshield.app\"}},\"oauth_client\":[],\"api_key\":[{\"current_key\":\"stub-key-for-build-only\"}],\"services\":{\"appinvite_service\":{\"other_platform_oauth_client\":[]}}}],\"configuration_version\":\"1\"}"
+GOOGLE_APPLICATION_CREDENTIALS_JSON = '{"type":"service_account","project_id":"duoshield-8caf1","private_key_id":"stub","private_key":"-----BEGIN PRIVATE KEY-----\nMIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEA0Z3VS5JJcds3xfn/\nygWyF0/Nujb3vHBcVsHmH+iH8H+kJZgWMLpX2A6yrq/1xxfoccMBt29UcAtHgQvW\nBLLONQIDAQABAkEAmVQV5wRi0kOu6RS0tqBjNXW1SNBCXPYSl0Xhh0YKAhZa8xnB\nQAIhAOAvXHnXqAXG+xVjmuTLZ2wJt7v2S3zJ5xz9wq1w9YO1AiEAxfV6xk2Qq2Qq\nAiEAxfV6xk2Qq2QqAiEAxfV6xk2Qq2QqAiEAxfV6xk2Qq2Qq\n-----END PRIVATE KEY-----\n","client_email":"stub@duoshield-8caf1.iam.gserviceaccount.com","client_id":"000000000000000000000","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}'
 
 [workflows]
 runButton = "Project"
