@@ -163,7 +163,6 @@ public class ChatMediaActivity extends BaseActivity {
     private static final long[]   DISAPPEAR_OPTS_MS    = {0, 5_000L, 30_000L, 60_000L, 300_000L, 3_600_000L, 86_400_000L, 604_800_000L};
     private static final String[] DISAPPEAR_OPTS_LBL   = {"Off", "5 seconds", "30 seconds", "1 minute", "5 minutes", "1 hour", "1 day", "1 week"};
     private static final String[] DISAPPEAR_OPTS_EMOJI  = {"🚫", "⚡", "⏱", "1️⃣", "5️⃣", "🕐", "📅", "📆"};
-    private ImageView btnTimerIcon;
     private static final String   DESTRUCT_WORK_TAG  = "self_destruct_work";
 
     // Voice recording
@@ -318,9 +317,6 @@ public class ChatMediaActivity extends BaseActivity {
 
         ImageView btnBack = findViewById(R.id.btnBack);
         if (btnBack != null) btnBack.setOnClickListener(v -> onBackPressed());
-
-        btnTimerIcon = findViewById(R.id.btnTimer);
-        if (btnTimerIcon != null) btnTimerIcon.setOnClickListener(v -> showDisappearPicker());
 
         // ── Call buttons ─────────────────────────────────────────────────────
         ImageView btnVoiceCall = findViewById(R.id.btnVoiceCall);
@@ -502,6 +498,12 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     // ══════════════════════════════════════════════════════════════
+    /** Truncates a plaintext message to an 80-char conversation-list preview. */
+    private static String previewFor(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text.length() > 80 ? text.substring(0, 80) + "…" : text;
+    }
+
     // PARTNER INFO IN HEADER
     // ══════════════════════════════════════════════════════════════
 
@@ -1996,14 +1998,6 @@ public class ChatMediaActivity extends BaseActivity {
     private void updateDisappearBanner() {
         long ms = getDisappearMs();
 
-        // Timer icon in toolbar: teal when active, muted when off
-        if (btnTimerIcon != null) {
-            int color = ms > 0
-                    ? getResources().getColor(R.color.ds_accent, null)
-                    : getResources().getColor(R.color.text_secondary, null);
-            btnTimerIcon.setColorFilter(color);
-        }
-
         if (tvDisappearTimer == null || disappearTimerBanner == null) return;
         if (ms <= 0) {
             disappearTimerBanner.setVisibility(View.GONE);
@@ -2562,9 +2556,13 @@ public class ChatMediaActivity extends BaseActivity {
                       stored.setStatus("sent");
                       if (finalRId != null) { stored.setReplyToId(finalRId); stored.setReplyPreview(finalRPrv); }
                       saveToRoom(stored);
-                      // F33 fix: never write plaintext to Firestore lastMessage field
+                      // Conversation list preview: show the actual message text (truncated),
+                      // same as WhatsApp/Signal. ConversationMetaUpdater writes this straight
+                      // into the chat doc as plaintext (not the Signal ciphertext), so it is
+                      // only ever readable by participants via Firestore rules already scoping
+                      // "chats/{id}" reads to users in the participants array.
                       ConversationMetaUpdater.update(ChatMediaActivity.this, conversationId, myUid,
-                          partnerUid, "\uD83D\uDD10 New message");
+                          partnerUid, previewFor(plaintext));
                       notifyPartner("DuoShield", "New message", msgId);
                   })
                   .addOnFailureListener(e -> {

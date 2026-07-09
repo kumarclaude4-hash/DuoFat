@@ -49,17 +49,6 @@
                 android:layout_gravity="bottom|end"
                 android:background="@drawable/bg_online_dot"
                 android:visibility="gone"/>
-
-            <!-- E2E shield badge -->
-            <ImageView
-                android:layout_width="18dp"
-                android:layout_height="18dp"
-                android:layout_gravity="top|end"
-                android:src="@drawable/ic_shield"
-                android:padding="3dp"
-                android:background="@drawable/bg_badge"
-                app:tint="@color/white"
-                android:contentDescription="Encrypted"/>
         </FrameLayout>
 
         <!-- Content column -->

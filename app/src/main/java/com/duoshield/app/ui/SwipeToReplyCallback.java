@@ -40,10 +40,14 @@ public abstract class SwipeToReplyCallback
                             float dX, float dY, int state, boolean active) {
         android.view.View itemView = vh.itemView;
 
-        // Only draw the reply icon while the user is actively swiping (not during
-        // the spring-back animation or when the item is idle). This prevents ghost
-        // arrow icons from being left on the canvas after the gesture ends.
-        if (dX > 0 && state != ItemTouchHelper.ACTION_STATE_IDLE && icon != null) {
+        // Only draw the reply icon while the user is actively dragging this row
+        // (active == true). During the spring-back/recover animation ItemTouchHelper
+        // keeps calling onChildDraw with a non-IDLE state for a few more frames even
+        // though the finger has already lifted — checking `state` alone let the icon
+        // "stick"/flicker at a stale position (the reported swipe glitch). Checking
+        // `active` instead guarantees the icon only renders while the user's finger
+        // is actually down on this ViewHolder.
+        if (dX > 0 && active && icon != null) {
             // Clip drawing to the item's bounds so the icon never bleeds into
             // adjacent rows, even when RecyclerView skips a full redraw.
             c.save();

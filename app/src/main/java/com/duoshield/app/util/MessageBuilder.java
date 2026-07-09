@@ -34,6 +34,12 @@ public class MessageBuilder {
 
     private static final String TAG = "MessageBuilder";
 
+    /** Truncates a plaintext message to an 80-char conversation-list preview. */
+    private static String previewFor(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text.length() > 80 ? text.substring(0, 80) + "…" : text;
+    }
+
     public static void sendTextMessage(Context ctx, String convId, String myUid,
                                        String partnerUid, String text,
                                        String replyToId, String replyPreview) {
@@ -92,7 +98,7 @@ public class MessageBuilder {
                         FirebaseCostGuard.getInstance(ctx).recordWrites(1);
                         AppDatabase.getInstance(ctx).messageDao().updateStatus(msgId, "sent");
                         ConversationMetaUpdater.update(ctx, convId, myUid, partnerUid,
-                            "\uD83D\uDD12 New message");
+                            previewFor(text));
                         FirebaseFirestore.getInstance().collection("chats").document(convId)
                             .update("lastActivity", FieldValue.serverTimestamp());
                     })

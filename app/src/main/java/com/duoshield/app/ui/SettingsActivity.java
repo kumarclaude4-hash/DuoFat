@@ -739,7 +739,34 @@ public class SettingsActivity extends BaseActivity {
                         com.google.firebase.firestore.SetOptions.merge());
         propagatePhotoToConversations(user.getUid(), url);
         if (ivProfilePhoto != null && !isDestroyed() && !isFinishing()) {
-            Glide.with(this).load(url).transform(new CircleCrop()).into(ivProfilePhoto);
+            Glide.with(this).load(url)
+                    .transform(new CircleCrop())
+                    .placeholder(R.drawable.ic_person)
+                    .error(R.drawable.ic_person)
+                    // Photo was just uploaded under a brand-new object key, but Glide's
+                    // disk/memory cache can still serve a stale bitmap for the same
+                    // ImageView target on some devices — this is exactly the "says
+                    // updated but never reflects" symptom. Force a fresh network fetch.
+                    .skipMemoryCache(true)
+                    .diskCacheStrategy(com.bumptech.glide.load.engine.DiskCacheStrategy.NONE)
+                    .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                        @Override
+                        public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e,
+                                Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                boolean isFirstResource) {
+                            runOnUiThread(() -> Toast.makeText(SettingsActivity.this,
+                                    "Photo uploaded, but couldn't load the preview. It should still appear next time you open Settings.",
+                                    Toast.LENGTH_LONG).show());
+                            return false;
+                        }
+                        @Override
+                        public boolean onResourceReady(android.graphics.drawable.Drawable resource,
+                                Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                            return false;
+                        }
+                    })
+                    .into(ivProfilePhoto);
         }
         Toast.makeText(this, "Photo updated!", Toast.LENGTH_SHORT).show();
     }
