@@ -15,6 +15,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -404,6 +405,35 @@ public class ChatMediaActivity extends BaseActivity {
         if (recyclerView.getItemAnimator() != null) {
             recyclerView.getItemAnimator().setChangeDuration(0);
         }
+
+        // ── Keep bottom pinned across keyboard show/hide (reply mode, emoji, etc.) ──
+        // stackFromEnd only anchors the RecyclerView to the bottom on its *initial*
+        // layout. When the IME opens/closes under windowSoftInputMode="adjustResize"
+        // the RecyclerView's height changes and LinearLayoutManager re-derives the
+        // visible window from its existing anchor, which for a moment can land above
+        // the last messages — reading as messages "disappearing" until the layout
+        // settles a frame or two later. Explicitly re-pinning to the last item on every
+        // height change removes that flash instead of relying on the default anchor
+        // recovery.
+        final View chatRoot = findViewById(android.R.id.content);
+        chatRoot.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+            private int lastHeight = -1;
+            @Override public void onGlobalLayout() {
+                int h = recyclerView.getHeight();
+                if (h == 0) return;
+                if (lastHeight != -1 && h != lastHeight && adapter.getItemCount() > 0) {
+                    LinearLayoutManager lm = (LinearLayoutManager) recyclerView.getLayoutManager();
+                    if (lm != null) {
+                        int lastVisible = lm.findLastVisibleItemPosition();
+                        boolean wasAtBottom = lastVisible >= adapter.getItemCount() - 2;
+                        if (wasAtBottom || h < lastHeight) {
+                            recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+                        }
+                    }
+                }
+                lastHeight = h;
+            }
+        });
 
         // ── Scroll-to-bottom FAB ──────────────────────────────────────────────
         btnScrollToBottom = findViewById(R.id.btnScrollToBottom);
