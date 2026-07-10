@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 17
+    version = 18
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -81,7 +81,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                MIGRATION_16_17)
+                MIGRATION_16_17, MIGRATION_17_18)
             .build();
     }
 
@@ -219,6 +219,15 @@ public abstract class AppDatabase extends RoomDatabase {
     static final Migration MIGRATION_12_13 = new Migration(12, 13) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+
+    // v18: Persist voice-note waveform amplitudes so a chat reopened from local
+    // Room cache shows the real recorded/received waveform instead of a
+    // synthetic fake one (amplitudes was previously @Ignore-d).
+    static final Migration MIGRATION_17_18 = new Migration(17, 18) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN amplitudes TEXT");
         }
     };
 

@@ -42,12 +42,43 @@ public class Message {
 
     /**
      * Downsampled amplitude bars for waveform display on voice messages.
-     * Populated from Firestore {@code amplitudes} field — not persisted to Room.
+     * Persisted as a comma-separated string in the {@code amplitudes} column
+     * (Room has no List&lt;Integer&gt; TypeConverter registered) so real,
+     * recorded/received amplitudes survive Room reload — a chat reopened from
+     * local cache used to fall back to a synthetic fake waveform because this
+     * was previously @Ignore-d.
      */
+    @ColumnInfo(name = "amplitudes")
+    public String amplitudesCsv;
+
+    /** In-memory cache of the parsed CSV — avoids re-parsing on every bind. */
     @Ignore
-    public List<Integer> waveAmplitudes;
-    public List<Integer> getWaveAmplitudes() { return waveAmplitudes; }
-    public void setWaveAmplitudes(List<Integer> v) { waveAmplitudes = v; }
+    private List<Integer> waveAmplitudes;
+
+    public List<Integer> getWaveAmplitudes() {
+        if (waveAmplitudes == null && amplitudesCsv != null && !amplitudesCsv.isEmpty()) {
+            List<Integer> parsed = new java.util.ArrayList<>();
+            for (String part : amplitudesCsv.split(",")) {
+                try { parsed.add(Integer.parseInt(part.trim())); } catch (NumberFormatException ignored) {}
+            }
+            waveAmplitudes = parsed;
+        }
+        return waveAmplitudes;
+    }
+
+    public void setWaveAmplitudes(List<Integer> v) {
+        waveAmplitudes = v;
+        if (v == null || v.isEmpty()) {
+            amplitudesCsv = null;
+        } else {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < v.size(); i++) {
+                if (i > 0) sb.append(',');
+                sb.append(v.get(i));
+            }
+            amplitudesCsv = sb.toString();
+        }
+    }
 
     public Message() {}
 

@@ -240,11 +240,18 @@
                     android:padding="10dp"
                     android:contentDescription="Play voice note"/>
 
-                <!-- Waveform (with progress thumb) + duration, one row like WhatsApp -->
+                <!-- Waveform (with progress thumb) + duration, one row like WhatsApp.
+                     Fixed width, NOT layout_weight="1" with 0dp: the parent
+                     (voiceNoteContainer) is wrap_content, and a 0dp+weight child
+                     inside a wrap_content LinearLayout gets measured against the
+                     remaining AT_MOST space of the *screen*, not a real width cap —
+                     since plain LinearLayout doesn't support android:maxWidth, that
+                     let the waveform (and the whole bubble around it) balloon out to
+                     almost full screen width. A fixed dp width keeps the bubble sized
+                     like every other bubble. -->
                 <com.duoshield.app.ui.WaveformView
                     android:id="@+id/voiceWaveform"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
+                    android:layout_width="140dp"
                     android:layout_height="32dp"
                     android:layout_marginStart="8dp"
                     android:layout_marginEnd="8dp"/>
