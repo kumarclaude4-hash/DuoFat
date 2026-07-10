@@ -308,6 +308,40 @@ public final class B2StorageHelper {
     }
 
     /**
+     * Loads raw avatar bytes (profile/partner photos — uploaded as plain JPEGs,
+     * not AES-GCM encrypted like message media) via an authenticated SigV4 GET.
+     *
+     * <p>Avatars were previously exposed to the UI as a "public" URL from
+     * {@link #toPublicUrl(String)} and handed straight to Glide. The bucket only
+     * accepts SigV4-signed requests (see {@link #downloadFile(String)}), so an
+     * unauthenticated Glide fetch of that URL always returned 403 — the exact
+     * "Photo uploaded, but couldn't load the preview" symptom. Route avatars
+     * through the same authenticated pipeline as every other B2 object instead.
+     */
+    public static void loadAvatarBytes(String b2Path, MediaCallback cb) {
+        if (b2Path == null || b2Path.isEmpty()) {
+            new Handler(Looper.getMainLooper()).post(() ->
+                    cb.onError(new IOException("Avatar path is null or empty")));
+            return;
+        }
+        byte[] cached = MEDIA_CACHE.get(b2Path);
+        if (cached != null) {
+            new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(cached));
+            return;
+        }
+        MEDIA_POOL.execute(() -> {
+            try {
+                byte[] raw = downloadFile(b2Path);
+                MEDIA_CACHE.put(b2Path, raw);
+                new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(raw));
+            } catch (Exception e) {
+                Log.e(TAG, "loadAvatarBytes failed: " + b2Path, e);
+                new Handler(Looper.getMainLooper()).post(() -> cb.onError(e));
+            }
+        });
+    }
+
+    /**
      * OkHttp {@link RequestBody} that streams a byte array in {@link #BUFFER_SIZE}-chunks
      * and reports progress via {@link ProgressCallback} so the UI progress bar stays smooth.
      * Re-entrant: {@code writeTo()} can be called multiple times (needed for retries).

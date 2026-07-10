@@ -32,6 +32,15 @@ public class Message {
     @ColumnInfo(name = "isDeleted", defaultValue = "0") public boolean isDeleted;
 
     /**
+     * Total voice-note duration in milliseconds, known at record time and stored
+     * so the bubble can show the real length at rest (before playback starts)
+     * instead of a static placeholder.
+     */
+    @ColumnInfo(name = "durationMs", defaultValue = "0") public int durationMs;
+    public int getDurationMs() { return durationMs; }
+    public void setDurationMs(int v) { durationMs = v; }
+
+    /**
      * Millisecond timestamp when the partner read this message.
      * Populated from Firestore {@code readAt} field on a MODIFIED event.
      * Not stored in Room (marked @Ignore) — it is live data shown only in the

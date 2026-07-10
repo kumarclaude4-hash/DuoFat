@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 18
+    version = 19
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -81,7 +81,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                MIGRATION_16_17, MIGRATION_17_18)
+                MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
             .build();
     }
 
@@ -228,6 +228,14 @@ public abstract class AppDatabase extends RoomDatabase {
     static final Migration MIGRATION_17_18 = new Migration(17, 18) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN amplitudes TEXT");
+        }
+    };
+
+    // v19: Persist voice-note total duration so bubbles show the real recorded
+    // length at rest instead of a static "0:00" placeholder.
+    static final Migration MIGRATION_18_19 = new Migration(18, 19) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0");
         }
     };
 

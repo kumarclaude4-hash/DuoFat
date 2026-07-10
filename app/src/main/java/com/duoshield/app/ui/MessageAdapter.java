@@ -516,9 +516,20 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.voicePlayPauseBtn.setTag(msg.getId());
             h.voiceWaveform.setTag(msg.getId());
             h.voiceDuration.setTag(msg.getId());
+            // At-rest label: the real recorded/received total length, so the user can see
+            // how long a voice note is before playing it (previously stuck on a static
+            // "0:00" placeholder — durationMs was never persisted or displayed here).
+            // While actively playing, ChatMediaActivity's progress callback overwrites
+            // this same TextView with the live elapsed position.
+            if (!playing) {
+                h.voiceDuration.setText(msg.getDurationMs() > 0
+                        ? formatDuration(msg.getDurationMs())
+                        : "0:00");
+            }
             // Load waveform bars for display (sender has them from recording; receiver from Firestore).
-            // Messages loaded from Room cache lack amplitudes (@Ignore field) — generate a
-            // deterministic synthetic waveform from the message ID so the UI never shows a flat line.
+            // Messages loaded from Room cache before this fix (or truly legacy messages sent
+            // before amplitudes were persisted) lack amplitudes — fall back to a deterministic
+            // synthetic waveform from the message ID so the UI never shows a flat line.
             List<Integer> amps = msg.getWaveAmplitudes();
             if (amps != null && !amps.isEmpty()) {
                 h.voiceWaveform.setAmplitudes(amps);
@@ -891,7 +902,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         if (partnerAvatarUrl != null) {
             h.voiceAvatarInitial.setVisibility(View.GONE);
             h.voiceAvatarImg.setVisibility(View.VISIBLE);
-            Glide.with(ctx).load(partnerAvatarUrl).circleCrop().into(h.voiceAvatarImg);
+            com.duoshield.app.util.GlideHelper.loadAvatar(ctx, partnerAvatarUrl, h.voiceAvatarImg);
         } else {
             h.voiceAvatarImg.setVisibility(View.GONE);
             Glide.with(ctx).clear(h.voiceAvatarImg);

@@ -161,58 +161,6 @@
                     android:layout_height="wrap_content"/>
             </LinearLayout>
 
-            <!-- Sanctuary Mode row -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp"
-                android:layout_marginTop="1dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_shield"
-                    android:tint="@color/ds_accent"
-                    android:layout_marginEnd="18dp"/>
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Sanctuary Mode"
-                        android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Premium design with organic shapes and generous spacing."
-                        android:textSize="12sp"
-                        android:textColor="@color/ds_text_tertiary"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingMultiplier="1.3"/>
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchSanctuaryMode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="14dp"
-                    android:checked="true"/>
-            </LinearLayout>
-
             <!-- ══ NOTIFICATIONS ══════════════════════════════════════════════ -->
             <TextView
                 android:text="NOTIFICATIONS"

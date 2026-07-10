@@ -57,7 +57,7 @@ public class SettingsActivity extends BaseActivity {
 
     private SharedPreferences prefs;
     private SwitchCompat      switchNotifications, switchBiometric, switchDarkMode, switchDuress,
-                              switchAppScreenshot, switchSanctuaryMode, switchShakeLock;
+                              switchAppScreenshot, switchShakeLock;
     private LinearLayout      layoutDuressSection, layoutDuressContent, layoutDuressForm, layoutDuressActive;
     private LinearLayout      layoutPinInputs, layoutPinSet;
     private EditText          etDuressPin, etNewPin, etConfirmPin;
@@ -110,14 +110,10 @@ public class SettingsActivity extends BaseActivity {
         if (tvProfileDisplayName != null)
             tvProfileDisplayName.setText(myName != null && !myName.isEmpty() ? myName : "—");
 
-        // Load profile photo if stored
+        // Load profile photo if stored (authenticated B2 fetch — see GlideHelper)
         String photoUrl = prefs.getString("my_photo_url", null);
         if (ivProfilePhoto != null && photoUrl != null && !photoUrl.isEmpty()) {
-            Glide.with(this)
-                    .load(photoUrl)
-                    .transform(new CircleCrop())
-                    .placeholder(R.drawable.ic_person)
-                    .into(ivProfilePhoto);
+            com.duoshield.app.util.GlideHelper.loadAvatar(this, photoUrl, ivProfilePhoto);
         }
 
         if (layoutProfileNameRow != null)
@@ -131,7 +127,6 @@ public class SettingsActivity extends BaseActivity {
         switchDarkMode        = findViewById(R.id.switchDarkMode);
         switchDuress          = findViewById(R.id.switchDuress);
         switchAppScreenshot   = findViewById(R.id.switchAppScreenshot);
-        switchSanctuaryMode   = findViewById(R.id.switchSanctuaryMode);
         switchShakeLock       = findViewById(R.id.switchShakeLock);
         layoutDuressSection = findViewById(R.id.layoutDuressSection);
         layoutDuressContent = findViewById(R.id.layoutDuressContent);
@@ -250,19 +245,6 @@ public class SettingsActivity extends BaseActivity {
             AppCompatDelegate.setDefaultNightMode(
                 c ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO);
         });
-
-        // ── Sanctuary Mode ────────────────────────────────────────────────────
-        if (switchSanctuaryMode != null) {
-            switchSanctuaryMode.setChecked(
-                    com.duoshield.app.util.UiModeHelper.isSanctuary(this));
-            switchSanctuaryMode.setOnCheckedChangeListener((b, checked) -> {
-                com.duoshield.app.util.UiModeHelper.setMode(this,
-                        checked
-                        ? com.duoshield.app.util.UiModeHelper.MODE_SANCTUARY
-                        : com.duoshield.app.util.UiModeHelper.MODE_CLASSIC);
-                recreate();
-            });
-        }
 
         // ── Auto sign-out ─────────────────────────────────────────────────────
         btnAutoSignOut.setOnClickListener(v -> showAutoSignOutPicker());
@@ -719,9 +701,11 @@ public class SettingsActivity extends BaseActivity {
                 byte[] plain = readUriBytes(uri);
                 if (plain == null || plain.length == 0) throw new Exception("Empty file");
                 String objectKey = "avatars/" + user.getUid() + "_" + System.currentTimeMillis() + ".jpg";
+                // Store the "b2:" path, NOT a public URL — the bucket only accepts
+                // authenticated SigV4 requests, so a plain URL always 403s when Glide
+                // fetches it directly (root cause of "couldn't load the preview").
                 String b2Path = B2StorageHelper.uploadFile(plain, objectKey, "image/jpeg", null);
-                String url = B2StorageHelper.toPublicUrl(b2Path);
-                runOnUiThread(() -> onPhotoUploaded(url, user));
+                runOnUiThread(() -> onPhotoUploaded(b2Path, user));
             } catch (Exception e) {
                 android.util.Log.e("Settings", "Photo upload failed", e);
                 runOnUiThread(() ->
@@ -730,43 +714,20 @@ public class SettingsActivity extends BaseActivity {
         });
     }
 
-    private void onPhotoUploaded(String url, FirebaseUser user) {
-        prefs.edit().putString("my_photo_url", url).apply();
+    private void onPhotoUploaded(String b2Path, FirebaseUser user) {
+        prefs.edit().putString("my_photo_url", b2Path).apply();
         FirebaseFirestore.getInstance()
                 .collection("users")
                 .document(user.getUid())
-                .set(Collections.singletonMap("photoUrl", url),
+                .set(Collections.singletonMap("photoUrl", b2Path),
                         com.google.firebase.firestore.SetOptions.merge());
-        propagatePhotoToConversations(user.getUid(), url);
+        propagatePhotoToConversations(user.getUid(), b2Path);
         if (ivProfilePhoto != null && !isDestroyed() && !isFinishing()) {
-            Glide.with(this).load(url)
-                    .transform(new CircleCrop())
-                    .placeholder(R.drawable.ic_person)
-                    .error(R.drawable.ic_person)
-                    // Photo was just uploaded under a brand-new object key, but Glide's
-                    // disk/memory cache can still serve a stale bitmap for the same
-                    // ImageView target on some devices — this is exactly the "says
-                    // updated but never reflects" symptom. Force a fresh network fetch.
-                    .skipMemoryCache(true)
-                    .diskCacheStrategy(com.bumptech.glide.load.engine.DiskCacheStrategy.NONE)
-                    .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
-                        @Override
-                        public boolean onLoadFailed(com.bumptech.glide.load.engine.GlideException e,
-                                Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
-                                boolean isFirstResource) {
-                            runOnUiThread(() -> Toast.makeText(SettingsActivity.this,
-                                    "Photo uploaded, but couldn't load the preview. It should still appear next time you open Settings.",
-                                    Toast.LENGTH_LONG).show());
-                            return false;
-                        }
-                        @Override
-                        public boolean onResourceReady(android.graphics.drawable.Drawable resource,
-                                Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
-                                com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
-                            return false;
-                        }
-                    })
-                    .into(ivProfilePhoto);
+            // Freshly uploaded under a brand-new object key, so there's no stale-cache
+            // concern — GlideHelper routes this through the authenticated B2 download
+            // (a plain Glide URL load would 403; that was the actual root cause of the
+            // old "couldn't load the preview" toast, not a caching issue).
+            com.duoshield.app.util.GlideHelper.loadAvatar(this, b2Path, ivProfilePhoto);
         }
         Toast.makeText(this, "Photo updated!", Toast.LENGTH_SHORT).show();
     }

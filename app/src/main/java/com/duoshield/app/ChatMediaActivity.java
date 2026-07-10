@@ -552,7 +552,7 @@ public class ChatMediaActivity extends BaseActivity {
         if (storedPhoto != null && !storedPhoto.isEmpty()) {
             tvAvatarInitial.setVisibility(View.GONE);
             ivPartnerAvatar.setVisibility(View.VISIBLE);
-            Glide.with(this).load(storedPhoto).circleCrop().into(ivPartnerAvatar);
+            com.duoshield.app.util.GlideHelper.loadAvatar(this, storedPhoto, ivPartnerAvatar);
         }
 
         if (partnerUid != null) {
@@ -594,7 +594,7 @@ public class ChatMediaActivity extends BaseActivity {
                       String photoStr = photo.toString();
                       tvAvatarInitial.setVisibility(View.GONE);
                       ivPartnerAvatar.setVisibility(View.VISIBLE);
-                      Glide.with(this).load(photoStr).circleCrop().into(ivPartnerAvatar);
+                      com.duoshield.app.util.GlideHelper.loadAvatar(this, photoStr, ivPartnerAvatar);
                       if (adapter != null) {
                           String initial = tvAvatarInitial.getText() != null
                                   ? tvAvatarInitial.getText().toString() : "?";
@@ -724,7 +724,11 @@ public class ChatMediaActivity extends BaseActivity {
                 if (recordingWaveform != null) recordingWaveform.addAmplitude(amp);
             }
             @Override public void onStopped(String filePath, List<Integer> amplitudes) {
-                uploadVoiceNote(filePath, amplitudes);
+                // Amplitudes are sampled every 100ms (first sample delayed 300ms to let
+                // the mic warm up) — size*100 is an accurate-enough total duration
+                // without needing to change VoiceRecorderHelper's callback signature.
+                int durationMs = amplitudes.size() * 100;
+                uploadVoiceNote(filePath, amplitudes, durationMs);
             }
             @Override public void onError(String msg) {
                 runOnUiThread(() -> {
@@ -762,12 +766,12 @@ public class ChatMediaActivity extends BaseActivity {
         if (inputBar != null) inputBar.setVisibility(View.VISIBLE);
     }
 
-    private void uploadVoiceNote(String filePath, List<Integer> amplitudes) {
-        uploadVoiceNoteWithRetry(filePath, amplitudes, 0);
+    private void uploadVoiceNote(String filePath, List<Integer> amplitudes, int durationMs) {
+        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs, 0);
     }
 
     // BUG-U01 fix: add retry logic for voice uploads with exponential backoff
-    private void uploadVoiceNoteWithRetry(String filePath, List<Integer> amplitudes, int retryCount) {
+    private void uploadVoiceNoteWithRetry(String filePath, List<Integer> amplitudes, int durationMs, int retryCount) {
         if (isFinishing() || isDestroyed()) return;
         if (retryCount > 3) {
             runOnUiThread(() -> {
@@ -809,7 +813,7 @@ public class ChatMediaActivity extends BaseActivity {
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     uploadProgressContainer.setVisibility(View.GONE);
-                    sendVoiceMessage(finalPath, mediaKey, amplitudes);
+                    sendVoiceMessage(finalPath, mediaKey, amplitudes, durationMs);
                 });
                 f.delete();
             } catch (Exception e) {
@@ -827,7 +831,7 @@ public class ChatMediaActivity extends BaseActivity {
                 long delayMs = (long) (1000 * Math.pow(2, retryCount));
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (!isFinishing() && !isDestroyed() && !executor.isShutdown()) {
-                        uploadVoiceNoteWithRetry(filePath, amplitudes, retryCount + 1);
+                        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs, retryCount + 1);
                     }
                 }, delayMs);
             }
@@ -864,7 +868,7 @@ public class ChatMediaActivity extends BaseActivity {
         return out;
     }
 
-    private void sendVoiceMessage(String storagePath, String mediaKey, List<Integer> amplitudes) {
+    private void sendVoiceMessage(String storagePath, String mediaKey, List<Integer> amplitudes, int durationMs) {
         String msgId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
         long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
@@ -877,6 +881,7 @@ public class ChatMediaActivity extends BaseActivity {
         m.setMediaKey(mediaKey);
         m.setStatus("pending");
         m.setWaveAmplitudes(sampledAmps);
+        m.setDurationMs(durationMs);
         adapter.appendMessage(m);
         knownIds.add(msgId);
         recyclerView.scrollToPosition(adapter.getItemCount() - 1);
@@ -891,6 +896,7 @@ public class ChatMediaActivity extends BaseActivity {
         doc.put("mediaKey", mediaKey);
         doc.put("status", "sent");
         doc.put("amplitudes", sampledAmps);
+        doc.put("durationMs", durationMs);
         doc.put("expiresAt", exp); doc.put("timestamp", FieldValue.serverTimestamp());
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
@@ -1514,6 +1520,8 @@ public class ChatMediaActivity extends BaseActivity {
                             }
                             if (!amps.isEmpty()) m.setWaveAmplitudes(amps);
                         }
+                        Object rawDur = dc.getDocument().get("durationMs");
+                        if (rawDur instanceof Number) m.setDurationMs(((Number) rawDur).intValue());
                     }
                     if (isExpired(m)) continue;
 
