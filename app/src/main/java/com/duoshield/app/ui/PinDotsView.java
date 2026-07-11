@@ -53,6 +53,13 @@ public class PinDotsView extends View {
         setContentDescription("PIN entry progress");
     }
 
+    /** Override filled/empty dot colours (call before the view is shown). */
+    public void setColors(int filledColor, int emptyColor) {
+        this.colorFilled = filledColor;
+        this.colorEmpty  = emptyColor;
+        invalidate();
+    }
+
     /** Sets how many dot slots to render (clamped 4–6). */
     public void setMaxCount(int max) {
         this.maxCount = Math.max(4, Math.min(6, max));

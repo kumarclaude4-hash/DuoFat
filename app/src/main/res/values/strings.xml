@@ -40,7 +40,8 @@
     <string name="wrong_pin">Incorrect PIN</string>
     <string name="wrong_pin_remaining">Incorrect PIN — %d attempts remaining</string>
     <string name="unlock">Unlock</string>
-    <string name="use_biometric">Use biometric</string>
+    <string name="use_biometric">Use biometrics instead</string>
+    <string name="lock_tagline">Your privacy. Our priority.</string>
     <string name="biometric_prompt_title">Unlock DuoShield</string>
     <string name="biometric_prompt_subtitle">Use fingerprint or face to unlock</string>
     <string name="biometric_negative">Use PIN</string>

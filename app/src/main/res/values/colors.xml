@@ -119,6 +119,14 @@
     <color name="textPrimary">#F4F1FA</color>
     <color name="white">#FFFFFF</color>
 
+    <!-- ══ Lock Screen — light lavender mode ══ -->
+    <color name="ls_background">#EDE9F8</color>
+    <color name="ls_key_text">#1A1040</color>
+    <color name="ls_key_letters">#9A8FB0</color>
+    <color name="ls_dot_empty">#C8BEE8</color>
+    <color name="ls_tagline">#7A6E90</color>
+    <color name="ls_enter_pin">#2A1F50</color>
+
     <!-- ══ Classic mode overrides ══ -->
     <color name="classic_background">#100D1A</color>
     <color name="classic_surface">#1E1A28</color>

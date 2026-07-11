@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- White glassy circle that contains the lock icon -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- soft shadow -->
+    <item android:left="4dp" android:right="4dp" android:top="6dp" android:bottom="0dp">
+        <shape android:shape="oval">
+            <solid android:color="#259A81FF"/>
+        </shape>
+    </item>
+    <!-- white surface with very subtle lavender tint -->
+    <item android:bottom="5dp">
+        <shape android:shape="oval">
+            <solid android:color="#F5F2FF"/>
+        </shape>
+    </item>
+</layer-list>
