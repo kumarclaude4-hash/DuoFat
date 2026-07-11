@@ -126,6 +126,13 @@ public class LockScreenActivity extends AppCompatActivity {
             if (imm != null) imm.showSoftInput(etPin, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
         });
         etPin.requestFocus();
+        // Force the soft keyboard open immediately — requestFocus() alone is not
+        // enough; the window must be attached first, so post with a short delay.
+        etPin.postDelayed(() -> {
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(etPin, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        }, 100);
 
         // Auto-submit: immediately at the 6-digit max, or after a short pause
         // once 4+ digits are entered (PINs are 4–6 digits, so we can't know the
