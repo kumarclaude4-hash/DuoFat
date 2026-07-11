@@ -171,9 +171,21 @@ public class VoiceMessagePlayer {
                             return;
                         }
                         pl.onProgress(player.getCurrentPosition());
-                        handler.postDelayed(this, 200);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                    // Fall through and reschedule anyway — a single transient read
+                    // failure (OEM state hiccup, brief stall) should not permanently
+                    // kill the polling loop below.
+                }
+                // Always reschedule regardless of this tick's isPlaying()/exception
+                // outcome. Previously this postDelayed() call lived *inside* the
+                // isPlaying() branch, so a single tick where isPlaying() read false
+                // (or getCurrentPosition() threw) stopped the loop forever — audio
+                // kept playing to completion, but onProgress() never fired again,
+                // freezing the waveform thumb/duration for the rest of the note.
+                // Explicit pause()/releaseInternal() calls stopProgressPolling() to
+                // actually cancel this, so it's safe to keep rescheduling here.
+                handler.postDelayed(this, 200);
             }
         };
         handler.post(progressRunnable);
