@@ -125,14 +125,16 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         callManager = new CallManager(this);
         callManager.setListener(this);
 
-        initVideoRenderers();
-
+        // FIX #1: startCall()/acceptCall() both call initFactory() synchronously as their
+        // first statement, which creates eglBase.  initVideoRenderers() must run AFTER
+        // that so eglBase is non-null when the SurfaceViewRenderers are initialised.
         if (isCaller) {
             String chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
             callManager.startCall(myUid, partnerId, isVideo, chatId);
         } else {
             callManager.acceptCall(myUid, callId, isVideo);
         }
+        initVideoRenderers(); // eglBase guaranteed non-null now
 
         updateStatusUi(CallManager.CallState.OUTGOING_RINGING);
     }
@@ -256,7 +258,9 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             case ENDED:
                 statusText = "Call ended";
                 durationHandler.removeCallbacksAndMessages(null);
-                saveCallRecord(CallRecord.OUTCOME_ANSWERED);
+                // FIX #4: callStartMs > 0 means CONNECTED was reached at least once.
+                // Without this guard every declined/timed-out call was logged as ANSWERED.
+                saveCallRecord(callStartMs > 0 ? CallRecord.OUTCOME_ANSWERED : CallRecord.OUTCOME_MISSED);
                 finish();
                 return;
             case FAILED:

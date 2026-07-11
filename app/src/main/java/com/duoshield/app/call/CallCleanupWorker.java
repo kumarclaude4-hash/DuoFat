@@ -11,20 +11,27 @@ import androidx.work.WorkerParameters;
 
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.google.firebase.firestore.QuerySnapshot;
 
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Periodic WorkManager job that purges stale {@code calls/*} Firestore documents
  * older than 24 hours with status in {@code ["ringing","missed","timeout"]}.
  *
- * <p>Protects against clients that crash mid-call and never write a terminal status.
- * Scheduled once at app startup; safe to enqueue multiple times (unique tag).
+ * <p>FIX #7: The previous implementation used a collection-wide query with no
+ * participant filter, which Firestore denies under the per-document security rule
+ * ({@code callerId == uid || calleeId == uid}).  Two separate queries — one scoped
+ * to {@code callerId == uid}, one to {@code calleeId == uid} — satisfy that rule
+ * without requiring a server-side Admin SDK bypass.
  */
 public class CallCleanupWorker extends Worker {
 
@@ -42,28 +49,56 @@ public class CallCleanupWorker extends Worker {
     @NonNull
     @Override
     public Result doWork() {
-        if (FirebaseAuth.getInstance().getCurrentUser() == null) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) {
             Log.d(TAG, "Not authenticated — skipping cleanup");
             return Result.success();
         }
 
         try {
+            String uid = user.getUid();
             long cutoffMs = System.currentTimeMillis() - STALE_THRESHOLD_MS;
-            com.google.firebase.firestore.Query query = FirebaseFirestore.getInstance()
-                    .collection("calls")
-                    .whereLessThan("createdAt", new Date(cutoffMs));
+            Date cutoff = new Date(cutoffMs);
+            FirebaseFirestore db = FirebaseFirestore.getInstance();
 
-            com.google.firebase.firestore.QuerySnapshot snap =
-                    Tasks.await(query.get(), 30, TimeUnit.SECONDS);
+            // FIX #7: Two separate queries scoped to the current user's participant role.
+            // A single unscoped query is denied by Firestore's per-doc security rule.
+            // Note: each query requires a composite index on (callerId/calleeId + createdAt).
+            QuerySnapshot callerSnap = Tasks.await(
+                    db.collection("calls")
+                      .whereEqualTo("callerId", uid)
+                      .whereLessThan("createdAt", cutoff)
+                      .get(),
+                    30, TimeUnit.SECONDS);
 
+            QuerySnapshot calleeSnap = Tasks.await(
+                    db.collection("calls")
+                      .whereEqualTo("calleeId", uid)
+                      .whereLessThan("createdAt", cutoff)
+                      .get(),
+                    30, TimeUnit.SECONDS);
+
+            // Merge results, dedup by document ID
+            Set<String> seenIds = new HashSet<>();
             int deleted = 0;
-            for (QueryDocumentSnapshot doc : snap) {
+
+            for (QueryDocumentSnapshot doc : callerSnap) {
+                if (!seenIds.add(doc.getId())) continue;
                 String status = doc.getString("status");
                 if (status != null && STALE_STATUSES.contains(status)) {
                     deleteDocAndSubcollections(doc.getId());
                     deleted++;
                 }
             }
+            for (QueryDocumentSnapshot doc : calleeSnap) {
+                if (!seenIds.add(doc.getId())) continue;
+                String status = doc.getString("status");
+                if (status != null && STALE_STATUSES.contains(status)) {
+                    deleteDocAndSubcollections(doc.getId());
+                    deleted++;
+                }
+            }
+
             Log.d(TAG, "Call cleanup complete — deleted " + deleted + " stale docs");
             return Result.success();
         } catch (Exception e) {

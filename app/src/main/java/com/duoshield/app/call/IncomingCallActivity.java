@@ -1,7 +1,9 @@
 package com.duoshield.app.call;
 
+import android.Manifest;
 import android.app.KeyguardManager;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
@@ -15,14 +17,20 @@ import android.os.Vibrator;
 import android.util.Log;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.duoshield.app.R;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.db.CallRecord;
 import com.duoshield.app.notifications.NotificationStyler;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,7 +49,8 @@ public class IncomingCallActivity extends AppCompatActivity {
     public static final String EXTRA_CALLER_NAME = "caller_name";
     public static final String EXTRA_IS_VIDEO    = "is_video";
 
-    private static final int TIMEOUT_SECONDS = 30;
+    private static final int TIMEOUT_SECONDS    = 30;
+    private static final int REQUEST_CALL_PERMS = 101;
 
     private String callId;
     private String callerId;
@@ -80,15 +89,22 @@ public class IncomingCallActivity extends AppCompatActivity {
 
         if (callerName == null) callerName = "Unknown";
 
-        TextView tvName = findViewById(R.id.tvIncomingCallerName);
-        TextView tvType = findViewById(R.id.tvIncomingCallType);
+        // FIX #5: Notification "Decline" action sends auto_decline=true.
+        // Handle it before building the UI — read callId above first so declineCall() can use it.
+        if (getIntent().getBooleanExtra("auto_decline", false)) {
+            declineCall();
+            return;
+        }
+
+        TextView tvName    = findViewById(R.id.tvIncomingCallerName);
+        TextView tvType    = findViewById(R.id.tvIncomingCallType);
         TextView tvInitial = findViewById(R.id.tvIncomingAvatarInitial);
 
         tvName.setText(callerName);
         tvInitial.setText(callerName.substring(0, 1).toUpperCase());
         tvType.setText(isVideo ? "Incoming video call" : "Incoming voice call");
 
-        ImageView btnAccept = findViewById(R.id.btnAcceptCall);
+        ImageView btnAccept  = findViewById(R.id.btnAcceptCall);
         ImageView btnDecline = findViewById(R.id.btnDeclineCall);
 
         btnAccept.setOnClickListener(v -> acceptCall());
@@ -135,18 +151,75 @@ public class IncomingCallActivity extends AppCompatActivity {
         }, TIMEOUT_SECONDS * 1000L);
     }
 
+    /**
+     * FIX #2: Check RECORD_AUDIO (and CAMERA for video) before launching CallActivity.
+     * The outgoing-call path already does this; this closes the gap on the callee side.
+     */
     private void acceptCall() {
         if (handled) return;
+
+        List<String> needed = new ArrayList<>();
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (isVideo && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.CAMERA);
+        }
+
+        if (!needed.isEmpty()) {
+            ActivityCompat.requestPermissions(
+                    this, needed.toArray(new String[0]), REQUEST_CALL_PERMS);
+            return; // result handled in onRequestPermissionsResult()
+        }
+
+        doAcceptCall();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+            @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_CALL_PERMS) return;
+
+        boolean audioGranted = false;
+        for (int i = 0; i < permissions.length; i++) {
+            if (Manifest.permission.RECORD_AUDIO.equals(permissions[i])
+                    && grantResults[i] == PackageManager.PERMISSION_GRANTED) {
+                audioGranted = true;
+            }
+            // Camera denied → graceful audio-only fallback (spec §3)
+            if (Manifest.permission.CAMERA.equals(permissions[i])
+                    && grantResults[i] != PackageManager.PERMISSION_GRANTED) {
+                isVideo = false;
+            }
+        }
+
+        if (audioGranted) {
+            doAcceptCall();
+        } else {
+            Toast.makeText(this, "Microphone permission is required to accept a call",
+                    Toast.LENGTH_LONG).show();
+            declineCall();
+        }
+    }
+
+    /** Actually launches CallActivity — called only once permissions are confirmed. */
+    private void doAcceptCall() {
         handled = true;
         stopRinging();
         timeoutHandler.removeCallbacksAndMessages(null);
 
         Intent intent = new Intent(this, CallActivity.class);
-        intent.putExtra(CallActivity.EXTRA_CALL_ID,   callId);
-        intent.putExtra(CallActivity.EXTRA_CALLER_ID, callerId);
-        intent.putExtra(CallActivity.EXTRA_IS_VIDEO,  isVideo);
-        intent.putExtra(CallActivity.EXTRA_IS_CALLER, false);
+        intent.putExtra(CallActivity.EXTRA_CALL_ID,      callId);
+        intent.putExtra(CallActivity.EXTRA_CALLER_ID,    callerId);
+        intent.putExtra(CallActivity.EXTRA_IS_VIDEO,     isVideo);
+        intent.putExtra(CallActivity.EXTRA_IS_CALLER,    false);
         intent.putExtra(CallActivity.EXTRA_PARTNER_NAME, callerName);
+        // FIX #3: Pass myUid so CallActivity.saveCallRecord() works on the callee side.
+        intent.putExtra(CallActivity.EXTRA_MY_UID,
+                com.google.firebase.auth.FirebaseAuth.getInstance().getUid());
         startActivity(intent);
         finish();
     }
@@ -175,7 +248,6 @@ public class IncomingCallActivity extends AppCompatActivity {
         }
 
         saveMissedRecord(CallRecord.OUTCOME_MISSED);
-        // Show missed-call notification
         NotificationStyler.showMissedCall(this, callerName, callId);
         finish();
     }

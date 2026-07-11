@@ -519,10 +519,12 @@ public class CallManager {
     }
 
     public void setSpeakerOn(boolean on) {
+        // FIX #8: Both ternary branches were identical (MODE_IN_COMMUNICATION), making
+        // setMode() a no-op. The mode must stay MODE_IN_COMMUNICATION throughout the call;
+        // only the speaker routing changes via setSpeakerphoneOn().
         AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         if (am != null) {
             am.setSpeakerphoneOn(on);
-            am.setMode(on ? AudioManager.MODE_IN_COMMUNICATION : AudioManager.MODE_IN_COMMUNICATION);
         }
     }
 

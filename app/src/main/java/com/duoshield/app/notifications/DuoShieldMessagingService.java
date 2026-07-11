@@ -122,15 +122,9 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         NotificationHelper.createChannel(this);
         NotificationStyler.showIncomingCall(this, callerName, callId, callerId, isVideo);
 
-        // Also broadcast locally so a foreground IncomingCallActivity can intercept
-        android.content.Intent localBroadcast = new android.content.Intent(
-                "com.duoshield.app.CALL_INVITE");
-        localBroadcast.putExtra("callId",     callId);
-        localBroadcast.putExtra("callerId",   callerId);
-        localBroadcast.putExtra("callerName", callerName);
-        localBroadcast.putExtra("isVideo",    isVideo);
-        androidx.localbroadcastmanager.content.LocalBroadcastManager
-                .getInstance(this).sendBroadcast(localBroadcast);
+        // FIX #6: Removed dead CALL_INVITE LocalBroadcast — no receiver was ever registered
+        // for "com.duoshield.app.CALL_INVITE", so the broadcast was silently discarded
+        // on every incoming call. The full-screen intent above covers all entry points.
 
         Log.d(TAG, "call_invite handled: callId=" + callId + " caller=" + callerName);
     }
