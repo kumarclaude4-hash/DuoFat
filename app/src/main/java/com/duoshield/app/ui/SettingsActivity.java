@@ -20,7 +20,6 @@ import androidx.appcompat.app.AlertDialog;
 import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.resource.bitmap.CircleCrop;
 import com.duoshield.app.BaseActivity;
-import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.appcompat.widget.Toolbar;
 import com.google.firebase.firestore.FirebaseFirestore;
@@ -56,11 +55,11 @@ public class SettingsActivity extends BaseActivity {
     private static final String[] LOCK_LBL = {"Immediately", "30 seconds", "1 minute", "3 minutes", "5 minutes", "15 minutes", "30 minutes"};
 
     private SharedPreferences prefs;
-    private SwitchCompat      switchNotifications, switchBiometric, switchDarkMode, switchDuress,
+    private SwitchCompat      switchNotifications, switchBiometric,
                               switchAppScreenshot, switchShakeLock;
-    private LinearLayout      layoutDuressSection, layoutDuressContent, layoutDuressForm, layoutDuressActive;
+    private LinearLayout      rowManageUnlockCodes;
     private LinearLayout      layoutPinInputs, layoutPinSet;
-    private EditText          etDuressPin, etNewPin, etConfirmPin;
+    private EditText          etNewPin, etConfirmPin;
     private TextView          tvPinStatus, tvAutoSignOutSub, tvLockTimeoutSub;
     private TextView          tvLastBackup, tvBackupCount, tvBackupHealth;
     private Button            btnAutoSignOut, btnLockTimeout;
@@ -124,17 +123,11 @@ public class SettingsActivity extends BaseActivity {
 
         switchNotifications   = findViewById(R.id.switchNotifications);
         switchBiometric       = findViewById(R.id.switchBiometric);
-        switchDarkMode        = findViewById(R.id.switchDarkMode);
-        switchDuress          = findViewById(R.id.switchDuress);
         switchAppScreenshot   = findViewById(R.id.switchAppScreenshot);
         switchShakeLock       = findViewById(R.id.switchShakeLock);
-        layoutDuressSection = findViewById(R.id.layoutDuressSection);
-        layoutDuressContent = findViewById(R.id.layoutDuressContent);
-        layoutDuressForm    = findViewById(R.id.layoutDuressForm);
-        layoutDuressActive  = findViewById(R.id.layoutDuressActive);
         layoutPinInputs     = findViewById(R.id.layoutPinInputs);
         layoutPinSet        = findViewById(R.id.layoutPinSet);
-        etDuressPin         = findViewById(R.id.etDuressPin);
+        rowManageUnlockCodes = findViewById(R.id.rowManageUnlockCodes);
         etNewPin            = findViewById(R.id.etNewPin);
         etConfirmPin        = findViewById(R.id.etConfirmPin);
         tvPinStatus         = findViewById(R.id.tvPinStatus);
@@ -147,13 +140,11 @@ public class SettingsActivity extends BaseActivity {
         Button btnCancelPinForm = findViewById(R.id.btnCancelPinForm);
         Button btnClearPin      = findViewById(R.id.btnClearPin);
         Button btnChangePinMode = findViewById(R.id.btnChangePinMode);
-        Button btnSetDuressPin  = findViewById(R.id.btnSetDuressPin);
         Button btnUnpair        = findViewById(R.id.btnUnpair);
 
         // ── Restore saved state ───────────────────────────────────────────────
         switchNotifications.setChecked(prefs.getBoolean("notifications_enabled", true));
         switchBiometric.setChecked(prefs.getBoolean("biometric_enabled", false));
-        switchDarkMode.setChecked(prefs.getBoolean("dark_mode", false));
         if (switchAppScreenshot != null)
             switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", false));
         if (switchShakeLock != null)
@@ -162,35 +153,19 @@ public class SettingsActivity extends BaseActivity {
         updateLockTimeoutLabel();
         refreshPinStatus();
 
-        // ── Duress toggle ─────────────────────────────────────────────────────
-        // Always start unchecked — the section is hidden entirely when a duress
-        // PIN is active, so the toggle state is irrelevant while it is saved.
-        switchDuress.setChecked(false);
-        layoutDuressContent.setVisibility(View.GONE);
-        refreshDuressState(); // hides entire section if hasDuressPin()
-
-        switchDuress.setOnCheckedChangeListener((btn, checked) -> {
-            if (checked && !PinManager.hasPinSet(this)) {
-                switchDuress.setChecked(false);
-                Toast.makeText(this,
-                    "Set an app PIN first before enabling Duress PIN.",
-                    Toast.LENGTH_LONG).show();
-                return;
-            }
-            // Only controls the form visibility — the active-badge path is never
-            // reached via the toggle because the section is hidden when a PIN is saved.
-            layoutDuressContent.setVisibility(checked ? View.VISIBLE : View.GONE);
-            if (!checked && etDuressPin != null) etDuressPin.setText("");
-        });
+        // "Manage unlock codes" is a plain row folded into ordinary PIN management —
+        // nothing in the running app names or badges the second-code feature (see
+        // ManageUnlockCodesActivity for the setup flow).
+        if (rowManageUnlockCodes != null) {
+            rowManageUnlockCodes.setOnClickListener(v ->
+                startActivity(new Intent(this, ManageUnlockCodesActivity.class)));
+        }
 
         // ── App PIN ───────────────────────────────────────────────────────────
         btnSetPin.setOnClickListener(v -> saveAppPin());
         if (btnClearPin      != null) btnClearPin.setOnClickListener(v -> confirmClearPin());
         if (btnChangePinMode != null) btnChangePinMode.setOnClickListener(v -> enterChangePinMode());
         if (btnCancelPinForm != null) btnCancelPinForm.setOnClickListener(v -> refreshPinStatus());
-
-        // ── Duress PIN ────────────────────────────────────────────────────────
-        if (btnSetDuressPin != null) btnSetDuressPin.setOnClickListener(v -> saveDuressPin());
 
         // ── Biometric ─────────────────────────────────────────────────────────
         switchBiometric.setOnCheckedChangeListener((b, checked) -> {
@@ -240,12 +215,6 @@ public class SettingsActivity extends BaseActivity {
         // Screenshot toggle — requires the app PIN to change (security gate).
         if (switchAppScreenshot != null) attachScreenshotListener();
 
-        switchDarkMode.setOnCheckedChangeListener((b, c) -> {
-            prefs.edit().putBoolean("dark_mode", c).apply();
-            AppCompatDelegate.setDefaultNightMode(
-                c ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO);
-        });
-
         // ── Auto sign-out ─────────────────────────────────────────────────────
         btnAutoSignOut.setOnClickListener(v -> showAutoSignOutPicker());
 
@@ -286,11 +255,17 @@ public class SettingsActivity extends BaseActivity {
         }
 
         // ── B2 diagnostics deep-link ──────────────────────────────────────────
+        // Debug-only: exposes raw B2 bucket names, key IDs, and endpoints. Must
+        // never be reachable in a release build (see UX audit item #5).
         com.google.android.material.button.MaterialButton btnB2Details =
                 findViewById(R.id.btnB2Details);
         if (btnB2Details != null) {
-            btnB2Details.setOnClickListener(v ->
-                    startActivity(new android.content.Intent(this, StorageDiagnosticsActivity.class)));
+            if (com.duoshield.app.BuildConfig.DEBUG) {
+                btnB2Details.setOnClickListener(v ->
+                        startActivity(new android.content.Intent(this, StorageDiagnosticsActivity.class)));
+            } else {
+                btnB2Details.setVisibility(View.GONE);
+            }
         }
 
         // ── Cloud Backup ──────────────────────────────────────────────────────
@@ -402,6 +377,8 @@ public class SettingsActivity extends BaseActivity {
         bgExecutor.execute(() -> {
             boolean clashWithDuress = DuressManager.isDuressPin(this, pin);
             if (!clashWithDuress) PinManager.setPin(this, pin);
+            // NOTE: "duress" here refers only to the internal DuressManager class name;
+            // no user-facing string in this screen uses that term (see UX audit item #2).
 
             runOnUiThread(() -> {
                 if (btnSetPin != null) btnSetPin.setEnabled(true);
@@ -410,7 +387,7 @@ public class SettingsActivity extends BaseActivity {
                     // in flight) to restore the correct state (already-set or empty).
                     refreshPinStatus();
                     Toast.makeText(this,
-                        "App PIN cannot be the same as your duress PIN.",
+                        "This PIN is already in use as another unlock code. Choose a different one.",
                         Toast.LENGTH_LONG).show();
                 } else {
                     // Success — directly apply "PIN is set" UI state.
@@ -432,10 +409,10 @@ public class SettingsActivity extends BaseActivity {
             return;
         }
         if (DuressManager.hasDuressPin(this)) {
-            // Clearing the app PIN also erases the duress PIN — the user must
-            // prove they know the duress PIN before we allow this, so someone
-            // who only knows the app PIN cannot silently disable the duress feature.
-            promptDuressPin(() ->
+            // Clearing the app PIN also erases the other unlock code — the user
+            // must prove they know it before we allow this, so someone who only
+            // knows the primary PIN cannot silently disable the second one.
+            promptOtherUnlockCode(() ->
                 promptCurrentPin("Enter your app PIN to confirm", this::doClearPin));
         } else {
             promptCurrentPin("Enter your current PIN to clear it", this::doClearPin);
@@ -451,24 +428,20 @@ public class SettingsActivity extends BaseActivity {
         switchBiometric.setChecked(false);
         if (switchShakeLock != null) switchShakeLock.setChecked(false);
         DuressManager.clearDuressPin(this);
-        if (switchDuress != null) switchDuress.setChecked(false);
-        if (layoutDuressContent != null) layoutDuressContent.setVisibility(View.GONE);
-        if (etDuressPin != null) etDuressPin.setText("");
         // Directly apply "no PIN" state — clearPin() uses apply() (async)
         applyPinUiState(false);
-        refreshDuressState(); // section becomes visible again (duress PIN now cleared)
         Toast.makeText(this, R.string.settings_pin_cleared, Toast.LENGTH_SHORT).show();
     }
 
     /**
-     * Prompts the user to enter their duress PIN and calls {@code onVerified} only
-     * if the entered value matches the stored hash. Used before any operation that
-     * would clear or disable the duress feature.
+     * Prompts the user to enter their other unlock code and calls {@code onVerified}
+     * only if it matches the stored hash. Used before any operation that would clear
+     * or disable that code. Deliberately generic wording — see UX audit item #2.
      */
-    private void promptDuressPin(Runnable onVerified) {
+    private void promptOtherUnlockCode(Runnable onVerified) {
         EditText etEntry = new EditText(this);
         etEntry.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        etEntry.setHint("Duress PIN");
+        etEntry.setHint("Other unlock code");
         etEntry.setMaxLines(1);
 
         LinearLayout container = new LinearLayout(this);
@@ -478,8 +451,8 @@ public class SettingsActivity extends BaseActivity {
         container.addView(etEntry);
 
         new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Verify Duress PIN")
-                .setMessage("Clearing your app PIN will also remove the duress PIN.\nEnter your duress PIN to confirm.")
+                .setTitle("Confirm your other code")
+                .setMessage("You have more than one unlock code configured. Enter the other one to continue.")
                 .setView(container)
                 .setPositiveButton("Confirm", (d, w) -> {
                     String entered = etEntry.getText().toString().trim();
@@ -487,7 +460,7 @@ public class SettingsActivity extends BaseActivity {
                         boolean ok = DuressManager.isDuressPin(this, entered);
                         runOnUiThread(() -> {
                             if (ok) onVerified.run();
-                            else Toast.makeText(this, "Incorrect duress PIN.", Toast.LENGTH_SHORT).show();
+                            else Toast.makeText(this, "Incorrect code.", Toast.LENGTH_SHORT).show();
                         });
                     });
                 })
@@ -553,6 +526,10 @@ public class SettingsActivity extends BaseActivity {
         if (layoutPinSet != null) {
             layoutPinSet.setVisibility(pinSet ? View.VISIBLE : View.GONE);
         }
+        // "Manage unlock codes" only makes sense once a primary PIN exists.
+        if (rowManageUnlockCodes != null) {
+            rowManageUnlockCodes.setVisibility(pinSet ? View.VISIBLE : View.GONE);
+        }
         // Hide the cancel button whenever we return to base state
         Button cancel = findViewById(R.id.btnCancelPinForm);
         if (cancel != null) cancel.setVisibility(View.GONE);
@@ -568,40 +545,6 @@ public class SettingsActivity extends BaseActivity {
         Button cancel = findViewById(R.id.btnCancelPinForm);
         if (cancel != null) cancel.setVisibility(View.VISIBLE);
         if (etNewPin != null) etNewPin.requestFocus();
-    }
-
-    // ── Duress PIN logic ──────────────────────────────────────────────────────
-
-    private void saveDuressPin() {
-        String pin = etDuressPin.getText().toString().trim();
-        if (pin.length() < 4 || pin.length() > 6) {
-            Toast.makeText(this, "Duress PIN must be 4–6 digits.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Button btnSetDuressPin = findViewById(R.id.btnSetDuressPin);
-        if (btnSetDuressPin != null) btnSetDuressPin.setEnabled(false);
-
-        bgExecutor.execute(() -> {
-            boolean clashWithAppPin = PinManager.verifyPin(this, pin);
-            if (!clashWithAppPin) DuressManager.setDuressPin(this, pin);
-
-            runOnUiThread(() -> {
-                if (btnSetDuressPin != null) btnSetDuressPin.setEnabled(true);
-                if (clashWithAppPin) {
-                    Toast.makeText(this,
-                        "Duress PIN cannot match your app PIN.",
-                        Toast.LENGTH_LONG).show();
-                } else {
-                    etDuressPin.setText("");
-                    Toast.makeText(this, "Duress PIN set. Keep it secret.", Toast.LENGTH_SHORT).show();
-                    // Hide the form — show the "active" badge instead. The user
-                    // cannot re-enter or overwrite a duress PIN once it is set;
-                    // they must disable and re-enable the toggle to change it.
-                    refreshDuressState();
-                }
-            });
-        });
     }
 
     // ── Profile name edit ─────────────────────────────────────────────────────
@@ -797,26 +740,6 @@ public class SettingsActivity extends BaseActivity {
         } else {
             getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         }
-    }
-
-    // ── Duress state helper ───────────────────────────────────────────────────
-
-    /**
-     * Hides or reveals the <em>entire</em> Duress PIN section based on whether a
-     * duress PIN is currently saved:
-     * <ul>
-     *   <li>PIN saved  → {@code layoutDuressSection} is {@code GONE} — no trace visible</li>
-     *   <li>No PIN     → {@code layoutDuressSection} is {@code VISIBLE} — user can set one</li>
-     * </ul>
-     * Call after any event that might change the duress PIN state (initial load,
-     * save success, app-PIN clear).
-     */
-    private void refreshDuressState() {
-        if (layoutDuressSection == null) return;
-        boolean pinSaved = DuressManager.hasDuressPin(this);
-        // When a duress PIN is active the entire section vanishes — no toggle,
-        // no label, no evidence that the feature exists.
-        layoutDuressSection.setVisibility(pinSaved ? View.GONE : View.VISIBLE);
     }
 
     // ── Lock timeout ──────────────────────────────────────────────────────────

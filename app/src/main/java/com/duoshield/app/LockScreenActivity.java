@@ -2,6 +2,10 @@ package com.duoshield.app;
 
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.animation.Animation;
@@ -14,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.duoshield.app.security.BiometricHelper;
 import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.ui.FingerprintScanView;
+import com.duoshield.app.ui.PinDotsView;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.HapticHelper;
 import com.duoshield.app.util.PinManager;
@@ -50,13 +55,19 @@ public class LockScreenActivity extends AppCompatActivity {
     private static final String KEY_FAIL_COUNT = "pin_fail_count";
     private static final int    MAX_ATTEMPTS   = 5; // 5th wrong attempt → performLogout()
 
+    /** Auto-submit debounce for PINs shorter than the 6-digit max (BUG-U01-adjacent). */
+    private static final long AUTO_SUBMIT_DEBOUNCE_MS = 600L;
+
     private EditText etPin;
+    private PinDotsView pinDotsView;
     private TextView tvError;
     private Button   btnUnlock, btnBiometric;
     private FingerprintScanView fingerprintScanView;
     private ImageView ivLockShield;
     /** Guard against multiple concurrent PBKDF2 threads on rapid button taps (BUG-U01). */
     private boolean isVerifying = false;
+    private final Handler autoSubmitHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingAutoSubmit;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,6 +84,7 @@ public class LockScreenActivity extends AppCompatActivity {
         setContentView(R.layout.activity_lock_screen);
 
         etPin               = findViewById(R.id.etPin);
+        pinDotsView         = findViewById(R.id.pinDotsView);
         tvError             = findViewById(R.id.tvError);
         btnUnlock           = findViewById(R.id.btnUnlock);
         btnBiometric        = findViewById(R.id.btnBiometric);
@@ -103,6 +115,41 @@ public class LockScreenActivity extends AppCompatActivity {
             checkPin();
             return true;
         });
+
+        // Tapping the dot row brings up the keyboard for the hidden etPin.
+        pinDotsView.setOnClickListener(v -> {
+            etPin.requestFocus();
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(etPin, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        });
+        etPin.requestFocus();
+
+        // Auto-submit: immediately at the 6-digit max, or after a short pause
+        // once 4+ digits are entered (PINs are 4–6 digits, so we can't know the
+        // intended length in advance — see UX audit item #6).
+        etPin.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(Editable s) {
+                int len = s.length();
+                pinDotsView.setFilledCount(len);
+                cancelPendingAutoSubmit();
+                if (len >= 6) {
+                    checkPin();
+                } else if (len >= 4) {
+                    pendingAutoSubmit = LockScreenActivity.this::checkPin;
+                    autoSubmitHandler.postDelayed(pendingAutoSubmit, AUTO_SUBMIT_DEBOUNCE_MS);
+                }
+            }
+        });
+    }
+
+    private void cancelPendingAutoSubmit() {
+        if (pendingAutoSubmit != null) {
+            autoSubmitHandler.removeCallbacks(pendingAutoSubmit);
+            pendingAutoSubmit = null;
+        }
     }
 
     private void showScanAnim() {
@@ -136,7 +183,9 @@ public class LockScreenActivity extends AppCompatActivity {
     }
 
     private void checkPin() {
-        // Guard against multiple concurrent PBKDF2 threads caused by rapid button taps (BUG-U01).
+        cancelPendingAutoSubmit();
+        // Guard against multiple concurrent PBKDF2 threads caused by rapid button taps (BUG-U01)
+        // or an auto-submit firing right after the manual button was tapped.
         if (isVerifying) return;
 
         String entered = etPin.getText().toString().trim();
@@ -211,8 +260,8 @@ public class LockScreenActivity extends AppCompatActivity {
         // Attempts 1–4: show shake and generic error only
         HapticHelper.wrongPin(this);
         Animation shake = AnimationUtils.loadAnimation(this, R.anim.shake);
-        etPin.startAnimation(shake);
-        etPin.setText("");
+        pinDotsView.startAnimation(shake);
+        etPin.setText(""); // also resets pinDotsView to 0 via the TextWatcher
 
         tvError.setText("Incorrect PIN");
         tvError.setVisibility(View.VISIBLE);

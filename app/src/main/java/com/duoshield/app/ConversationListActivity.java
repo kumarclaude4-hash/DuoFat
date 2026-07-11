@@ -25,7 +25,9 @@ import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.ContactBackupHelper;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.snackbar.Snackbar;
+import com.google.android.material.textfield.TextInputEditText;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
@@ -160,30 +162,22 @@ public class ConversationListActivity extends BaseActivity {
         // Overflow menu
         ImageView btnMenu = findViewById(R.id.btn_menu);
         btnMenu.setOnClickListener(v -> {
+            // UX audit item #7: the old global "Key Fingerprint" entry here resolved
+            // to whichever chat was "last active", which was confusing in the
+            // multi-contact case. Fingerprint verification now lives per-chat, in
+            // each conversation's own overflow menu (ChatMediaActivity → Encryption),
+            // where the partner is unambiguous.
             PopupMenu popup = new PopupMenu(this, v);
             popup.getMenu().add(0, 1, 0, "Settings");
-            popup.getMenu().add(0, 2, 0, "Key Fingerprint");
             popup.getMenu().add(0, 3, 0, "New Chat");
             popup.getMenu().add(0, 5, 0, "New Group");
             popup.getMenu().add(0, 4, 0, "Wipe & Exit");
             popup.setOnMenuItemClickListener(item -> {
                 int id = item.getItemId();
                 if (id == 1) { startActivity(new Intent(this, com.duoshield.app.ui.SettingsActivity.class)); return true; }
-                if (id == 2) {
-                    // F22 fix: pass the most recently active partner UID so
-                    // KeyFingerprintActivity can resolve the partner key. In the
-                    // multi-contact case, the user should ideally open fingerprint
-                    // verification from within a specific chat (F23 enhancement).
-                    String lastPartner = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                            .getString("partner_uid", null);
-                    Intent kfIntent = new Intent(this, KeyFingerprintActivity.class);
-                    if (lastPartner != null) kfIntent.putExtra("partner_uid", lastPartner);
-                    startActivity(kfIntent);
-                    return true;
-                }
                 if (id == 3) { startActivity(new Intent(this, com.duoshield.app.ui.AddContactActivity.class)); return true; }
                 if (id == 5) { startActivity(new Intent(this, CreateGroupActivity.class)); return true; }
-                if (id == 4) { com.duoshield.app.util.WipeHelper.wipeAll(this); return true; }
+                if (id == 4) { confirmWipeAndExit(); return true; }
                 return false;
             });
             popup.show();
@@ -200,6 +194,54 @@ public class ConversationListActivity extends BaseActivity {
         // NOTE: DO NOT call listenForConversation() here.
         // It is attached in onStart() so it is properly detached/re-attached
         // across the activity lifecycle without leaking a second registration.
+    }
+
+    /**
+     * Wipe & Exit is irreversible and unrecoverable — it must never be a single
+     * mis-tap away. This mirrors the friction of the Settings "Unpair Device"
+     * confirmation and adds a typed confirmation step since this entry point
+     * sits in a generic overflow menu next to routine actions like "New Chat".
+     */
+    private void confirmWipeAndExit() {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Wipe & Exit")
+                .setMessage("This will permanently delete all messages, media, and contacts on this device and sign you out. This cannot be undone.")
+                .setPositiveButton("Continue", (d, w) -> showWipeTypeToConfirmDialog())
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showWipeTypeToConfirmDialog() {
+        final TextInputEditText input = new TextInputEditText(this);
+        input.setHint("Type DELETE to confirm");
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        input.setPadding(pad, pad, pad, pad);
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.addView(input);
+
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("Type DELETE to confirm")
+                .setView(container)
+                .setPositiveButton("Wipe & Exit", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            android.widget.Button positive = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE);
+            positive.setEnabled(false);
+            input.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+                @Override public void onTextChanged(CharSequence s, int st, int b, int c) {}
+                @Override public void afterTextChanged(Editable s) {
+                    positive.setEnabled("DELETE".contentEquals(s));
+                }
+            });
+            positive.setOnClickListener(v -> {
+                dialog.dismiss();
+                com.duoshield.app.util.WipeHelper.wipeAll(ConversationListActivity.this);
+            });
+        });
+        dialog.show();
     }
 
     /**

@@ -128,7 +128,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
 
         String raw   = etSeedWords.getText() != null ? etSeedWords.getText().toString().trim() : "";
         String[] parts = raw.split("\\s+");
-        if (parts.length != 12) { showError("Please enter exactly 12 recovery words."); return; }
+        if (parts.length != 12) { showError("Please enter all 12 words of your Recovery Phrase."); return; }
 
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.length; i++) {

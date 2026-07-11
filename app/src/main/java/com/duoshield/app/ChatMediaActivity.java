@@ -336,6 +336,9 @@ public class ChatMediaActivity extends BaseActivity {
             // F-17 fix: ExportHelper was complete but had no UI entry point.
             // Wired here where conversationId is always in scope.
             popup.getMenu().add(0, 5, 0, "Export Chat (PDF)");
+            // UX audit item #7: per-chat entry point for fingerprint verification,
+            // using THIS conversation's partnerUid rather than a global "last active" guess.
+            popup.getMenu().add(0, 6, 0, "Encryption");
             popup.setOnMenuItemClickListener(item -> {
                 int id = item.getItemId();
                 if (id == 1) { startActivity(new Intent(this, SettingsActivity.class)); return true; }
@@ -344,6 +347,11 @@ public class ChatMediaActivity extends BaseActivity {
                 if (id == 4) { showDisappearPicker(); return true; }
                 if (id == 5) {
                     com.duoshield.app.util.ExportHelper.exportToPdf(this, conversationId);
+                    return true;
+                }
+                if (id == 6) {
+                    startActivity(new Intent(this, KeyFingerprintActivity.class)
+                            .putExtra("partner_uid", partnerUid));
                     return true;
                 }
                 return false;

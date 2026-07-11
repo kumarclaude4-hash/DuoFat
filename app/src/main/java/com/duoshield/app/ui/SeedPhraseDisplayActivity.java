@@ -45,7 +45,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Recovery Password screen — shown once during new account creation.
+ * Recovery Phrase screen — shown once during new account creation.
  *
  * <p>Displays the 12-word BIP39 mnemonic and requires the user to confirm
  * they have saved it before keys are derived and uploaded.  The mnemonic is

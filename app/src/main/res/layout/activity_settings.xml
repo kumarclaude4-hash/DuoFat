@@ -124,43 +124,6 @@
                     android:layout_height="0dp"/>
             </LinearLayout>
 
-            <!-- ══ APPEARANCE ══════════════════════════════════════════════════ -->
-            <TextView
-                android:text="APPEARANCE"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"
-                android:layout_marginTop="8dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="60dp"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_settings"
-                    android:tint="#9A81FF"
-                    android:layout_marginEnd="18dp"/>
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Dark mode"
-                    android:textColor="@color/ds_text_primary"
-                    android:textSize="15sp"/>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchDarkMode"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"/>
-            </LinearLayout>
-
             <!-- ══ NOTIFICATIONS ══════════════════════════════════════════════ -->
             <TextView
                 android:text="NOTIFICATIONS"
@@ -395,6 +358,37 @@
                     app:strokeColor="@color/error_red"/>
             </LinearLayout>
 
+            <!-- Plain row, styled identically to any other settings row — no icon
+                 or color calling it out. Opens ManageUnlockCodesActivity. -->
+            <LinearLayout
+                android:id="@+id/rowManageUnlockCodes"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:visibility="gone"
+                android:layout_marginTop="1dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Manage unlock codes"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="15sp"/>
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@color/ds_text_tertiary"/>
+            </LinearLayout>
+
             <!-- ══ BIOMETRIC LOCK ══════════════════════════════════════════════ -->
             <TextView
                 android:text="BIOMETRIC LOCK"
@@ -615,134 +609,6 @@
                 android:paddingEnd="20dp"
                 android:paddingTop="2dp"
                 android:paddingBottom="6dp"/>
-
-            <!-- ══ DURESS PIN ══════════════════════════════════════════════════ -->
-            <LinearLayout
-                android:id="@+id/layoutDuressSection"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:text="DURESS PIN"
-                    style="@style/SectionHeader"
-                    android:paddingStart="20dp"/>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@color/ds_surface"
-                    android:orientation="vertical">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingStart="20dp"
-                        android:paddingEnd="20dp"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="14dp"
-                        android:minHeight="60dp">
-
-                        <ImageView
-                            android:layout_width="22dp"
-                            android:layout_height="22dp"
-                            android:src="@drawable/ic_shield"
-                            android:tint="#9A81FF"
-                            android:layout_marginEnd="18dp"/>
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Enable Duress PIN"
-                                android:textColor="@color/ds_text_primary"
-                                android:textSize="15sp"/>
-
-                            <TextView
-                                android:text="Silently logs you out when the duress PIN is entered."
-                                android:textSize="12sp"
-                                android:textColor="@color/ds_text_tertiary"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="3dp"
-                                android:lineSpacingMultiplier="1.3"/>
-                        </LinearLayout>
-
-                        <androidx.appcompat.widget.SwitchCompat
-                            android:id="@+id/switchDuress"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="14dp"/>
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/layoutDuressContent"
-                        android:orientation="vertical"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:paddingStart="20dp"
-                        android:paddingEnd="20dp"
-                        android:paddingBottom="16dp"
-                        android:visibility="gone">
-
-                        <View style="@style/Divider" android:layout_marginStart="0dp"/>
-
-                        <LinearLayout
-                            android:id="@+id/layoutDuressForm"
-                            android:orientation="vertical"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:paddingTop="14dp">
-
-                            <TextView
-                                android:text="Choose a different PIN to your app PIN."
-                                android:textSize="12.5sp"
-                                android:textColor="@color/ds_text_secondary"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:layout_marginBottom="12dp"/>
-
-                            <EditText
-                                android:id="@+id/etDuressPin"
-                                android:layout_width="match_parent"
-                                android:layout_height="52dp"
-                                android:hint="Duress PIN (4–6 digits)"
-                                android:textColorHint="@color/ds_text_tertiary"
-                                android:textColor="@color/ds_text_primary"
-                                android:inputType="numberPassword"
-                                android:maxLength="6"
-                                android:background="@drawable/bg_input_field"
-                                android:paddingStart="16dp"
-                                android:paddingEnd="16dp"
-                                android:layout_marginBottom="14dp"/>
-
-                            <com.google.android.material.button.MaterialButton
-                                android:id="@+id/btnSetDuressPin"
-                                android:layout_width="wrap_content"
-                                android:layout_height="46dp"
-                                android:text="Save Duress PIN"
-                                android:textAllCaps="false"
-                                android:backgroundTint="@color/ds_danger"
-                                app:cornerRadius="23dp"/>
-                        </LinearLayout>
-
-                        <LinearLayout
-                            android:id="@+id/layoutDuressActive"
-                            android:orientation="horizontal"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:gravity="center_vertical"
-                            android:visibility="gone"/>
-                    </LinearLayout>
-                </LinearLayout>
-            </LinearLayout>
 
             <!-- ══ MEDIA STORAGE ══════════════════════════════════════════════ -->
             <TextView

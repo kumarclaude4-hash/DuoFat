@@ -37,6 +37,13 @@ public class StorageDiagnosticsActivity extends BaseActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Defense in depth: this screen exposes raw B2 bucket names, key IDs, and
+        // endpoints for local testing only. Never allow it to run in a release
+        // build even if something else manages to launch it (see UX audit #5).
+        if (!com.duoshield.app.BuildConfig.DEBUG) {
+            finish();
+            return;
+        }
         setContentView(R.layout.activity_storage_diagnostics);
 
         Toolbar toolbar = findViewById(R.id.toolbar);

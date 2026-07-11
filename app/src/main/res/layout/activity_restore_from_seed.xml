@@ -50,7 +50,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Enter your Account ID and 12 recovery words to restore your encrypted identity."
+            android:text="Enter your Account ID and 12-word Recovery Phrase to restore your encrypted identity."
             android:textSize="14sp"
             android:textColor="@color/ds_text_secondary"
             android:gravity="center"
@@ -94,7 +94,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="12 RECOVERY WORDS"
+            android:text="RECOVERY PHRASE (12 WORDS)"
             android:textColor="@color/ds_accent"
             android:textSize="10sp"
             android:textAllCaps="true"
@@ -145,7 +145,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Both your Account ID and all 12 recovery words are required. They never leave your device."
+                android:text="Both your Account ID and your full Recovery Phrase are required. They never leave your device."
                 android:textColor="@color/ds_text_secondary"
                 android:textSize="12sp"
                 android:lineSpacingMultiplier="1.3"/>
