@@ -14,7 +14,7 @@
         android:paddingEnd="16dp"
         android:paddingTop="6dp"
         android:paddingBottom="6dp"
-        android:textSize="11.5sp"
+        android:textSize="12sp"
         android:letterSpacing="0.05"
         android:textColor="#AAECF2F5"
         android:background="@drawable/bg_date_header"

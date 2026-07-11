@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/settingsToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/ds_toolbar"
+        app:title="Danger Zone"
+        app:titleTextColor="@color/ds_text_primary"
+        app:navigationIcon="@drawable/ic_arrow_back"/>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:overScrollMode="never">
+
+        <LinearLayout
+            android:orientation="vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="48dp">
+
+            <!-- ══ DANGER ZONE ══════════════════════════════════════════════════ -->
+            <TextView
+                android:text="DANGER ZONE"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:letterSpacing="0.14"
+                android:fontFamily="sans-serif-medium"
+                android:textColor="@color/error_red"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="20dp"
+                android:paddingTop="36dp"
+                android:paddingBottom="12dp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnUnpair"
+                android:layout_width="match_parent"
+                android:layout_height="54dp"
+                android:text="Wipe &amp; Exit"
+                android:textAllCaps="false"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-medium"
+                android:backgroundTint="@color/error_red"
+                app:cornerRadius="27dp"
+                android:layout_marginStart="20dp"
+                android:layout_marginEnd="20dp"/>
+
+            <TextView
+                android:text="Clears all local messages, keys, and pairing data. Cannot be undone."
+                android:textSize="12sp"
+                android:textColor="@color/ds_text_tertiary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="8dp"
+                android:lineSpacingMultiplier="1.4"/>
+
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

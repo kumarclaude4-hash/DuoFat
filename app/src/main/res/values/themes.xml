@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ── Sanctuary Premium Theme ── -->
     <style name="Theme.DuoShield" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Colours: Warm Darkness -->
         <item name="colorPrimary">@color/ds_accent</item>
@@ -150,11 +149,6 @@
         <item name="rippleColor">@color/ds_accent_ripple</item>
         <item name="elevation">8dp</item>
     </style>
-
-    <!-- ══ UI Mode Variants ══════════════════════════════════════════════════ -->
-
-    <!-- Sanctuary — premium Warm-Darkness identity (identical to base theme) -->
-    <style name="Theme.DuoShield.Sanctuary" parent="Theme.DuoShield"/>
 
     <!-- Classic — compact, flat surfaces with tighter corners -->
     <style name="Theme.DuoShield.Classic" parent="Theme.DuoShield">

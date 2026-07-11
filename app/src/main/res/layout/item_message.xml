@@ -24,7 +24,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="📌 Pinned"
-            android:textSize="10.5sp"
+            android:textSize="12sp"
             android:textColor="@color/accent"/>
     </LinearLayout>
 
@@ -33,7 +33,7 @@
         android:id="@+id/senderLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textSize="11.5sp"
+        android:textSize="12sp"
         android:textColor="@color/accent"
         android:fontFamily="sans-serif-medium"
         android:paddingStart="4dp"
@@ -201,7 +201,7 @@
                         android:id="@+id/cardUid"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:textSize="11sp"
+                        android:textSize="12sp"
                         android:textColor="#AAFFFFFF"/>
 
                     <Button
@@ -209,7 +209,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="28dp"
                         android:text="Copy ID"
-                        android:textSize="10sp"
+                        android:textSize="12sp"
                         android:textColor="@color/accent"
                         style="@style/Widget.AppCompat.Button.Borderless"
                         android:paddingStart="0dp"
@@ -308,7 +308,7 @@
                         android:paddingEnd="8dp"
                         android:text="1x"
                         android:textColor="#FFFFFF"
-                        android:textSize="11sp"
+                        android:textSize="12sp"
                         android:textStyle="bold"
                         android:visibility="gone"/>
                 </FrameLayout>
@@ -356,7 +356,7 @@
                             android:id="@+id/linkPreviewDomain"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:textSize="10sp"
+                            android:textSize="12sp"
                             android:textColor="@color/accent"
                             android:textAllCaps="true"
                             android:letterSpacing="0.06"/>
@@ -389,7 +389,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="edited"
-                    android:textSize="10.5sp"
+                    android:textSize="12sp"
                     android:textColor="@color/ds_text_tertiary"
                     android:layout_marginEnd="5dp"
                     android:visibility="gone"/>

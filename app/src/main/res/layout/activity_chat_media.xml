@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:background="@color/background">
 
-    <!-- ── Premium chat header ── -->
+    <!-- ── Chat header ── -->
     <LinearLayout
         android:id="@+id/chatHeader"
         android:layout_width="match_parent"
@@ -171,7 +171,7 @@
             android:id="@+id/pinnedCount"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:textColor="@color/accent"
             android:layout_marginStart="6dp"
             android:layout_marginEnd="4dp"/>
@@ -202,7 +202,7 @@
             android:id="@+id/tvDisappearTimer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="11.5sp"
+            android:textSize="12sp"
             android:textColor="#BDFFFFFF"/>
     </LinearLayout>
 
@@ -236,7 +236,7 @@
             android:layout_height="36dp"
             android:text="VERIFY"
             android:textColor="#FFFFD54F"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"/>
@@ -297,7 +297,7 @@
         android:visibility="gone"
         android:background="@color/transparent">
 
-        <!-- Premium animated bubble -->
+        <!-- Animated bubble -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="36dp"

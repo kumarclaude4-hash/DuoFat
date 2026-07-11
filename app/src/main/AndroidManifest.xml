@@ -109,6 +109,27 @@
             android:exported="false" />
 
         <activity
+            android:name=".ui.SecurityPrivacySettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.AppearanceNotificationsSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
+            android:name=".ui.BackupStorageSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
+            android:name=".ui.DangerZoneSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
             android:name=".ui.ManageUnlockCodesActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />

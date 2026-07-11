@@ -14,7 +14,7 @@
         android:layout_height="?attr/actionBarSize"
         style="@style/Widget.DuoShield.Toolbar"
         app:navigationIcon="@drawable/ic_arrow_back"
-        app:title="New Message"/>
+        app:title="Add Contact"/>
 
     <!-- Tabs -->
     <com.google.android.material.tabs.TabLayout
@@ -144,7 +144,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:background="@drawable/bg_conversation_item_sanctuary"
+                    android:background="@drawable/bg_id_card_outline"
                     android:padding="@dimen/ds_spacing_l">
 
                     <!-- ID text -->

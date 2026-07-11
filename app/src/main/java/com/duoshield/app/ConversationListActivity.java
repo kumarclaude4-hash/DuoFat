@@ -58,10 +58,7 @@ public class ConversationListActivity extends BaseActivity {
     protected void onCreate(Bundle savedInstanceState) {
         com.duoshield.app.util.UiModeHelper.applyTheme(this);
         super.onCreate(savedInstanceState);
-        boolean sanctuary = com.duoshield.app.util.UiModeHelper.isSanctuary(this);
-        setContentView(sanctuary
-                ? R.layout.activity_conversation_list_premium
-                : R.layout.activity_conversation_list);
+        setContentView(R.layout.activity_conversation_list);
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         myUid = prefs.getString("my_uid", null);
@@ -121,7 +118,7 @@ public class ConversationListActivity extends BaseActivity {
         adapter = new ConversationAdapter(new ConversationAdapter.OnConversationClickListener() {
             @Override public void onClick(Conversation conv)     { openChat(conv); }
             @Override public void onLongClick(Conversation conv) { openContactDetail(conv); }
-        }, sanctuary);
+        });
 
         LinearLayoutManager convLlm = new LinearLayoutManager(this);
         convLlm.setInitialPrefetchItemCount(8);

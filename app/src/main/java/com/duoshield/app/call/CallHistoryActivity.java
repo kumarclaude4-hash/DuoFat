@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
 public class CallHistoryActivity extends BaseActivity {
 
     private CallHistoryAdapter adapter;
-    private TextView           tvEmpty;
+    private View               tvEmpty;
     private ExecutorService    executor;
     private AppDatabase        db;
 

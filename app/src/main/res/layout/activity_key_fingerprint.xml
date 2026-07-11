@@ -32,7 +32,7 @@
                     android:orientation="vertical" android:padding="16dp">
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                         android:text="@string/your_fingerprint"
-                        android:textColor="@color/ds_accent" android:textSize="11sp"
+                        android:textColor="@color/ds_accent" android:textSize="12sp"
                         android:textAllCaps="true" android:letterSpacing="0.08"
                         android:fontFamily="sans-serif-medium"/>
                     <TextView android:id="@+id/tv_my_fingerprint"
@@ -52,7 +52,7 @@
                     android:orientation="vertical" android:padding="16dp">
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                         android:text="@string/partner_fingerprint"
-                        android:textColor="@color/ds_text_secondary" android:textSize="11sp"
+                        android:textColor="@color/ds_text_secondary" android:textSize="12sp"
                         android:textAllCaps="true" android:letterSpacing="0.08"
                         android:fontFamily="sans-serif-medium"/>
                     <TextView android:id="@+id/tv_partner_fingerprint"

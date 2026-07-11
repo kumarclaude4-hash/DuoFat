@@ -9,6 +9,8 @@ import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -75,6 +77,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private OnVoiceSpeedToggleListener       voiceSpeedListener = null;
     /** O(1) msgId → senderUid lookup built in rebuildDisplay(); eliminates O(n) scan in onBindViewHolder. */
     private final Map<String, String>        senderByMsgId  = new HashMap<>();
+    /** ID of the single outgoing message that should play bubble_fade_in on next bind. Cleared after one use. */
+    private String                           pendingAnimMsgId = null;
 
     public MessageAdapter(List<Message> messages, String myUid,
                           OnVoicePlayListener vl, OnMessageLongPressListener ll,
@@ -187,6 +191,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         rebuildDisplay();
         int inserted = displayItems.size() - oldSize;
         if (inserted > 0) {
+            // Mark this outgoing message for bubble_fade_in on its first bind only.
+            if (m.getId() != null && myUid != null && myUid.equals(m.getSender())) {
+                pendingAnimMsgId = m.getId();
+            }
             // 1 item (message only) or 2 items (date header + message) may be inserted.
             notifyItemRangeInserted(oldSize, inserted);
         }
@@ -362,7 +370,15 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             ((DateViewHolder) holder).label.setText((String) displayItems.get(position));
             return;
         }
-        bindMessage((MsgViewHolder) holder, (Message) displayItems.get(position));
+        Message msg = (Message) displayItems.get(position);
+        bindMessage((MsgViewHolder) holder, msg);
+        // Apply bubble_fade_in only once for the newly-inserted outgoing message.
+        if (msg.getId() != null && msg.getId().equals(pendingAnimMsgId)) {
+            pendingAnimMsgId = null;
+            Animation anim = AnimationUtils.loadAnimation(
+                    holder.itemView.getContext(), R.anim.bubble_fade_in);
+            holder.itemView.startAnimation(anim);
+        }
     }
 
     private void bindMessage(MsgViewHolder h, Message msg) {
@@ -394,16 +410,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         lp.gravity = mine ? Gravity.END : Gravity.START;
         h.bubble.setLayoutParams(lp);
 
-        // ── Bubble background — Sanctuary vs Classic ────────────────
-        boolean sanctuary = com.duoshield.app.util.UiModeHelper.isSanctuary(ctx);
-        if (sanctuary) {
-            h.bubble.setBackground(ContextCompat.getDrawable(ctx,
-                    mine ? R.drawable.bg_bubble_mine : R.drawable.bg_bubble_theirs));
-        } else {
-            h.bubble.setBackgroundResource(mine
-                    ? R.drawable.bg_bubble_mine_classic
-                    : R.drawable.bg_bubble_theirs_classic);
-        }
+        // ── Bubble background ────────────────────────────────────────
+        h.bubble.setBackgroundResource(mine
+                ? R.drawable.bg_bubble_mine_classic
+                : R.drawable.bg_bubble_theirs_classic);
 
         // ── Partner sender label ────────────────────────────────────
         if (!mine) {

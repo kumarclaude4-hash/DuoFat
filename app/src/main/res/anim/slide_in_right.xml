@@ -3,10 +3,10 @@
     <translate
         android:fromXDelta="100%"
         android:toXDelta="0%"
-        android:duration="280"
-        android:interpolator="@android:interpolator/decelerate_cubic" />
+        android:duration="300"
+        android:interpolator="@android:interpolator/fast_out_slow_in" />
     <alpha
         android:fromAlpha="0.0"
         android:toAlpha="1.0"
-        android:duration="280" />
+        android:duration="300" />
 </set>

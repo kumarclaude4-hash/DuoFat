@@ -67,6 +67,8 @@ import com.duoshield.app.util.ForwardMessageHelper;
 import com.duoshield.app.util.B2StorageHelper;
 
 import com.duoshield.app.util.PresenceThrottle;
+import com.duoshield.app.util.ButtonPressAnimator;
+import com.duoshield.app.util.HapticHelper;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 
@@ -506,6 +508,7 @@ public class ChatMediaActivity extends BaseActivity {
 
         typingThrottle = new PresenceThrottle(conversationId, myUid);
 
+        ButtonPressAnimator.attach(sendButton);
         sendButton.setOnClickListener(v -> {
             String text = messageInput.getText() != null
                     ? messageInput.getText().toString().trim() : "";
@@ -2569,6 +2572,7 @@ public class ChatMediaActivity extends BaseActivity {
         optimistic.setExpiresAt(exp);
         if (rId != null) { optimistic.setReplyToId(rId); optimistic.setReplyPreview(rPrv); }
         adapter.appendMessage(optimistic);
+        HapticHelper.send(this);
         knownIds.add(msgId); // prevent Firestore ADDED event from appending a duplicate
         int last = adapter.getItemCount() - 1;
         if (last >= 0) recyclerView.scrollToPosition(last);

@@ -51,7 +51,8 @@
                         android:background="@drawable/bg_profile_avatar"
                         android:src="@drawable/ic_person"
                         android:tint="#9A81FF"
-                        android:padding="20dp"/>
+                        android:padding="20dp"
+                        android:contentDescription="Change profile photo"/>
 
                     <FrameLayout
                         android:id="@+id/btnChangePhoto"
@@ -124,60 +125,25 @@
                     android:layout_height="0dp"/>
             </LinearLayout>
 
-            <!-- ══ NOTIFICATIONS ══════════════════════════════════════════════ -->
+            <!-- ══ SETTINGS NAVIGATION ROWS ════════════════════════════════════ -->
             <TextView
-                android:text="NOTIFICATIONS"
+                android:text="SETTINGS"
                 style="@style/SectionHeader"
                 android:paddingStart="20dp"/>
 
+            <!-- Security & Privacy -->
             <LinearLayout
+                android:id="@+id/rowSecurityPrivacy"
                 android:layout_width="match_parent"
-                android:layout_height="60dp"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_send"
-                    android:tint="#9A81FF"
-                    android:layout_marginEnd="18dp"/>
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Push notifications"
-                    android:textColor="@color/ds_text_primary"
-                    android:textSize="15sp"/>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchNotifications"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:checked="true"/>
-            </LinearLayout>
-
-            <!-- ══ PRIVACY ══════════════════════════════════════════════════════ -->
-            <TextView
-                android:text="PRIVACY"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="72dp"
                 android:background="@color/ds_surface"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:paddingStart="20dp"
                 android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp">
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
 
                 <ImageView
                     android:layout_width="22dp"
@@ -195,192 +161,19 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Allow screenshots"
+                        android:text="Security &amp; Privacy"
                         android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
+                        android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"/>
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="When off, prevents screen capture across the entire app. Requires PIN to change."
-                        android:textSize="12sp"
+                        android:text="PIN, biometric, shake-to-lock, timeout"
                         android:textColor="@color/ds_text_tertiary"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingMultiplier="1.3"/>
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp"/>
                 </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchAppScreenshot"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="14dp"
-                    android:checked="false"/>
-            </LinearLayout>
-
-            <!-- ══ APP PIN ══════════════════════════════════════════════════════ -->
-            <TextView
-                android:text="APP PIN"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <!-- PIN status row -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:background="@color/ds_surface"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="16dp"
-                android:paddingBottom="16dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_lock"
-                    android:tint="#9A81FF"
-                    android:layout_marginEnd="18dp"/>
-
-                <TextView
-                    android:id="@+id/tvPinStatus"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textColor="@color/ds_text_secondary"
-                    android:textSize="14sp"
-                    android:text="No PIN set"/>
-            </LinearLayout>
-
-            <!-- PIN input form -->
-            <LinearLayout
-                android:id="@+id/layoutPinInputs"
-                android:orientation="vertical"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@color/ds_surface"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="18dp"
-                android:layout_marginTop="1dp">
-
-                <EditText
-                    android:id="@+id/etNewPin"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:hint="New PIN (4–6 digits)"
-                    android:textColorHint="@color/ds_text_tertiary"
-                    android:textColor="@color/ds_text_primary"
-                    android:inputType="numberPassword"
-                    android:maxLength="6"
-                    android:background="@drawable/bg_input_field"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:layout_marginBottom="10dp"/>
-
-                <EditText
-                    android:id="@+id/etConfirmPin"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:hint="Confirm PIN"
-                    android:textColorHint="@color/ds_text_tertiary"
-                    android:textColor="@color/ds_text_primary"
-                    android:inputType="numberPassword"
-                    android:maxLength="6"
-                    android:background="@drawable/bg_input_field"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
-                    android:layout_marginBottom="16dp"/>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnSetPin"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_weight="1"
-                        android:text="Set PIN"
-                        android:textAllCaps="false"
-                        android:layout_marginEnd="8dp"
-                        app:cornerRadius="23dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnCancelPinForm"
-                        android:layout_width="0dp"
-                        android:layout_height="46dp"
-                        android:layout_weight="1"
-                        android:text="Cancel"
-                        android:textAllCaps="false"
-                        android:visibility="gone"
-                        app:cornerRadius="23dp"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- PIN set state: Change / Clear buttons -->
-            <LinearLayout
-                android:id="@+id/layoutPinSet"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:visibility="gone"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="10dp"
-                android:paddingBottom="10dp"
-                android:background="@color/ds_surface"
-                android:layout_marginTop="1dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnChangePinMode"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_weight="1"
-                    android:text="Change PIN"
-                    android:textAllCaps="false"
-                    android:layout_marginEnd="8dp"
-                    app:cornerRadius="23dp"/>
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClearPin"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_weight="1"
-                    android:text="Clear PIN"
-                    android:textAllCaps="false"
-                    app:cornerRadius="23dp"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:textColor="@color/error_red"
-                    app:strokeColor="@color/error_red"/>
-            </LinearLayout>
-
-            <!-- Plain row, styled identically to any other settings row — no icon
-                 or color calling it out. Opens ManageUnlockCodesActivity. -->
-            <LinearLayout
-                android:id="@+id/rowManageUnlockCodes"
-                android:layout_width="match_parent"
-                android:layout_height="60dp"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:clickable="true"
-                android:focusable="true"
-                android:visibility="gone"
-                android:layout_marginTop="1dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Manage unlock codes"
-                    android:textColor="@color/ds_text_primary"
-                    android:textSize="15sp"/>
 
                 <ImageView
                     android:layout_width="18dp"
@@ -389,28 +182,30 @@
                     android:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
 
-            <!-- ══ BIOMETRIC LOCK ══════════════════════════════════════════════ -->
-            <TextView
-                android:text="BIOMETRIC LOCK"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <LinearLayout
+            <View
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="0.5dp"
+                android:background="@color/ds_divider"
+                android:layout_marginStart="60dp"/>
+
+            <!-- Appearance & Notifications -->
+            <LinearLayout
+                android:id="@+id/rowAppearanceNotifications"
+                android:layout_width="match_parent"
+                android:layout_height="72dp"
                 android:background="@color/ds_surface"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:paddingStart="20dp"
                 android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp">
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
 
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:src="@drawable/ic_fingerprint"
+                    android:src="@drawable/ic_send"
                     android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
@@ -423,215 +218,51 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Fingerprint / Face unlock"
+                        android:text="Appearance &amp; Notifications"
                         android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
-
-                    <TextView
-                        android:text="Falls back to app PIN. Requires a PIN to be set first."
-                        android:textSize="12sp"
-                        android:textColor="@color/ds_text_tertiary"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingMultiplier="1.3"/>
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchBiometric"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="14dp"/>
-            </LinearLayout>
-
-            <!-- ══ SHAKE TO LOCK ═══════════════════════════════════════════════ -->
-            <TextView
-                android:text="SHAKE TO LOCK"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_lock"
-                    android:tint="#9A81FF"
-                    android:layout_marginEnd="18dp"/>
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Shake to lock"
-                        android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Shake your phone to instantly lock the app. Requires a PIN to be set first."
-                        android:textSize="12sp"
-                        android:textColor="@color/ds_text_tertiary"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingMultiplier="1.3"/>
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchShakeLock"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="14dp"/>
-            </LinearLayout>
-
-            <!-- ══ SESSION TIMEOUT ══════════════════════════════════════════════ -->
-            <TextView
-                android:text="SESSION TIMEOUT"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@color/ds_surface"
-                android:orientation="vertical">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="60dp"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:paddingStart="20dp"
-                    android:paddingEnd="20dp">
-
-                    <ImageView
-                        android:layout_width="22dp"
-                        android:layout_height="22dp"
-                        android:src="@drawable/ic_timer"
-                        android:tint="#9A81FF"
-                        android:layout_marginEnd="18dp"/>
-
-                    <TextView
-                        android:text="Sign out after"
                         android:textSize="15sp"
-                        android:textColor="@color/ds_text_primary"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnAutoSignOut"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:text="Never"
-                        android:textAllCaps="false"
-                        android:textSize="13sp"
-                        app:cornerRadius="18dp"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
-                </LinearLayout>
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="0.5dp"
-                    android:background="@color/ds_divider"
-                    android:layout_marginStart="60dp"/>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="60dp"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:paddingStart="20dp"
-                    android:paddingEnd="20dp">
-
-                    <ImageView
-                        android:layout_width="22dp"
-                        android:layout_height="22dp"
-                        android:src="@drawable/ic_lock"
-                        android:tint="#9A81FF"
-                        android:layout_marginEnd="18dp"/>
+                        android:fontFamily="sans-serif-medium"/>
 
                     <TextView
-                        android:text="Lock screen after"
-                        android:textSize="15sp"
-                        android:textColor="@color/ds_text_primary"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnLockTimeout"
                         android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:text="3 minutes"
-                        android:textAllCaps="false"
-                        android:textSize="13sp"
-                        app:cornerRadius="18dp"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+                        android:layout_height="wrap_content"
+                        android:text="Push notifications"
+                        android:textColor="@color/ds_text_tertiary"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp"/>
                 </LinearLayout>
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/tvAutoSignOutSub"
-                android:text="You will not be signed out automatically."
-                android:textSize="12sp"
-                android:textColor="@color/ds_text_tertiary"
+            <View
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingStart="60dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="6dp"
-                android:paddingBottom="2dp"/>
+                android:layout_height="0.5dp"
+                android:background="@color/ds_divider"
+                android:layout_marginStart="60dp"/>
 
-            <TextView
-                android:id="@+id/tvLockTimeoutSub"
-                android:text="Lock screen will appear after 3 minutes in the background."
-                android:textSize="12sp"
-                android:textColor="@color/ds_text_tertiary"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingStart="60dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="2dp"
-                android:paddingBottom="6dp"/>
-
-            <!-- ══ MEDIA STORAGE ══════════════════════════════════════════════ -->
-            <TextView
-                android:text="MEDIA STORAGE"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
+            <!-- Backup & Storage -->
             <LinearLayout
+                android:id="@+id/rowBackupStorage"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="72dp"
                 android:background="@color/ds_surface"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
                 android:paddingStart="20dp"
                 android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp">
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
 
                 <ImageView
                     android:layout_width="22dp"
                     android:layout_height="22dp"
-                    android:src="@drawable/ic_image"
+                    android:src="@drawable/ic_arrow_down"
                     android:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
@@ -644,173 +275,83 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Backblaze B2"
+                        android:text="Backup &amp; Storage"
                         android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
+                        android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"/>
 
                     <TextView
-                        android:id="@+id/tvB2Status"
-                        android:layout_width="match_parent"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Tap Test to verify connection"
+                        android:text="Media storage, cloud backup"
                         android:textColor="@color/ds_text_tertiary"
                         android:textSize="12sp"
-                        android:layout_marginTop="3dp"/>
+                        android:layout_marginTop="2dp"/>
                 </LinearLayout>
 
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginStart="14dp">
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnTestB2"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:text="Test"
-                        android:textAllCaps="false"
-                        android:textSize="13sp"
-                        app:cornerRadius="18dp"/>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnB2Details"
-                        style="@style/Widget.MaterialComponents.Button.TextButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:text="Details"
-                        android:textAllCaps="false"
-                        android:textSize="13sp"
-                        android:layout_marginStart="4dp"/>
-                </LinearLayout>
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
 
-            <!-- ══ CLOUD BACKUP ══════════════════════════════════════════════ -->
-            <TextView
-                android:text="CLOUD BACKUP"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0.5dp"
+                android:background="@color/ds_divider"
+                android:layout_marginStart="60dp"/>
 
+            <!-- Danger Zone -->
             <LinearLayout
-                android:id="@+id/cardBackup"
+                android:id="@+id/rowDangerZone"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
+                android:layout_height="72dp"
                 android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
                 android:paddingStart="20dp"
                 android:paddingEnd="20dp"
-                android:paddingTop="18dp"
-                android:paddingBottom="18dp">
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:src="@drawable/ic_delete"
+                    android:tint="@color/error_red"
+                    android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
-                    android:layout_width="match_parent"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
+                    android:layout_weight="1"
+                    android:orientation="vertical">
 
-                    <ImageView
-                        android:layout_width="22dp"
-                        android:layout_height="22dp"
-                        android:src="@drawable/ic_arrow_down"
-                        android:tint="#9A81FF"
-                        android:layout_marginEnd="18dp"/>
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:id="@+id/tvLastBackup"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Last backup: Checking…"
-                            android:textColor="@color/ds_text_primary"
-                            android:textSize="14.5sp"/>
-
-                        <TextView
-                            android:id="@+id/tvBackupCount"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:text="Messages backed up: —"
-                            android:textColor="@color/ds_text_tertiary"
-                            android:textSize="12sp"/>
-
-                        <TextView
-                            android:id="@+id/tvBackupHealth"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="5dp"
-                            android:textSize="11.5sp"
-                            android:textStyle="bold"
-                            android:visibility="gone"/>
-                    </LinearLayout>
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnSyncBackup"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    <TextView
                         android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:text="Sync now"
-                        android:textAllCaps="false"
-                        android:textSize="13sp"
-                        app:cornerRadius="18dp"
-                        android:layout_marginStart="14dp"/>
+                        android:layout_height="wrap_content"
+                        android:text="Danger Zone"
+                        android:textColor="@color/error_red"
+                        android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Unpair device, wipe all data"
+                        android:textColor="@color/ds_text_tertiary"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp"/>
                 </LinearLayout>
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:layout_marginStart="40dp"
-                    android:text="End-to-end encrypted with your seed phrase. Only you can decrypt them."
-                    android:textColor="@color/ds_text_tertiary"
-                    android:textSize="12sp"
-                    android:lineSpacingMultiplier="1.4"/>
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
-
-            <!-- ══ DANGER ZONE ══════════════════════════════════════════════════ -->
-            <TextView
-                android:text="DANGER ZONE"
-                android:textStyle="bold"
-                android:textSize="10.5sp"
-                android:letterSpacing="0.14"
-                android:fontFamily="sans-serif-medium"
-                android:textColor="@color/error_red"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingStart="20dp"
-                android:paddingTop="36dp"
-                android:paddingBottom="12dp"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnUnpair"
-                android:layout_width="match_parent"
-                android:layout_height="54dp"
-                android:text="Wipe &amp; Exit"
-                android:textAllCaps="false"
-                android:textSize="15sp"
-                android:fontFamily="sans-serif-medium"
-                android:backgroundTint="@color/error_red"
-                app:cornerRadius="27dp"
-                android:layout_marginStart="20dp"
-                android:layout_marginEnd="20dp"/>
-
-            <TextView
-                android:text="Clears all local messages, keys, and pairing data. Cannot be undone."
-                android:textSize="12sp"
-                android:textColor="@color/ds_text_tertiary"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="10dp"
-                android:paddingBottom="8dp"
-                android:lineSpacingMultiplier="1.4"/>
 
         </LinearLayout>
     </ScrollView>

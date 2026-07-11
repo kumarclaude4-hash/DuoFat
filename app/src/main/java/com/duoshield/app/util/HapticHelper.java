@@ -8,10 +8,12 @@ import android.os.VibratorManager;
 
 public class HapticHelper {
 
-    public static void wrongPin(Context ctx)  { vibrate(ctx, new long[]{0, 80, 60, 80, 60, 80}); }
-    public static void longPress(Context ctx) { vibrate(ctx, new long[]{0, 50}); }
-    public static void send(Context ctx)      { vibrate(ctx, new long[]{0, 30}); }
-    public static void reaction(Context ctx)  { vibrate(ctx, new long[]{0, 20, 30, 20}); }
+    public static void wrongPin(Context ctx)   { vibrate(ctx, new long[]{0, 80, 60, 80, 60, 80}); }
+    public static void longPress(Context ctx)  { vibrate(ctx, new long[]{0, 50}); }
+    public static void send(Context ctx)       { vibrate(ctx, new long[]{0, 30}); }
+    public static void reaction(Context ctx)   { vibrate(ctx, new long[]{0, 20, 30, 20}); }
+    /** Light haptic for button press feedback (spec: CONTEXT_CLICK equivalent, ~15ms). */
+    public static void lightPress(Context ctx) { vibrate(ctx, new long[]{0, 15}); }
 
     private static void vibrate(Context ctx, long[] pattern) {
         try {

@@ -26,16 +26,14 @@ public class ConversationAdapter
 
     private List<Conversation> items = new ArrayList<>();
     private final OnConversationClickListener listener;
-    private final boolean sanctuaryMode;
 
     /** Teal-palette shades for avatar initials when no photo is available. */
     private static final int[] AVATAR_COLORS = {
         0xFF3A2898, 0xFF4A38B0, 0xFF6654E8, 0xFF5040C0, 0xFF2A1880
     };
 
-    public ConversationAdapter(OnConversationClickListener listener, boolean sanctuaryMode) {
-        this.listener      = listener;
-        this.sanctuaryMode = sanctuaryMode;
+    public ConversationAdapter(OnConversationClickListener listener) {
+        this.listener = listener;
         setHasStableIds(true);
     }
 
@@ -69,11 +67,8 @@ public class ConversationAdapter
 
     @NonNull @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        int layout = sanctuaryMode
-                ? R.layout.item_conversation_premium
-                : R.layout.item_conversation;
         View v = LayoutInflater.from(parent.getContext())
-            .inflate(layout, parent, false);
+            .inflate(R.layout.item_conversation, parent, false);
         return new ViewHolder(v);
     }
 

@@ -63,7 +63,7 @@
             android:layout_height="wrap_content"
             android:text="ACCOUNT ID"
             android:textColor="@color/ds_accent"
-            android:textSize="10sp"
+            android:textSize="12sp"
             android:textAllCaps="true"
             android:letterSpacing="0.12"
             android:layout_marginBottom="6dp"/>
@@ -96,7 +96,7 @@
             android:layout_height="wrap_content"
             android:text="RECOVERY PHRASE (12 WORDS)"
             android:textColor="@color/ds_accent"
-            android:textSize="10sp"
+            android:textSize="12sp"
             android:textAllCaps="true"
             android:letterSpacing="0.12"
             android:layout_marginBottom="6dp"/>

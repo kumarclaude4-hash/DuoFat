@@ -22,6 +22,7 @@ import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.auth.FirebaseAuth;
+import com.duoshield.app.util.ButtonPressAnimator;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
@@ -78,6 +79,9 @@ public class SignInActivity extends AppCompatActivity {
 
         MaterialButton btnCreate  = findViewById(R.id.btnCreate);
         MaterialButton btnRestore = findViewById(R.id.btnRestore);
+
+        ButtonPressAnimator.attach(btnCreate);
+        ButtonPressAnimator.attach(btnRestore);
 
         btnCreate.setOnClickListener(v ->
                 startActivity(new Intent(this, DisplayNameActivity.class)));

@@ -140,7 +140,7 @@
                         android:layout_height="wrap_content"
                         android:text="Total calls"
                         android:textColor="@color/text_secondary"
-                        android:textSize="11sp"
+                        android:textSize="12sp"
                         android:layout_marginTop="2dp"/>
                 </LinearLayout>
 
@@ -172,7 +172,7 @@
                         android:layout_height="wrap_content"
                         android:text="Talk time"
                         android:textColor="@color/text_secondary"
-                        android:textSize="11sp"
+                        android:textSize="12sp"
                         android:layout_marginTop="2dp"/>
                 </LinearLayout>
 
@@ -204,7 +204,7 @@
                         android:layout_height="wrap_content"
                         android:text="Missed"
                         android:textColor="@color/text_secondary"
-                        android:textSize="11sp"
+                        android:textSize="12sp"
                         android:layout_marginTop="2dp"/>
                 </LinearLayout>
             </LinearLayout>
@@ -267,7 +267,7 @@
                     android:layout_weight="1"
                     android:text="RECENT CALLS"
                     android:textColor="@color/text_secondary"
-                    android:textSize="11sp"
+                    android:textSize="12sp"
                     android:letterSpacing="0.08"
                     android:layout_marginTop="20dp"
                     android:layout_marginBottom="8dp"/>

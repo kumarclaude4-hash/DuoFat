@@ -61,3 +61,4 @@
 - [DuoShield status race guard](duoshield-status-race-guard.md) — any write of message `status` must transaction-guard against downgrading "read" back to "delivered"; applies to client FCM ACK and server push dispatch alike
 - [DuoShield push server broken](duoshield-push-server-broken.md) — Push Server workflow fails on missing/invalid Firebase service-account credential (GOOGLE_APPLICATION_CREDENTIALS_JSON); pre-existing, user deferred fixing it
 - [DuoShield git push preference](duoshield-git-push-pref.md) — push every change to origin/main via GIT PAT secret; use existing git config author; never fix Push Server on Replit
+- [DuoShield UX audit 2026-07](duoshield-ux-audit-2026-07.md) — all critical/high-impact items done; Settings now split into 4 sub-screens; Sanctuary UI mode fully removed; onboarding walkthrough + shimmer loading deferred as follow-ups

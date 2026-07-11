@@ -12,15 +12,55 @@
         android:background="@color/ds_toolbar"
         android:elevation="4dp"/>
 
-    <TextView
+    <LinearLayout
         android:id="@+id/tvEmptyCallHistory"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:orientation="vertical"
         android:gravity="center"
-        android:text="No calls yet"
-        android:textColor="@color/text_secondary"
-        android:textSize="16sp"
-        android:visibility="gone"/>
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_marginBottom="24dp">
+
+            <View
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:background="@drawable/bg_empty_state"/>
+
+            <ImageView
+                android:layout_width="46dp"
+                android:layout_height="46dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_call_phone"
+                android:tint="@color/accent"
+                android:contentDescription="No calls"/>
+        </FrameLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="No calls yet"
+            android:textColor="@color/text_primary"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="-0.01"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Calls with your contacts will show up here"
+            android:textColor="@color/text_hint"
+            android:textSize="14sp"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.5"/>
+    </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvCallHistory"

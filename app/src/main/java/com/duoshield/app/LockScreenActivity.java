@@ -20,6 +20,7 @@ import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.ui.FingerprintScanView;
 import com.duoshield.app.ui.PinDotsView;
 import com.duoshield.app.util.AppLockManager;
+import com.duoshield.app.util.ButtonPressAnimator;
 import com.duoshield.app.util.HapticHelper;
 import com.duoshield.app.util.PinManager;
 
@@ -108,6 +109,7 @@ public class LockScreenActivity extends AppCompatActivity {
             btnBiometric.setVisibility(View.GONE);
         }
 
+        ButtonPressAnimator.attach(btnUnlock);
         btnUnlock.setOnClickListener(v -> checkPin());
         btnBiometric.setOnClickListener(v -> showBiometric());
 
