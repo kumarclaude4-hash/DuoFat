@@ -13,7 +13,7 @@ import java.util.List;
  * Canvas-based amplitude visualiser used for both live recording
  * and static playback waveforms.
  *
- * Recording mode: call {@link #addAmplitude(int)} on each tick (0–32767).
+ * Recording mode: call {@link #addAmplitude(int)} on each tick (0–100, pre-normalised by VoiceRecorderHelper).
  * Playback mode:  call {@link #setAmplitudes(List)} then {@link #setProgress(float)}
  *                 (0.0–1.0) to shade the played portion in the accent colour.
  */
@@ -45,14 +45,14 @@ public class WaveformView extends View {
     }
 
     /**
-     * Recording: push one raw amplitude sample (0–32767).
-     * Uses a dynamic reference that grows with the loudest seen sample,
-     * so quiet voices are shown proportionally — not all flat.
+     * Recording: push one normalised amplitude sample (0–100), as delivered by
+     * {@code VoiceRecorderHelper.RecorderListener#onAmplitude(int)}.
+     * Do NOT pass a raw MediaRecorder value (0–32767) here; VoiceRecorderHelper
+     * already normalises before firing the callback.
      */
-    public void addAmplitude(int raw) {
-        // Normalise against a rolling reference max so quiet voices
-        // still produce clearly visible, varied bars.
-        float norm = Math.min(1f, raw / 12000f);
+    public void addAmplitude(int normalised) {
+        // VoiceRecorderHelper delivers 0-100; divide by 100 to get 0-1.
+        float norm = Math.min(1f, normalised / 100f);
         norm = Math.max(0.05f, norm); // always show at least a tiny bar
         if (bars.size() >= MAX_BARS) bars.remove(0);
         bars.add(norm);
