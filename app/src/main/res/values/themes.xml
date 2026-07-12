@@ -176,19 +176,22 @@
 
     <!-- ── Lock Screen numpad key styles ── -->
     <style name="NumpadKey">
-        <item name="android:layout_width">72dp</item>
-        <item name="android:layout_height">72dp</item>
+        <item name="android:layout_width">64dp</item>
+        <item name="android:layout_height">64dp</item>
         <item name="android:orientation">vertical</item>
         <item name="android:gravity">center</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
         <item name="android:background">@drawable/sel_numpad_key</item>
+        <item name="android:elevation">5dp</item>
+        <item name="android:outlineProvider">background</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
 
     <style name="NumpadDigit">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">28sp</item>
+        <item name="android:textSize">24sp</item>
         <item name="android:textColor">@color/ls_key_text</item>
         <item name="android:textStyle">normal</item>
         <item name="android:fontFamily">sans-serif-light</item>
@@ -198,7 +201,7 @@
     <style name="NumpadLetters">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">10sp</item>
+        <item name="android:textSize">9sp</item>
         <item name="android:textColor">@color/ls_key_letters</item>
         <item name="android:letterSpacing">0.12</item>
         <item name="android:includeFontPadding">false</item>

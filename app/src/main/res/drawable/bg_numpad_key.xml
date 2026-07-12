@@ -1,16 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Neumorphic white circle key for the lock-screen numpad -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- drop shadow -->
-    <item android:left="3dp" android:right="3dp" android:top="5dp" android:bottom="0dp">
-        <shape android:shape="oval">
-            <solid android:color="#22000000"/>
-        </shape>
-    </item>
-    <!-- white surface -->
-    <item android:bottom="4dp">
-        <shape android:shape="oval">
-            <solid android:color="#FFFFFF"/>
-        </shape>
-    </item>
-</layer-list>
+<!-- Solid white oval — android:elevation on the key view provides the real blurred shadow -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#FFFFFF"/>
+</shape>

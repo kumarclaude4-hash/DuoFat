@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Concentric ripple ring drawn as a stroke oval -->
+<!-- Concentric ripple ring — stroke thickened to 1.5dp so it's actually visible -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <stroke android:width="1dp" android:color="@color/ds_accent"/>
+    <stroke android:width="1.5dp" android:color="@color/ds_accent"/>
     <solid android:color="#00000000"/>
 </shape>

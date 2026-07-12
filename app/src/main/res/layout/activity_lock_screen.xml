@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Lock Screen — Lavender light redesign.
-  IDs kept for LockScreenActivity.java: tvError, btnUnlock (GONE), btnBiometric,
-  pinDotsView. New IDs: numpad key views via tag-based lookup in Java.
+  Lock Screen — Lavender light design, compact layout for all screen sizes.
+  IDs kept for LockScreenActivity.java:
+    tvError, btnUnlock (GONE), btnBiometric, pinDotsView
+    key0–key9, keyBackspace, flLockIcon, ivLockShield, fingerprintScanView
 -->
 <ScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -18,15 +19,15 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:gravity="center_horizontal"
-        android:paddingTop="40dp"
-        android:paddingBottom="32dp"
-        android:paddingHorizontal="24dp">
+        android:paddingTop="24dp"
+        android:paddingBottom="16dp"
+        android:paddingHorizontal="20dp">
 
         <!-- ── Shield logo ── -->
         <ImageView
-            android:id="@+id/ivLockShield"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:id="@+id/ivShieldLogo"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
             android:src="@drawable/ic_shield"
             app:tint="@color/ds_accent"
             android:contentDescription="DuoShield"/>
@@ -36,67 +37,69 @@
             android:id="@+id/tvLockTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:text="@string/app_name"
             android:textColor="@color/ls_key_text"
-            android:textSize="26sp"
+            android:textSize="24sp"
             android:textStyle="bold"
-            android:fontFamily="sans-serif-medium"/>
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.02"/>
 
         <!-- Tagline -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="3dp"
             android:text="@string/lock_tagline"
             android:textColor="@color/ls_tagline"
-            android:textSize="13sp"/>
+            android:textSize="12sp"/>
 
         <!-- ── Lock icon with concentric rings ── -->
         <FrameLayout
-            android:layout_width="220dp"
-            android:layout_height="220dp"
-            android:layout_marginTop="20dp">
+            android:layout_width="172dp"
+            android:layout_height="172dp"
+            android:layout_marginTop="14dp">
 
-            <!-- Outermost ring (most faint) -->
+            <!-- Outermost ring -->
             <View
-                android:layout_width="210dp"
-                android:layout_height="210dp"
-                android:layout_gravity="center"
-                android:alpha="0.12"
-                android:background="@drawable/bg_lock_ring"/>
-
-            <!-- Middle ring -->
-            <View
-                android:layout_width="165dp"
-                android:layout_height="165dp"
+                android:layout_width="164dp"
+                android:layout_height="164dp"
                 android:layout_gravity="center"
                 android:alpha="0.22"
                 android:background="@drawable/bg_lock_ring"/>
 
+            <!-- Middle ring -->
+            <View
+                android:layout_width="126dp"
+                android:layout_height="126dp"
+                android:layout_gravity="center"
+                android:alpha="0.38"
+                android:background="@drawable/bg_lock_ring"/>
+
             <!-- Inner ring -->
             <View
-                android:layout_width="120dp"
-                android:layout_height="120dp"
+                android:layout_width="92dp"
+                android:layout_height="92dp"
                 android:layout_gravity="center"
-                android:alpha="0.35"
+                android:alpha="0.58"
                 android:background="@drawable/bg_lock_ring"/>
 
             <!-- Lock icon circle — ivLockShield and fingerprintScanView swap here -->
             <FrameLayout
                 android:id="@+id/flLockIcon"
-                android:layout_width="82dp"
-                android:layout_height="82dp"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
                 android:layout_gravity="center"
-                android:background="@drawable/bg_lock_icon_circle">
+                android:background="@drawable/bg_lock_icon_circle"
+                android:elevation="4dp">
 
                 <!-- Lock icon — shown by default, hidden during biometric scan -->
                 <ImageView
                     android:id="@+id/ivLockShield"
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
+                    android:layout_width="30dp"
+                    android:layout_height="30dp"
                     android:layout_gravity="center"
-                    android:layout_marginBottom="4dp"
+                    android:layout_marginBottom="3dp"
                     android:src="@drawable/ic_lock"
                     app:tint="@color/ds_accent"
                     android:contentDescription="Locked"/>
@@ -117,19 +120,20 @@
             android:id="@+id/tvLockSubtitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="10dp"
             android:text="@string/enter_pin"
             android:textColor="@color/ls_enter_pin"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:fontFamily="sans-serif-medium"/>
+            android:textSize="15sp"
+            android:fontFamily="sans-serif"
+            android:letterSpacing="0.10"
+            android:textStyle="normal"/>
 
         <!-- ── PIN dots ── -->
         <com.duoshield.app.ui.PinDotsView
             android:id="@+id/pinDotsView"
             android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:layout_marginTop="12dp"
+            android:layout_height="24dp"
+            android:layout_marginTop="8dp"
             android:clickable="false"
             android:focusable="false"/>
 
@@ -138,11 +142,11 @@
             android:id="@+id/tvError"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:textColor="@color/ds_danger"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:gravity="center"
-            android:minHeight="18dp"
+            android:minHeight="16dp"
             android:visibility="invisible"/>
 
         <!-- ── Custom numpad ── -->
@@ -150,7 +154,7 @@
             android:id="@+id/llNumpad"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:orientation="vertical"
             android:gravity="center">
 
@@ -160,7 +164,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center"
-                android:layout_marginBottom="10dp">
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout android:id="@+id/key1"
                     style="@style/NumpadKey">
@@ -169,7 +173,7 @@
 
                 <LinearLayout android:id="@+id/key2"
                     style="@style/NumpadKey"
-                    android:layout_marginHorizontal="14dp">
+                    android:layout_marginHorizontal="12dp">
                     <TextView android:text="2" style="@style/NumpadDigit"/>
                     <TextView android:text="ABC" style="@style/NumpadLetters"/>
                 </LinearLayout>
@@ -188,7 +192,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center"
-                android:layout_marginBottom="10dp">
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout android:id="@+id/key4"
                     style="@style/NumpadKey">
@@ -198,7 +202,7 @@
 
                 <LinearLayout android:id="@+id/key5"
                     style="@style/NumpadKey"
-                    android:layout_marginHorizontal="14dp">
+                    android:layout_marginHorizontal="12dp">
                     <TextView android:text="5" style="@style/NumpadDigit"/>
                     <TextView android:text="JKL" style="@style/NumpadLetters"/>
                 </LinearLayout>
@@ -217,7 +221,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center"
-                android:layout_marginBottom="10dp">
+                android:layout_marginBottom="8dp">
 
                 <LinearLayout android:id="@+id/key7"
                     style="@style/NumpadKey">
@@ -227,7 +231,7 @@
 
                 <LinearLayout android:id="@+id/key8"
                     style="@style/NumpadKey"
-                    android:layout_marginHorizontal="14dp">
+                    android:layout_marginHorizontal="12dp">
                     <TextView android:text="8" style="@style/NumpadDigit"/>
                     <TextView android:text="TUV" style="@style/NumpadLetters"/>
                 </LinearLayout>
@@ -240,36 +244,38 @@
 
             </LinearLayout>
 
-            <!-- Row 4: [empty], 0, [backspace] -->
+            <!-- Row 4: [biometric/empty], 0, [backspace] -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center">
 
-                <!-- empty slot -->
+                <!-- Placeholder matching key size so 0 stays centered -->
                 <View
-                    android:layout_width="72dp"
-                    android:layout_height="72dp"/>
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"/>
 
                 <LinearLayout android:id="@+id/key0"
                     style="@style/NumpadKey"
-                    android:layout_marginHorizontal="14dp">
+                    android:layout_marginHorizontal="12dp">
                     <TextView android:text="0" style="@style/NumpadDigit"/>
                 </LinearLayout>
 
                 <!-- Backspace key -->
                 <FrameLayout
                     android:id="@+id/keyBackspace"
-                    android:layout_width="72dp"
-                    android:layout_height="72dp"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
                     android:background="@drawable/bg_numpad_backspace"
+                    android:elevation="5dp"
+                    android:outlineProvider="background"
                     android:clickable="true"
                     android:focusable="true"
                     android:contentDescription="Delete">
                     <ImageView
-                        android:layout_width="28dp"
-                        android:layout_height="28dp"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
                         android:layout_gravity="center"
                         android:src="@drawable/ic_backspace_ls"
                         android:contentDescription="Backspace"/>
@@ -279,29 +285,29 @@
 
         </LinearLayout>
 
-        <!-- Hidden unlock button kept for backward-compat with Java refs -->
+        <!-- Hidden unlock button — kept for ButtonPressAnimator ref in Java -->
         <Button
             android:id="@+id/btnUnlock"
             android:layout_width="0dp"
             android:layout_height="0dp"
             android:visibility="gone"/>
 
-        <!-- ── Biometric button ── -->
+        <!-- ── Biometric link ── -->
         <LinearLayout
             android:id="@+id/btnBiometric"
             android:layout_width="wrap_content"
-            android:layout_height="48dp"
+            android:layout_height="44dp"
             android:orientation="horizontal"
             android:gravity="center"
-            android:layout_marginTop="28dp"
+            android:layout_marginTop="16dp"
             android:clickable="true"
             android:focusable="true"
             android:visibility="gone"
             android:contentDescription="Use biometrics">
 
             <ImageView
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:src="@drawable/ic_fingerprint"
                 app:tint="@color/ds_accent"
                 android:contentDescription="Fingerprint"/>
@@ -309,10 +315,10 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="7dp"
                 android:text="@string/use_biometric"
                 android:textColor="@color/ds_accent"
-                android:textSize="14sp"/>
+                android:textSize="13sp"/>
 
         </LinearLayout>
 

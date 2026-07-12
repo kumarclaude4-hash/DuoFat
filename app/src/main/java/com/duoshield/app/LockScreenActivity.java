@@ -52,8 +52,11 @@ public class LockScreenActivity extends AppCompatActivity {
     private final View[] digitKeys = new View[10];
     private View keyBackspace;
 
+    /** Actual length of the user's PIN — read from PinManager on create. */
+    private int pinLength = 6;
+
     /** Accumulated PIN digits — never leaves this Activity. */
-    private final StringBuilder pinBuffer = new StringBuilder(6);
+    private StringBuilder pinBuffer = new StringBuilder(6);
 
     private boolean isVerifying = false;
     private final Handler autoSubmitHandler = new Handler(Looper.getMainLooper());
@@ -80,18 +83,22 @@ public class LockScreenActivity extends AppCompatActivity {
         fingerprintScanView = findViewById(R.id.fingerprintScanView);
         ivLockShield        = findViewById(R.id.ivLockShield);
 
-        // Light-mode dot colours for the lavender lock screen
-        pinDotsView.setColors(
-                getResources().getColor(R.color.ds_accent_deep, null),
-                getResources().getColor(R.color.ls_dot_empty, null));
-        pinDotsView.setMaxCount(6);
-
         // If no PIN has been set yet, skip lock entirely
         if (!PinManager.hasPinSet(this)) {
             AppLockManager.onAppForegrounded(this);
             finish();
             return;
         }
+
+        // Read the actual PIN length so dots and buffer match what the user set
+        pinLength = PinManager.getPinLength(this);
+        pinBuffer = new StringBuilder(pinLength);
+        pinDotsView.setMaxCount(pinLength);
+
+        // Light-mode dot colours for the lavender lock screen
+        pinDotsView.setColors(
+                getResources().getColor(R.color.ds_accent_deep, null),
+                getResources().getColor(R.color.ls_dot_empty, null));
 
         // Biometric
         boolean bioEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -132,17 +139,15 @@ public class LockScreenActivity extends AppCompatActivity {
     // ── Numpad input ──────────────────────────────────────────────────────
 
     private void onDigitPressed(int digit) {
-        if (isVerifying || pinBuffer.length() >= 6) return;
+        if (isVerifying || pinBuffer.length() >= pinLength) return;
         HapticHelper.lightPress(this);
         pinBuffer.append(digit);
         int len = pinBuffer.length();
         pinDotsView.setFilledCount(len);
         cancelPendingAutoSubmit();
-        if (len >= 6) {
+        if (len >= pinLength) {
+            // Exact PIN length reached — submit immediately
             checkPin();
-        } else if (len >= 4) {
-            pendingAutoSubmit = this::checkPin;
-            autoSubmitHandler.postDelayed(pendingAutoSubmit, AUTO_SUBMIT_DEBOUNCE_MS);
         }
     }
 

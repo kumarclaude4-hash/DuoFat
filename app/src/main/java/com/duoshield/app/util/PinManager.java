@@ -27,10 +27,12 @@ import javax.crypto.spec.PBEKeySpec;
  */
 public class PinManager {
 
-    private static final String KEY_PIN_PREFIX = "app_pin_hash_";
-    private static final String KEY_PIN_LEGACY = "app_pin_hash";
-    private static final int    ITERATIONS     = 310_000;
-    private static final int    KEY_LEN        = 256;
+    private static final String KEY_PIN_PREFIX    = "app_pin_hash_";
+    private static final String KEY_PIN_LEGACY    = "app_pin_hash";
+    private static final String KEY_LEN_PREFIX    = "app_pin_length_";
+    private static final int    ITERATIONS        = 310_000;
+    private static final int    KEY_LEN           = 256;
+    private static final int    DEFAULT_PIN_LEN   = 6;
 
     /**
      * Returns the UID-scoped SecurePrefs key for the currently signed-in user,
@@ -49,13 +51,28 @@ public class PinManager {
             new SecureRandom().nextBytes(salt);
             byte[] hash = pbkdf2(pin, salt);
             String stored = bytesToHex(salt) + ":" + bytesToHex(hash);
-            SecurePrefs.get(ctx).edit()
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+            SharedPreferences.Editor ed = SecurePrefs.get(ctx).edit()
                     .putString(key, stored)
-                    .remove(KEY_PIN_LEGACY)
-                    .apply();
+                    .remove(KEY_PIN_LEGACY);
+            if (user != null) {
+                ed.putInt(KEY_LEN_PREFIX + user.getUid(), pin.length());
+            }
+            ed.apply();
         } catch (Exception e) {
             android.util.Log.e("PinManager", "Failed to store PIN hash", e);
         }
+    }
+
+    /**
+     * Returns the length of the PIN the user set (4–6).
+     * Defaults to {@link #DEFAULT_PIN_LEN} if the length was never stored
+     * (e.g. the PIN was set on an older build).
+     */
+    public static int getPinLength(Context ctx) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return DEFAULT_PIN_LEN;
+        return SecurePrefs.get(ctx).getInt(KEY_LEN_PREFIX + user.getUid(), DEFAULT_PIN_LEN);
     }
 
     public static boolean hasPinSet(Context ctx) {
