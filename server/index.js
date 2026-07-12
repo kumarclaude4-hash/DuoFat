@@ -4,13 +4,26 @@ const crypto = require("crypto");
 
 let serviceAccount;
 try {
-  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || "{}";
+  // Prefer a local file (server/service-account.json) so that the full 2.3 KB
+  // JSON can be pasted into the code editor without the browser truncation that
+  // affects the Replit Secrets input field for long values.
+  // Falls back to the GOOGLE_APPLICATION_CREDENTIALS_JSON env/secret.
+  let raw;
+  const fs = require("fs");
+  const localPath = __dirname + "/service-account.json";
+  if (fs.existsSync(localPath)) {
+    raw = fs.readFileSync(localPath, "utf8").trim();
+    console.log("Loaded service account from service-account.json");
+  } else {
+    raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || "{}";
+    console.log("Loaded service account from GOOGLE_APPLICATION_CREDENTIALS_JSON env var");
+  }
   serviceAccount = JSON.parse(raw);
   if (serviceAccount.private_key) {
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
   }
 } catch (e) {
-  console.error("Failed to parse GOOGLE_APPLICATION_CREDENTIALS_JSON:", e.message);
+  console.error("Failed to load service account credential:", e.message);
   process.exit(1);
 }
 
