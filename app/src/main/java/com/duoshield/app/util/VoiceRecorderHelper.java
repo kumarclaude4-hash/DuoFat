@@ -30,12 +30,26 @@ public class VoiceRecorderHelper {
     // WeakReference prevents leaking the host Activity/Fragment if stop() is never called
     private WeakReference<RecorderListener> listenerRef;
 
+    // ── Dynamic-range compression pipeline ──────────────────────────────────
+    // Raw getMaxAmplitude() is linear: 95 % of speech sits at 0.01–0.08 of the
+    // full 0–32767 scale, so a direct linear mapping produces a near-flat line
+    // with occasional spikes. Professional voice-note apps (WhatsApp, Telegram)
+    // solve this with three stages:
+    //   1. Adaptive peak tracking  — quiet speakers still fill the waveform.
+    //   2. Square-root gamma        — lifts the mid-range into visible territory.
+    //   3. Temporal smoothing       — removes per-frame jitter ("alive" not twitchy).
+    // Both fields are reset at the start of each recording session.
+    private float runningMax = 3000f; // warm prior; keeps very first bar proportional
+    private float displayAmp = 0f;
+
     public void start(Context ctx, RecorderListener cb) {
         listenerRef = new WeakReference<>(cb);
         try {
             File out = new File(ctx.getCacheDir(), "voice_" + System.currentTimeMillis() + ".m4a");
             outputPath = out.getAbsolutePath();
             amplitudes.clear();
+            runningMax = 3000f;
+            displayAmp = 0f;
 
             recorder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 ? new MediaRecorder(ctx) : new MediaRecorder();
@@ -57,10 +71,24 @@ public class VoiceRecorderHelper {
                         handler.removeCallbacks(this);
                         return;
                     }
-                    int amp = recorder.getMaxAmplitude();
-                    // Normalise to 0-100 so the waveform looks correct regardless of device mic gain.
-                    // MediaRecorder can spike wildly on some devices, so clamp hard at the top.
-                    int normAmp = Math.max(0, Math.min(100, Math.round(amp / 327.67f)));
+                    float raw = recorder.getMaxAmplitude();
+
+                    // Stage 1 — Adaptive peak tracker.
+                    // Decays by 0.5 % per 100 ms tick (~40 dB/minute) so a quiet speaker
+                    // still fills the waveform while a loud one never clips.  The floor of
+                    // max(raw, 1f) prevents division-by-zero during total silence.
+                    runningMax = Math.max(runningMax * 0.995f, Math.max(raw, 1f));
+
+                    // Stage 2 — Square-root gamma compression.
+                    // Linear ratio: 95 % of speech lives at 0.01–0.08 → near-flat waveform.
+                    // sqrt lifts that range to 0.10–0.28 → clearly visible, proportional bars.
+                    float amp = (float) Math.sqrt(raw / runningMax);
+
+                    // Stage 3 — Temporal smoothing (EMA, α = 0.25).
+                    // Removes per-frame jitter without adding lag: fast attack, slow release.
+                    displayAmp = displayAmp * 0.75f + amp * 0.25f;
+
+                    int normAmp = Math.max(0, Math.min(100, Math.round(displayAmp * 100f)));
                     amplitudes.add(normAmp);
                     l.onAmplitude(normAmp);
                     handler.postDelayed(this, 100);
