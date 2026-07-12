@@ -58,8 +58,9 @@ public class VoiceRecorderHelper {
                         return;
                     }
                     int amp = recorder.getMaxAmplitude();
-                    // Normalise to 0-100 so the waveform looks correct regardless of device mic gain
-                    int normAmp = (int) Math.min(100, (amp / 327.67));
+                    // Normalise to 0-100 so the waveform looks correct regardless of device mic gain.
+                    // MediaRecorder can spike wildly on some devices, so clamp hard at the top.
+                    int normAmp = Math.max(0, Math.min(100, Math.round(amp / 327.67f)));
                     amplitudes.add(normAmp);
                     l.onAmplitude(normAmp);
                     handler.postDelayed(this, 100);

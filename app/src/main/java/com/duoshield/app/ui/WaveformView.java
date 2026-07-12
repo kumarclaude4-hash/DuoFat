@@ -63,30 +63,46 @@ public class WaveformView extends View {
     public void setAmplitudes(List<Integer> rawList) {
         bars.clear();
         if (rawList == null || rawList.isEmpty()) {
+            progress = 0f;
             invalidate();
             return;
         }
+
         int maxAmp = 1;
-        for (int v : rawList) if (v > maxAmp) maxAmp = v;
         for (int v : rawList) {
-            float norm = (float) v / maxAmp;
-            bars.add(Math.max(0.05f, norm)); // floor so every bar is visible
+            if (v > maxAmp) maxAmp = v;
         }
+
+        // Resample down to MAX_BARS using linear index mapping so long recordings
+        // don't overcrowd the view with tiny illegible bars.
+        int count = Math.min(MAX_BARS, rawList.size());
+        for (int i = 0; i < count; i++) {
+            int srcIdx = (int) ((i * (rawList.size() - 1f)) / Math.max(1f, count - 1f));
+            int v = rawList.get(srcIdx);
+            float norm = (float) v / maxAmp;
+            bars.add(Math.max(0.05f, norm));
+        }
+        progress = 0f;
         invalidate();
     }
 
     /**
-     * Returns the normalised amplitude (0f–1f) of the bar nearest the given
-     * playback fraction (0–1). Used to drive the "breathing" bubble scale in
-     * sync with the actual audio, not just a generic pulse.
+     * Returns the normalised amplitude (0f–1f) at the given playback fraction.
+     * Uses linear interpolation between adjacent bars so the bubble motion stays
+     * smooth even if the stored waveform is sparse.
      */
     public float getAmplitudeAt(float fraction) {
         if (bars.isEmpty()) return 0f;
+        if (bars.size() == 1) return bars.get(0);
+
         float clamped = Math.max(0f, Math.min(1f, fraction));
-        int idx = (int) (clamped * bars.size());
-        if (idx >= bars.size()) idx = bars.size() - 1;
-        if (idx < 0) idx = 0;
-        return bars.get(idx);
+        float exactIdx = clamped * (bars.size() - 1f);
+        int leftIdx = (int) Math.floor(exactIdx);
+        int rightIdx = Math.min(bars.size() - 1, leftIdx + 1);
+        float t = exactIdx - leftIdx;
+        float left = bars.get(leftIdx);
+        float right = bars.get(rightIdx);
+        return left + (right - left) * t;
     }
 
     /** Set playback progress fraction (0–1). Triggers redraw. */

@@ -520,6 +520,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         } else if ("voice".equals(type)) {
             h.voiceNoteContainer.setVisibility(View.VISIBLE);
             boolean playing = msg.getId() != null && msg.getId().equals(playingMsgId);
+
+            // Reset recycled state first so a previously playing row does not leak scale/progress.
+            stopBreathingAnim(h.bubble);
+            h.voiceWaveform.setProgress(0f);
+
             h.voicePlayPauseBtn.setImageResource(
                 playing ? android.R.drawable.ic_media_pause : R.drawable.ic_play_audio);
             // Tag views with message ID so async callbacks can detect stale ViewHolders
@@ -556,9 +561,6 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // playback progress callback via applyBreathingAmplitude(). Tag it so stale
             // async ticks from a recycled/switched row can detect the mismatch and no-op.
             h.bubble.setTag(msg.getId());
-            if (!playing) {
-                stopBreathingAnim(h.bubble);
-            }
 
             // ── Trailing slot: partner avatar at rest, speed pill while playing ──
             // Own outgoing notes show nothing at rest (no point avatar-ing yourself)
