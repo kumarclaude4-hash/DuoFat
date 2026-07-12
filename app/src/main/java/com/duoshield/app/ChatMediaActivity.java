@@ -973,7 +973,7 @@ public class ChatMediaActivity extends BaseActivity {
             currentlyPlayingId = msgId;
             adapter.setPlayingMessageId(msgId);
             if (msgId.equals(playPauseBtn.getTag()))
-                playPauseBtn.setImageResource(android.R.drawable.ic_media_pause);
+                playPauseBtn.setImageResource(R.drawable.ic_pause_audio);
             player.resume();
             return;
         }
@@ -986,7 +986,7 @@ public class ChatMediaActivity extends BaseActivity {
         currentlyPlayingId = msgId;
         adapter.setPlayingMessageId(msgId);
         if (msgId.equals(playPauseBtn.getTag()))
-            playPauseBtn.setImageResource(android.R.drawable.ic_media_pause);
+            playPauseBtn.setImageResource(R.drawable.ic_pause_audio);
 
         final int[] totalDurHolder = {0};
         VoiceMessagePlayer.PlayerListener listener = new VoiceMessagePlayer.PlayerListener() {

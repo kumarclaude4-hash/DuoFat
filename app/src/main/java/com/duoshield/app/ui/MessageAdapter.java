@@ -526,7 +526,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.voiceWaveform.setProgress(0f);
 
             h.voicePlayPauseBtn.setImageResource(
-                playing ? android.R.drawable.ic_media_pause : R.drawable.ic_play_audio);
+                playing ? R.drawable.ic_pause_audio : R.drawable.ic_play_audio);
             // Tag views with message ID so async callbacks can detect stale ViewHolders
             h.voicePlayPauseBtn.setTag(msg.getId());
             h.voiceWaveform.setTag(msg.getId());
