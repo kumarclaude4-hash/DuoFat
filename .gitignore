@@ -37,8 +37,6 @@ captures/
 
 # Firebase — service account (server-side only, keep out of repo)
 app/src/main/assets/service-account.json
-# Push server Firebase credential — never commit this
-server/service-account.json
 
 # Firebase — google-services.json (Bug 19 fix: must not be committed — contains API keys)
 # Copy from Firebase console: Project settings → google-services.json
