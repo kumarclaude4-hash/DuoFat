@@ -114,6 +114,14 @@ public class CallManager {
     /** Last snapshot of transport bytes from the stats report (to compute deltas). */
     private long lastTransportBytesSent     = -1L;
     private long lastTransportBytesReceived = -1L;
+    /**
+     * True once WebRTC stats confirm the selected candidate pair is a relay
+     * (i.e. traffic is actually going through Cloudflare TURN).  We only
+     * accumulate bytes into {@link #sessionBytesTotal} — and thus charge against
+     * the monthly Cloudflare quota — when this flag is set.  P2P calls (srflx
+     * or host candidate pairs) are free and must not erode the quota counter.
+     */
+    private boolean isRelayCall = false;
     private final Handler statsHandler = new Handler(Looper.getMainLooper());
     private final Runnable statsPollRunnable = new Runnable() {
         @Override public void run() {
@@ -126,10 +134,11 @@ public class CallManager {
     /**
      * Max video bitrate for 32-bit devices (armeabi-v7a, e.g. POCO C51 / Helio G36).
      * 400 kbps at 640×480 is well within the encoder budget; 64-bit devices use
-     * 1 500 kbps at 1280×720.
+     * 800 kbps at 1280×720 (visually identical to 1 500 kbps on a phone screen
+     * and halves TURN relay costs when the call cannot go direct P2P).
      */
     private static final int VIDEO_BITRATE_32BIT_BPS  = 400_000;
-    private static final int VIDEO_BITRATE_64BIT_BPS  = 1_500_000;
+    private static final int VIDEO_BITRATE_64BIT_BPS  = 800_000;
     /** Audio bitrate: 32-bit gets OPUS 20 kbps; 64-bit gets 32 kbps. */
     private static final int AUDIO_BITRATE_32BIT_BPS  =  20_000;
     private static final int AUDIO_BITRATE_64BIT_BPS  =  32_000;
@@ -254,12 +263,22 @@ public class CallManager {
         PeerConnection.RTCConfiguration config =
                 new PeerConnection.RTCConfiguration(buildIceServers());
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // F8 fix: use RELAY-only transport when TURN credentials are cached to
-        // prevent real-IP leakage via ICE candidate gathering. Fall back to ALL
-        // (P2P allowed) only when TURN is unavailable — a broken call is worse
-        // than the privacy reduction of a direct P2P path.
+        // Privacy + bandwidth balance: use NO_HOST when TURN credentials are
+        // cached.  NO_HOST suppresses host candidates (local LAN IPs never
+        // appear in Firestore), while still allowing srflx (STUN-discovered
+        // public IP) candidates so direct P2P works for the majority of users.
+        // TURN (relay) is only selected by the ICE agent when P2P genuinely
+        // fails (strict CGNAT / symmetric NAT on both sides).
+        //
+        // The previous RELAY-only mode forced every call through Cloudflare even
+        // when both peers could connect directly, draining the 1 TB free-tier
+        // allowance unnecessarily.  NO_HOST preserves the IP-leak protection
+        // without the bandwidth penalty.
+        //
+        // Fall back to ALL (host candidates visible) only when TURN is
+        // unavailable — a broken call is worse than minor privacy reduction.
         config.iceTransportsType = TurnCredentialCache.get().isValid()
-                ? PeerConnection.IceTransportsType.RELAY
+                ? PeerConnection.IceTransportsType.NO_HOST
                 : PeerConnection.IceTransportsType.ALL;
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
@@ -744,6 +763,7 @@ public class CallManager {
         lastFramesEncoded          = -1L;
         lastFramesTs               = -1L;
         thermalDowngradeApplied    = false;
+        isRelayCall                = false; // determined on first stats poll
         applyBitrateConstraints(); // cap bitrate immediately on connect
         statsHandler.postDelayed(statsPollRunnable, STATS_POLL_INTERVAL_MS);
         Log.d(TAG, "TURN stats polling started (32-bit=" + is32BitOnly() + ")");
@@ -766,6 +786,7 @@ public class CallManager {
         lastFramesEncoded          = -1L;
         lastFramesTs               = -1L;
         thermalDowngradeApplied    = false;
+        isRelayCall                = false;
     }
 
     /**
@@ -789,69 +810,108 @@ public class CallManager {
             public void onStatsDelivered(RTCStatsReport report) {
                 if (report == null) return;
 
+                // ── Pass 1: build lookup maps ───────────────────────────────
+                // local-candidate id → candidateType ("host","srflx","relay")
+                Map<String, String> localCandidateTypes = new java.util.HashMap<>();
+                // transport id → {bytesSent, bytesReceived}
+                long transportSent = -1L, transportRecv = -1L;
+                // nominated candidate-pair local candidate id
+                String nominatedLocalId = null;
+                // outbound-rtp fields for thermal watchdog
+                long framesEncoded = -1L;
+                String outboundKind = null;
+
                 for (Map.Entry<String, RTCStats> entry : report.getStatsMap().entrySet()) {
                     RTCStats stats = entry.getValue();
                     String type = stats.getType();
+                    Map<String, Object> m = stats.getMembers();
 
-                    // ── Transport bytes (bandwidth accounting) ──────────────
-                    if ("transport".equals(type)) {
-                        Map<String, Object> m = stats.getMembers();
+                    if ("local-candidate".equals(type)) {
+                        Object ct = m.get("candidateType");
+                        if (ct != null) localCandidateTypes.put(entry.getKey(), ct.toString());
+
+                    } else if ("candidate-pair".equals(type)) {
+                        // Find the nominated (active) pair to determine relay vs P2P.
+                        Object nomObj  = m.get("nominated");
+                        Object stateObj = m.get("state");
+                        boolean nominated = Boolean.TRUE.equals(nomObj);
+                        boolean succeeded = "succeeded".equals(stateObj);
+                        if (nominated || succeeded) {
+                            Object lcid = m.get("localCandidateId");
+                            if (lcid != null) nominatedLocalId = lcid.toString();
+                        }
+
+                    } else if ("transport".equals(type)) {
                         Object sentObj = m.get("bytesSent");
                         Object recvObj = m.get("bytesReceived");
-                        if (sentObj != null && recvObj != null) {
-                            long sent = toLong(sentObj);
-                            long recv = toLong(recvObj);
-                            long deltaSent = (lastTransportBytesSent >= 0 && sent >= lastTransportBytesSent)
-                                    ? sent - lastTransportBytesSent : 0L;
-                            long deltaRecv = (lastTransportBytesReceived >= 0 && recv >= lastTransportBytesReceived)
-                                    ? recv - lastTransportBytesReceived : 0L;
-                            lastTransportBytesSent     = sent;
-                            lastTransportBytesReceived = recv;
-                            sessionBytesTotal += deltaSent + deltaRecv;
-                            Log.d(TAG, String.format(Locale.US,
-                                    "Stats poll: +%.1f KB tx, +%.1f KB rx — session: %.2f MB",
-                                    deltaSent / 1024.0, deltaRecv / 1024.0,
-                                    sessionBytesTotal / (1024.0 * 1024.0)));
-                        }
-                    }
+                        if (sentObj != null) transportSent = toLong(sentObj);
+                        if (recvObj != null) transportRecv = toLong(recvObj);
 
-                    // ── Thermal watchdog: outbound-rtp encoder FPS (32-bit only) ──
-                    if (is32BitOnly() && !thermalDowngradeApplied
-                            && "outbound-rtp".equals(type)) {
-                        Map<String, Object> m = stats.getMembers();
-                        // Only examine video streams.
+                    } else if ("outbound-rtp".equals(type)) {
                         Object kindObj = m.get("kind");
-                        if (!"video".equals(kindObj)) continue;
-
                         Object framesObj = m.get("framesEncoded");
-                        if (framesObj == null) continue;
-                        long frames = toLong(framesObj);
-                        long nowMs  = System.currentTimeMillis();
-
-                        if (lastFramesEncoded >= 0 && lastFramesTs > 0) {
-                            double elapsedSec = (nowMs - lastFramesTs) / 1000.0;
-                            double actualFps  = (frames - lastFramesEncoded) / elapsedSec;
-                            Log.d(TAG, String.format(Locale.US,
-                                    "Thermal watchdog: encoder %.1f fps (threshold %.0f fps)",
-                                    actualFps, THERMAL_FPS_THRESHOLD));
-
-                            if (actualFps < THERMAL_FPS_THRESHOLD && videoCapturer != null) {
-                                // Encoder is lagging — step down to 320×240 @ 15 fps.
-                                thermalDowngradeApplied = true;
-                                Log.w(TAG, "Thermal downgrade triggered on 32-bit device: "
-                                        + "320×240 @ 15 fps to relieve encoder CPU.");
-                                try {
-                                    videoCapturer.changeCaptureFormat(320, 240, 15);
-                                } catch (Exception ex) {
-                                    Log.w(TAG, "changeCaptureFormat failed: " + ex.getMessage());
-                                }
-                                // Tighten the bitrate cap to match the lower resolution.
-                                applyBitrateConstraintsForResolution(150_000 /* 150 kbps */);
-                            }
+                        if ("video".equals(kindObj) && framesObj != null) {
+                            outboundKind  = "video";
+                            framesEncoded = toLong(framesObj);
                         }
-                        lastFramesEncoded = frames;
-                        lastFramesTs      = nowMs;
                     }
+                }
+
+                // ── Pass 2: determine relay status ──────────────────────────
+                if (nominatedLocalId != null) {
+                    String ct = localCandidateTypes.get(nominatedLocalId);
+                    boolean nowRelay = "relay".equals(ct);
+                    if (nowRelay != isRelayCall) {
+                        isRelayCall = nowRelay;
+                        Log.i(TAG, "Active candidate pair: "
+                                + (isRelayCall ? "RELAY (TURN)" : "DIRECT P2P (" + ct + ")")
+                                + " — TURN quota " + (isRelayCall ? "ACTIVE" : "NOT charged"));
+                    }
+                }
+
+                // ── Transport bytes (bandwidth accounting) ──────────────────
+                // Only charge against the Cloudflare quota when actually relayed.
+                if (transportSent >= 0 && transportRecv >= 0) {
+                    long deltaSent = (lastTransportBytesSent >= 0 && transportSent >= lastTransportBytesSent)
+                            ? transportSent - lastTransportBytesSent : 0L;
+                    long deltaRecv = (lastTransportBytesReceived >= 0 && transportRecv >= lastTransportBytesReceived)
+                            ? transportRecv - lastTransportBytesReceived : 0L;
+                    lastTransportBytesSent     = transportSent;
+                    lastTransportBytesReceived = transportRecv;
+                    if (isRelayCall) {
+                        sessionBytesTotal += deltaSent + deltaRecv;
+                    }
+                    Log.d(TAG, String.format(Locale.US,
+                            "Stats poll: +%.1f KB tx, +%.1f KB rx — session TURN: %.2f MB [%s]",
+                            deltaSent / 1024.0, deltaRecv / 1024.0,
+                            sessionBytesTotal / (1024.0 * 1024.0),
+                            isRelayCall ? "relay" : "direct"));
+                }
+
+                // ── Thermal watchdog: outbound-rtp encoder FPS (32-bit only) ──
+                if (is32BitOnly() && !thermalDowngradeApplied
+                        && "video".equals(outboundKind) && framesEncoded >= 0) {
+                    long nowMs = System.currentTimeMillis();
+                    if (lastFramesEncoded >= 0 && lastFramesTs > 0) {
+                        double elapsedSec = (nowMs - lastFramesTs) / 1000.0;
+                        double actualFps  = (framesEncoded - lastFramesEncoded) / elapsedSec;
+                        Log.d(TAG, String.format(Locale.US,
+                                "Thermal watchdog: encoder %.1f fps (threshold %.0f fps)",
+                                actualFps, THERMAL_FPS_THRESHOLD));
+                        if (actualFps < THERMAL_FPS_THRESHOLD && videoCapturer != null) {
+                            thermalDowngradeApplied = true;
+                            Log.w(TAG, "Thermal downgrade triggered on 32-bit device: "
+                                    + "320×240 @ 15 fps to relieve encoder CPU.");
+                            try {
+                                videoCapturer.changeCaptureFormat(320, 240, 15);
+                            } catch (Exception ex) {
+                                Log.w(TAG, "changeCaptureFormat failed: " + ex.getMessage());
+                            }
+                            applyBitrateConstraintsForResolution(150_000 /* 150 kbps */);
+                        }
+                    }
+                    lastFramesEncoded = framesEncoded;
+                    lastFramesTs      = nowMs;
                 }
             }
         });
