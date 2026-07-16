@@ -263,23 +263,14 @@ public class CallManager {
         PeerConnection.RTCConfiguration config =
                 new PeerConnection.RTCConfiguration(buildIceServers());
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // Privacy + bandwidth balance: use NO_HOST when TURN credentials are
-        // cached.  NO_HOST suppresses host candidates (local LAN IPs never
-        // appear in Firestore), while still allowing srflx (STUN-discovered
-        // public IP) candidates so direct P2P works for the majority of users.
-        // TURN (relay) is only selected by the ICE agent when P2P genuinely
-        // fails (strict CGNAT / symmetric NAT on both sides).
-        //
-        // The previous RELAY-only mode forced every call through Cloudflare even
-        // when both peers could connect directly, draining the 1 TB free-tier
-        // allowance unnecessarily.  NO_HOST preserves the IP-leak protection
-        // without the bandwidth penalty.
-        //
-        // Fall back to ALL (host candidates visible) only when TURN is
-        // unavailable — a broken call is worse than minor privacy reduction.
-        config.iceTransportsType = TurnCredentialCache.get().isValid()
-                ? PeerConnection.IceTransportsType.NO_HOST
-                : PeerConnection.IceTransportsType.ALL;
+        // Use ALL transport type so the ICE agent can negotiate direct P2P
+        // (srflx / host) and fall back to TURN relay only when P2P genuinely
+        // fails (strict CGNAT / symmetric NAT on both sides).  The previous
+        // RELAY-only mode forced every call through Cloudflare even when both
+        // peers could connect directly, draining the free-tier allowance
+        // unnecessarily.  With ALL, TURN is still available as a fallback but
+        // is not the first choice, keeping most calls free of relay cost.
+        config.iceTransportsType = PeerConnection.IceTransportsType.ALL;
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
             @Override
