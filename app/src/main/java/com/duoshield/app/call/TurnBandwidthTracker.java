@@ -31,11 +31,11 @@ public class TurnBandwidthTracker {
 
     private static final String TAG = "TurnBandwidthTracker";
 
-    /** 900 GB in bytes — hard monthly TURN cap. */
-    public static final long MONTHLY_LIMIT_BYTES = 900L * 1024L * 1024L * 1024L;
+    /** 100 GB in bytes — hard monthly TURN cap per user. */
+    public static final long MONTHLY_LIMIT_BYTES = 100L * 1024L * 1024L * 1024L;
 
-    /** Warning threshold — 800 GB. Used to show an early-warning in call UI. */
-    public static final long WARNING_THRESHOLD_BYTES = 800L * 1024L * 1024L * 1024L;
+    /** Warning threshold — 90 GB (90 % of cap). Used to show an early-warning in call UI. */
+    public static final long WARNING_THRESHOLD_BYTES = 90L * 1024L * 1024L * 1024L;
 
     private static final String PREFS_NAME    = "duoshield_turn_tracker";
     private static final String KEY_MONTH     = "turn_month";       // "YYYY-MM"
@@ -96,7 +96,7 @@ public class TurnBandwidthTracker {
             Log.e(TAG, "⚠️  TURN monthly cap REACHED — TURN disabled until next month.");
         } else if (updated >= WARNING_THRESHOLD_BYTES) {
             Log.w(TAG, String.format(Locale.US,
-                    "⚠️  TURN usage warning: %.1f GB of 900 GB used this month.",
+                    "⚠️  TURN usage warning: %.1f GB of 100 GB used this month.",
                     updated / (1024.0 * 1024.0 * 1024.0)));
         }
     }
@@ -131,11 +131,22 @@ public class TurnBandwidthTracker {
         return Math.max(0L, MONTHLY_LIMIT_BYTES - getUsedBytes());
     }
 
-    /** Human-readable used/total string, e.g. "342.7 GB / 900 GB". */
+    /** Human-readable used/total string, e.g. "3.42 GB / 100 GB". */
     public synchronized String getSummary() {
         long used = getUsedBytes();
-        return String.format(Locale.US, "%.2f GB / 900 GB used this month",
+        return String.format(Locale.US, "%.2f GB / 100 GB used this month",
                 used / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    /** Used GB as a float (0.0 – 100.0). */
+    public synchronized float getUsedGb() {
+        return (float) (getUsedBytes() / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    /** 0–100 integer percentage of the monthly cap consumed. */
+    public synchronized int getUsedPercent() {
+        long used = getUsedBytes();
+        return (int) Math.min(100L, used * 100L / MONTHLY_LIMIT_BYTES);
     }
 
     /** Returns the current month key (YYYY-MM). */

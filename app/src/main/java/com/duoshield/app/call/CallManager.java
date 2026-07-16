@@ -232,7 +232,7 @@ public class CallManager {
             Log.e(TAG, "TURN monthly cap reached (" + tracker.getSummary()
                     + ") — TURN disabled for this call. Call may fail on CGNAT.");
             if (listener != null) {
-                listener.onError("Monthly TURN data cap reached (900 GB). "
+                listener.onError("Monthly TURN data cap reached (100 GB). "
                         + "Calls over restricted networks may not connect until next month.");
             }
             return list;

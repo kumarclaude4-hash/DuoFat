@@ -302,6 +302,69 @@
                 android:background="@color/ds_divider"
                 android:layout_marginStart="60dp"/>
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="0.5dp"
+                android:background="@color/ds_divider"
+                android:layout_marginStart="60dp"/>
+
+            <!-- Call Data Usage -->
+            <LinearLayout
+                android:id="@+id/rowCallDataUsage"
+                android:layout_width="match_parent"
+                android:layout_height="72dp"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:src="@drawable/ic_call_phone"
+                    android:tint="#9A81FF"
+                    android:layout_marginEnd="18dp"/>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Call Data Usage"
+                        android:textColor="@color/ds_text_primary"
+                        android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"/>
+
+                    <TextView
+                        android:id="@+id/tvCallDataSubtitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Loading…"
+                        android:textColor="@color/ds_text_tertiary"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp"/>
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@color/ds_text_tertiary"/>
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:background="@color/ds_background"/>
+
             <!-- Danger Zone -->
             <LinearLayout
                 android:id="@+id/rowDangerZone"

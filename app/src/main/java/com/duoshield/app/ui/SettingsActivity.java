@@ -2,6 +2,7 @@ package com.duoshield.app.ui;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
@@ -10,6 +11,7 @@ import android.view.View;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
@@ -19,13 +21,17 @@ import com.bumptech.glide.Glide;
 import com.bumptech.glide.load.resource.bitmap.CircleCrop;
 import com.duoshield.app.BaseActivity;
 import com.duoshield.app.R;
+import com.duoshield.app.call.TurnBandwidthTracker;
 import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Collections;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -111,6 +117,122 @@ public class SettingsActivity extends BaseActivity {
             rowDangerZone.setOnClickListener(v ->
                 startActivity(new Intent(this, DangerZoneSettingsActivity.class)));
         }
+
+        // ── Call data usage row ───────────────────────────────────────────────
+        LinearLayout rowCallDataUsage = findViewById(R.id.rowCallDataUsage);
+        TextView     tvCallDataSubtitle = findViewById(R.id.tvCallDataSubtitle);
+
+        TurnBandwidthTracker tracker = TurnBandwidthTracker.get(this);
+        String subtitleText = String.format(Locale.US, "%.2f GB / 100 GB used this month",
+                tracker.getUsedGb());
+        if (tvCallDataSubtitle != null) tvCallDataSubtitle.setText(subtitleText);
+
+        if (rowCallDataUsage != null) {
+            rowCallDataUsage.setOnClickListener(v -> showCallDataDialog());
+        }
+    }
+
+    // ── Call data usage dialog ────────────────────────────────────────────────
+
+    private void showCallDataDialog() {
+        TurnBandwidthTracker tracker = TurnBandwidthTracker.get(this);
+        float usedGb      = tracker.getUsedGb();
+        float remainingGb = (float) (tracker.getRemainingBytes() / (1024.0 * 1024.0 * 1024.0));
+        int   percent     = tracker.getUsedPercent();
+
+        // Compute next reset date (1st of next month)
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.DAY_OF_MONTH, 1);
+        cal.add(Calendar.MONTH, 1);
+        String resetDate = new SimpleDateFormat("MMMM d, yyyy", Locale.US).format(cal.getTime());
+
+        // Build the dialog content view
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int dp = (int) getResources().getDisplayMetrics().density;
+        root.setPadding(24 * dp, 20 * dp, 24 * dp, 8 * dp);
+
+        // Progress bar
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(percent);
+        bar.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 10 * dp));
+        // Tint: green → amber → red
+        int barColor;
+        if (percent < 70)      barColor = 0xFF00C9E0; // cyan accent
+        else if (percent < 90) barColor = 0xFFFFB300; // amber
+        else                   barColor = 0xFFFF5252; // red
+        bar.getProgressDrawable().setColorFilter(
+                barColor, android.graphics.PorterDuff.Mode.SRC_IN);
+        root.addView(bar);
+
+        // Percentage label
+        TextView tvPct = new TextView(this);
+        tvPct.setText(String.format(Locale.US, "%d%% of 100 GB used", percent));
+        tvPct.setTextColor(barColor);
+        tvPct.setTextSize(13f);
+        LinearLayout.LayoutParams pctParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        pctParams.topMargin = 8 * dp;
+        tvPct.setLayoutParams(pctParams);
+        root.addView(tvPct);
+
+        // Stats rows
+        root.addView(makeDialogRow("Used this month",
+                String.format(Locale.US, "%.2f GB", usedGb), dp));
+        root.addView(makeDialogRow("Remaining",
+                String.format(Locale.US, "%.2f GB", remainingGb), dp));
+        root.addView(makeDialogRow("Resets on", resetDate, dp));
+
+        // Note
+        TextView tvNote = new TextView(this);
+        tvNote.setText("Only calls relayed through TURN count toward this limit. "
+                + "Direct peer-to-peer calls are free and not included.");
+        tvNote.setTextSize(11f);
+        tvNote.setTextColor(0xFF888888);
+        tvNote.setLineSpacing(0, 1.3f);
+        LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        noteParams.topMargin = 16 * dp;
+        tvNote.setLayoutParams(noteParams);
+        root.addView(tvNote);
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Call Data Usage")
+                .setView(root)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    /** Helper: a two-column row for the call data dialog. */
+    private LinearLayout makeDialogRow(String label, String value, int dp) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.topMargin = 12 * dp;
+        row.setLayoutParams(rowParams);
+
+        TextView tvLabel = new TextView(this);
+        tvLabel.setText(label);
+        tvLabel.setTextColor(0xFFAAAAAA);
+        tvLabel.setTextSize(13f);
+        tvLabel.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tvLabel);
+
+        TextView tvValue = new TextView(this);
+        tvValue.setText(value);
+        tvValue.setTextColor(Color.WHITE);
+        tvValue.setTextSize(13f);
+        tvValue.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        row.addView(tvValue);
+
+        return row;
     }
 
     // ── Profile name edit ─────────────────────────────────────────────────────
