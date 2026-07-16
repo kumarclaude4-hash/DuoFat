@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately generic chrome — nothing here names or hints at the second-code's
+  actual behavior. See UX audit item #2 / DuressManager for the backing logic.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingBottom="32dp">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/ds_surface"
+            android:elevation="4dp"
+            app:navigationIcon="@drawable/ic_back"
+            app:titleTextColor="@color/ds_text_primary"
+            app:title="Manage unlock codes"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:text="You can set up more than one code to unlock the app. Each one works the same way at the lock screen."
+            android:textColor="@color/ds_text_secondary"
+            android:textSize="13sp"
+            android:lineSpacingMultiplier="1.3"/>
+
+        <!-- ══ LIST PANEL ══════════════════════════════════════════════════ -->
+        <LinearLayout
+            android:id="@+id/panelList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="20dp">
+
+            <TextView
+                android:text="CODES"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <LinearLayout
+                android:id="@+id/rowPrimaryCode"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Primary code"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="15sp"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Active"
+                    android:textColor="@color/online_green"
+                    android:textSize="13sp"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/rowSecondaryCode"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:layout_marginTop="1dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Additional code"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="15sp"/>
+
+                <TextView
+                    android:id="@+id/btnRemoveSecondaryCode"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Remove"
+                    android:textColor="@color/ds_danger"
+                    android:textSize="13sp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:padding="4dp"/>
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAddCode"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginStart="20dp"
+                android:layout_marginEnd="20dp"
+                android:layout_marginTop="20dp"
+                android:text="+ Add another code"
+                android:textAllCaps="false"
+                app:cornerRadius="24dp"/>
+        </LinearLayout>
+
+        <!-- ══ ENTRY PANEL (new code + confirm) ═══════════════════════════ -->
+        <LinearLayout
+            android:id="@+id/panelEntry"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:layout_marginTop="20dp"
+            android:visibility="gone">
+
+            <TextView
+                android:text="NEW CODE"
+                style="@style/SectionHeader"
+                android:paddingStart="0dp"/>
+
+            <EditText
+                android:id="@+id/etNewCode"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:hint="New code (4–6 digits)"
+                android:textColorHint="@color/ds_text_tertiary"
+                android:textColor="@color/ds_text_primary"
+                android:inputType="numberPassword"
+                android:maxLength="6"
+                android:background="@drawable/bg_input_field"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="10dp"/>
+
+            <EditText
+                android:id="@+id/etConfirmCode"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:hint="Confirm code"
+                android:textColorHint="@color/ds_text_tertiary"
+                android:textColor="@color/ds_text_primary"
+                android:inputType="numberPassword"
+                android:maxLength="6"
+                android:background="@drawable/bg_input_field"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:layout_marginBottom="18dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnContinueEntry"
+                    android:layout_width="0dp"
+                    android:layout_height="46dp"
+                    android:layout_weight="1"
+                    android:text="Continue"
+                    android:textAllCaps="false"
+                    android:layout_marginEnd="8dp"
+                    app:cornerRadius="23dp"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCancelEntry"
+                    android:layout_width="0dp"
+                    android:layout_height="46dp"
+                    android:layout_weight="1"
+                    android:text="Cancel"
+                    android:textAllCaps="false"
+                    app:cornerRadius="23dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ══ EXPLANATION PANEL (shown once, before the code is saved) ══ -->
+        <LinearLayout
+            android:id="@+id/panelExplain"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:layout_marginTop="20dp"
+            android:visibility="gone">
+
+            <TextView
+                android:text="BEFORE YOU CONTINUE"
+                style="@style/SectionHeader"
+                android:paddingStart="0dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="Entering this code at the lock screen unlocks the app like normal — but it also signs you out and clears everything stored on this device. Your account and messages are safe and can be restored later with your recovery phrase.\n\nUse this if you're ever asked to unlock your phone under pressure and want to protect what's on it.\n\nThis explanation is only shown once. There is nothing else in the app that refers to this."
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="13.5sp"
+                android:lineSpacingMultiplier="1.35"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnConfirmExplain"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="24dp"
+                android:text="I understand — save this code"
+                android:textAllCaps="false"
+                app:cornerRadius="24dp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancelExplain"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:text="Cancel"
+                android:textAllCaps="false"
+                app:cornerRadius="24dp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

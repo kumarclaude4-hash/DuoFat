@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DuoShield</string>
+    <string name="app_tagline">End-to-end encrypted messaging</string>
+
+    <!-- Conversations -->
+    <string name="conversations">Messages</string>
+    <string name="no_conversations">No conversations yet</string>
+    <string name="no_conversations_sub">Start a secure, encrypted chat</string>
+    <string name="search_conversations">Search…</string>
+    <string name="new_chat">New Chat</string>
+    <string name="delete_conversation">Delete conversation?</string>
+    <string name="delete_conversation_msg">This will permanently delete all messages.</string>
+
+    <!-- Chat -->
+    <string name="hint_message">Message…</string>
+    <string name="send">Send</string>
+    <string name="voice_note">Voice note</string>
+    <string name="recording">Recording…</string>
+    <string name="encrypted">Encrypted</string>
+    <string name="edit_message">Edit message</string>
+    <string name="reply">Reply</string>
+    <string name="forward">Forward</string>
+    <string name="copy_text">Copy text</string>
+    <string name="pin_message">Pin message</string>
+    <string name="unpin_message">Unpin message</string>
+    <string name="delete_message">Delete message</string>
+    <string name="delete_message_confirm">Delete this message?</string>
+    <string name="edited">(edited)</string>
+    <string name="pinned_message">Pinned message</string>
+    <string name="you">You</string>
+    <string name="no_messages">No messages yet</string>
+    <string name="no_messages_sub">Messages are end-to-end encrypted</string>
+    <string name="typing">typing…</string>
+    <string name="online">online</string>
+    <string name="last_seen">last seen %s</string>
+
+    <!-- Lock Screen -->
+    <string name="enter_pin">Enter your PIN</string>
+    <string name="wrong_pin">Incorrect PIN</string>
+    <string name="wrong_pin_remaining">Incorrect PIN — %d attempts remaining</string>
+    <string name="unlock">Unlock</string>
+    <string name="use_biometric">Use biometrics instead</string>
+    <string name="lock_tagline">Your privacy. Our priority.</string>
+    <string name="biometric_prompt_title">Unlock DuoShield</string>
+    <string name="biometric_prompt_subtitle">Use fingerprint or face to unlock</string>
+    <string name="biometric_negative">Use PIN</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="section_security">Security</string>
+    <string name="section_notifications">Notifications</string>
+    <string name="section_privacy">Privacy</string>
+    <string name="section_storage">Storage</string>
+    <string name="section_about">About</string>
+    <string name="app_pin">App PIN</string>
+    <string name="app_pin_desc">Lock app with a PIN on resume</string>
+    <string name="biometric_lock">Biometric unlock</string>
+    <string name="biometric_desc">Use fingerprint or face to unlock</string>
+    <string name="self_destruct">Self-destruct timer</string>
+    <string name="self_destruct_desc">Auto-delete messages after a set time</string>
+    <string name="duress_pin">Duress PIN</string>
+    <string name="duress_pin_desc">Silently logs you out when entered at lock screen</string>
+    <string name="set_pin">Set PIN</string>
+    <string name="clear_pin">Clear PIN</string>
+    <string name="hint_new_pin">New PIN (4–6 digits)</string>
+    <string name="hint_confirm_pin">Confirm PIN</string>
+    <string name="hint_duress_pin">Duress PIN (4–6 digits)</string>
+    <string name="pin_status_set">PIN is set</string>
+    <string name="pin_status_not_set">No PIN set</string>
+    <string name="export_chat">Export chat</string>
+    <string name="export_chat_desc">Save conversation as PDF</string>
+    <string name="wipe_all">Wipe all data</string>
+    <string name="wipe_all_desc">Permanently delete all messages and settings</string>
+    <string name="wipe_data">Wipe all data</string>
+    <string name="wipe_confirm">Wipe all data?</string>
+    <string name="wipe_confirm_msg">This cannot be undone. All messages, keys, and settings will be deleted.</string>
+    <string name="wipe">Wipe</string>
+    <string name="cache_size">Cache size</string>
+    <string name="clear_cache">Clear cache</string>
+    <!-- quota_summary is used by the menu item; quota_usage is the settings row label -->
+    <string name="quota_usage">Firebase quota</string>
+    <string name="quota_summary">Firebase quota</string>
+    <string name="version">Version %s</string>
+
+    <!-- Pairing -->
+    <string name="pair_device">Pair Device</string>
+    <string name="pair_subtitle">Exchange keys securely with your contact</string>
+    <string name="your_code">Your code</string>
+    <string name="hint_partner_code">Paste partner\'s code here</string>
+    <string name="pair">Complete pairing</string>
+    <string name="copy_code">Copy code</string>
+    <string name="pairing_success">Pairing successful!</string>
+    <string name="pairing_failed">Pairing failed. Please try again.</string>
+
+    <!-- Key Fingerprint -->
+    <string name="key_fingerprint">Key Fingerprint</string>
+    <string name="your_fingerprint">Your fingerprint</string>
+    <string name="partner_fingerprint">Partner\'s fingerprint</string>
+    <string name="fingerprint_info">If these fingerprints match what your contact sees, your conversation is secure.</string>
+    <string name="share_fingerprint">Share fingerprint</string>
+
+    <!-- Search -->
+    <string name="search_messages">Search messages</string>
+    <string name="no_results">No results found</string>
+    <string name="no_results_sub">Try a different search term</string>
+
+    <!-- Media -->
+    <string name="media_viewer">Media</string>
+    <string name="image_saved">Image saved to gallery</string>
+    <string name="share_image">Share image</string>
+    <string name="download">Download</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="confirm">Confirm</string>
+    <string name="save">Save</string>
+    <string name="close">Close</string>
+    <string name="loading">Loading…</string>
+    <string name="no_network">No connection</string>
+    <string name="retry">Retry</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+
+    <!-- Permissions -->
+    <string name="perm_mic_title">Microphone permission needed</string>
+    <string name="perm_mic_message">Voice messages require microphone access. Grant it in App Settings.</string>
+    <string name="perm_mic_denied">Microphone permission is required to record voice messages.</string>
+    <string name="perm_open_settings">Open Settings</string>
+    <string name="perm_not_now">Not now</string>
+
+    <!-- Chat actions -->
+    <string name="action_copied">Copied</string>
+    <string name="action_pinned">Pinned</string>
+    <string name="action_unpinned">Unpinned</string>
+    <string name="action_already_pinned">Already pinned</string>
+    <string name="action_max_pins">Max %d pins reached</string>
+    <string name="action_not_pinned">Not pinned</string>
+    <string name="action_starred">Message starred</string>
+    <string name="action_unstarred">Message unstarred</string>
+    <string name="action_delete_failed">Could not delete for everyone</string>
+
+    <!-- Edit dialog -->
+    <string name="edit_message_title">Edit message</string>
+
+    <!-- Delete for everyone dialog -->
+    <string name="delete_for_everyone_title">Delete for everyone</string>
+    <string name="delete_for_everyone_message">This message will be permanently removed from both devices.</string>
+
+    <!-- Voice recording -->
+    <string name="voice_unavailable">Voice recording unavailable</string>
+    <string name="voice_file_not_found">Voice file not found</string>
+    <string name="voice_send_failed">Failed to send voice note. Tap to retry.</string>
+    <string name="voice_playback_error">Playback error</string>
+
+    <!-- Settings -->
+    <string name="settings_pin_set">App PIN set successfully.</string>
+    <string name="settings_pin_cleared">App PIN cleared.</string>
+    <string name="settings_pin_no_pin">No app PIN is set.</string>
+    <string name="settings_pin_too_short">PIN must be 4–6 digits.</string>
+    <string name="settings_pin_mismatch">PINs don\'t match. Try again.</string>
+    <string name="settings_pin_clash">App PIN cannot be the same as your duress PIN.</string>
+    <string name="settings_duress_set">Duress PIN set. Keep it secret.</string>
+    <string name="settings_duress_too_short">Duress PIN must be 4–6 digits.</string>
+    <string name="settings_duress_wrong">Incorrect duress PIN.</string>
+    <string name="settings_pin_wrong">Incorrect PIN.</string>
+    <string name="settings_name_empty">Name cannot be empty.</string>
+    <string name="settings_name_updated">Name updated.</string>
+    <string name="settings_photo_uploading">Uploading photo…</string>
+    <string name="settings_photo_updated">Photo updated!</string>
+    <string name="settings_unpaired">Device unpaired.</string>
+    <string name="settings_not_signed_in">Not signed in.</string>
+    <string name="settings_backup_none">No messages to back up</string>
+    <string name="settings_id_copied">Account ID copied</string>
+</resources>

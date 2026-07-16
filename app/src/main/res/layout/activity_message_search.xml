@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/ds_background"
+    android:fitsSystemWindows="true">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar" android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        style="@style/Widget.DuoShield.Toolbar"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/search_messages"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical"
+        android:paddingStart="12dp" android:paddingEnd="12dp"
+        android:paddingTop="8dp" android:paddingBottom="8dp"
+        android:background="@color/ds_toolbar">
+        <EditText android:id="@+id/sv_search"
+            android:layout_width="0dp" android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_search_bar"
+            android:paddingStart="16dp" android:paddingEnd="16dp"
+            android:hint="@string/search_messages"
+            android:textColor="@color/ds_text_primary"
+            android:textColorHint="@color/ds_text_tertiary"
+            android:textSize="15sp" android:inputType="text"
+            android:imeOptions="actionSearch" android:singleLine="true"/>
+    </LinearLayout>
+    <com.google.android.material.progressindicator.LinearProgressIndicator
+        android:id="@+id/progress" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:visibility="gone"
+        app:trackColor="@color/ds_divider" app:indicatorColor="@color/ds_accent"
+        app:trackCornerRadius="2dp"/>
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_results" android:layout_width="match_parent"
+        android:layout_height="0dp" android:layout_weight="1"
+        android:scrollbars="none" android:clipToPadding="false"
+        android:paddingTop="8dp" android:paddingBottom="8dp"/>
+    <LinearLayout android:id="@+id/tv_empty"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="center" android:orientation="vertical"
+        android:gravity="center" android:padding="32dp" android:visibility="gone">
+        <ImageView android:layout_width="64dp" android:layout_height="64dp"
+            android:src="@drawable/ic_search" android:alpha="0.2"
+            app:tint="@color/ds_text_secondary" android:contentDescription="no results"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:text="@string/no_results"
+            android:textColor="@color/ds_text_primary" android:textSize="17sp" android:textStyle="bold"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="6dp" android:text="@string/no_results_sub"
+            android:textColor="@color/ds_text_secondary" android:textSize="14sp"/>
+    </LinearLayout>
+</LinearLayout>

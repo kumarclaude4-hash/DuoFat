@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ds_background"
+    android:fitsSystemWindows="true">
+
+    <!-- Toolbar -->
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        style="@style/Widget.DuoShield.Toolbar"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="Add Contact"/>
+
+    <!-- Tabs -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabLayout"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:background="@color/ds_toolbar"
+        app:tabTextColor="@color/ds_text_secondary"
+        app:tabSelectedTextColor="@color/ds_accent"
+        app:tabIndicatorColor="@color/ds_accent"
+        app:tabIndicatorHeight="2.5dp"
+        app:tabTextAppearance="@style/TextAppearance.DuoShield.BodyMedium"
+        app:tabRippleColor="@color/ds_accent_ripple"/>
+
+    <!-- ── Tab 0 — Enter Account ID ─────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/tabEnterIdContent"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:scrollbars="none"
+            android:overScrollMode="never">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="@dimen/ds_spacing_xl"
+                android:paddingEnd="@dimen/ds_spacing_xl"
+                android:paddingTop="@dimen/ds_spacing_xxl"
+                android:paddingBottom="@dimen/ds_spacing_l">
+
+                <!-- Key orbit animation shown during contact exchange -->
+                <FrameLayout
+                    android:id="@+id/keyOrbitFrame"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:layout_marginBottom="16dp"
+                    android:paddingTop="16dp">
+
+                    <com.duoshield.app.ui.KeyOrbitView
+                        android:id="@+id/keyOrbitView"
+                        android:layout_width="100dp"
+                        android:layout_height="100dp"
+                        android:layout_gravity="center"/>
+
+                    <TextView
+                        android:id="@+id/tvOrbitLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Exchanging keys…"
+                        android:textColor="@color/ds_text_secondary"
+                        android:textSize="12sp"
+                        android:layout_gravity="center"
+                        android:layout_marginTop="112dp"/>
+
+                </FrameLayout>
+
+                <!-- Account ID input -->
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.DuoShield.TextInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="Enter Account ID">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etPartnerCode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textNoSuggestions"
+                        android:textColor="@color/ds_text_primary"
+                        android:textSize="16sp"
+                        android:fontFamily="monospace"
+                        android:letterSpacing="0.04"
+                        android:singleLine="true"
+                        android:imeOptions="actionDone"/>
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <!-- Hint text -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/ds_spacing_m"
+                    android:text="Enter your contact&#8217;s Account ID or scan their QR code to start a secure conversation."
+                    android:textAppearance="@style/TextAppearance.DuoShield.BodyMedium"
+                    android:gravity="center"/>
+
+                <!-- Divider with OR -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="@dimen/ds_spacing_xl"
+                    android:layout_marginBottom="@dimen/ds_spacing_xl">
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/ds_header_border_width"
+                        android:layout_weight="1"
+                        android:background="@color/ds_divider"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="YOUR ACCOUNT ID"
+                        android:textAppearance="@style/TextAppearance.DuoShield.Label"
+                        android:paddingStart="@dimen/ds_spacing_m"
+                        android:paddingEnd="@dimen/ds_spacing_m"/>
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="@dimen/ds_header_border_width"
+                        android:layout_weight="1"
+                        android:background="@color/ds_divider"/>
+                </LinearLayout>
+
+                <!-- ID card with Copy / QR / Share buttons -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_id_card_outline"
+                    android:padding="@dimen/ds_spacing_l">
+
+                    <!-- ID text -->
+                    <TextView
+                        android:id="@+id/tvMyCode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/ds_text_primary"
+                        android:textSize="17sp"
+                        android:fontFamily="monospace"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.05"
+                        android:gravity="center"
+                        android:layout_marginBottom="@dimen/ds_spacing_l"
+                        android:singleLine="true"
+                        android:ellipsize="end"/>
+
+                    <!-- Action buttons row -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCopyCode"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="@dimen/ds_spacing_xs"
+                            android:text="Copy"
+                            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+                            android:textColor="@color/ds_accent"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            app:strokeColor="@color/ds_accent"
+                            app:strokeWidth="1dp"
+                            app:cornerRadius="@dimen/ds_corner_radius_button"
+                            app:icon="@drawable/ic_copy"
+                            app:iconSize="14dp"
+                            app:iconGravity="textStart"
+                            app:iconTint="@color/ds_accent"/>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnShowQr"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="@dimen/ds_spacing_xs"
+                            android:layout_marginEnd="@dimen/ds_spacing_xs"
+                            android:text="QR"
+                            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+                            android:textColor="@color/ds_accent"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            app:strokeColor="@color/ds_accent"
+                            app:strokeWidth="1dp"
+                            app:cornerRadius="@dimen/ds_corner_radius_button"
+                            app:icon="@drawable/ic_qr_code"
+                            app:iconSize="14dp"
+                            app:iconGravity="textStart"
+                            app:iconTint="@color/ds_accent"/>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnShare"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="@dimen/ds_spacing_xs"
+                            android:text="Share"
+                            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+                            android:textColor="@color/ds_accent"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            app:strokeColor="@color/ds_accent"
+                            app:strokeWidth="1dp"
+                            app:cornerRadius="@dimen/ds_corner_radius_button"
+                            app:icon="@drawable/ic_share"
+                            app:iconSize="14dp"
+                            app:iconGravity="textStart"
+                            app:iconTint="@color/ds_accent"/>
+
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Tip -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/ds_spacing_m"
+                    android:text="💡 Share your ID or QR code with a contact so they can find you."
+                    android:textAppearance="@style/TextAppearance.DuoShield.Caption"
+                    android:gravity="center"/>
+
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- Progress -->
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progressPairing"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:indeterminate="true"
+            app:indicatorColor="@color/ds_accent"
+            app:trackColor="@color/ds_divider"/>
+
+        <!-- Add Contact button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPair"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginStart="@dimen/ds_spacing_xl"
+            android:layout_marginEnd="@dimen/ds_spacing_xl"
+            android:layout_marginTop="@dimen/ds_spacing_s"
+            android:layout_marginBottom="@dimen/ds_spacing_xxl"
+            android:text="Add Contact"
+            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+            android:textColor="@color/ds_text_on_accent"
+            app:backgroundTint="@color/ds_accent"
+            app:cornerRadius="@dimen/ds_corner_radius_card"/>
+
+    </LinearLayout>
+
+    <!-- ── Tab 1 — Scan QR Code ─────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/tabScanQrContent"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:visibility="gone"
+        android:paddingStart="@dimen/ds_spacing_xxl"
+        android:paddingEnd="@dimen/ds_spacing_xxl"
+        android:paddingBottom="40dp">
+
+        <!-- QR icon with glow -->
+        <FrameLayout
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:layout_marginBottom="@dimen/ds_spacing_xl">
+
+            <View
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:background="@drawable/bg_empty_state"
+                android:alpha="0.8"/>
+
+            <ImageView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_qr_code"
+                app:tint="@color/ds_accent"
+                android:contentDescription="QR Code"/>
+        </FrameLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Scan your contact&#8217;s QR code with your camera, or pick a QR image from your gallery."
+            android:textAppearance="@style/TextAppearance.DuoShield.BodyMedium"
+            android:gravity="center"
+            android:layout_marginBottom="36dp"/>
+
+        <!-- Camera scan button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnScanQr"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:layout_marginBottom="@dimen/ds_spacing_m"
+            android:text="Scan with Camera"
+            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+            android:textColor="@color/ds_text_on_accent"
+            app:backgroundTint="@color/ds_accent"
+            app:cornerRadius="@dimen/ds_corner_radius_card"
+            app:icon="@drawable/ic_qr_code"
+            app:iconSize="18dp"
+            app:iconGravity="textStart"
+            app:iconTint="@color/ds_text_on_accent"/>
+
+        <!-- Gallery pick button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnGallery"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:text="Choose from Gallery"
+            android:textAppearance="@style/TextAppearance.DuoShield.Button"
+            android:textColor="@color/ds_accent"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            app:strokeColor="@color/ds_accent"
+            app:strokeWidth="1.5dp"
+            app:cornerRadius="@dimen/ds_corner_radius_card"
+            app:icon="@drawable/ic_image"
+            app:iconSize="18dp"
+            app:iconGravity="textStart"
+            app:iconTint="@color/ds_accent"/>
+
+    </LinearLayout>
+
+</LinearLayout>

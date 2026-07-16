@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="10dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="3dp"
+    android:paddingBottom="3dp">
+
+    <!-- Pin indicator row -->
+    <LinearLayout
+        android:id="@+id/pinIndicatorRow"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="6dp"
+        android:paddingBottom="3dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/pinIndicator"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📌 Pinned"
+            android:textSize="12sp"
+            android:textColor="@color/accent"/>
+    </LinearLayout>
+
+    <!-- Sender label -->
+    <TextView
+        android:id="@+id/senderLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:textColor="@color/accent"
+        android:fontFamily="sans-serif-medium"
+        android:paddingStart="4dp"
+        android:paddingBottom="3dp"
+        android:visibility="gone"/>
+
+    <!-- Bubble wrapper -->
+    <FrameLayout
+        android:id="@+id/bubbleWrapper"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:id="@+id/messageBubble"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="13dp"
+            android:paddingEnd="13dp"
+            android:paddingTop="9dp"
+            android:paddingBottom="7dp"
+            android:maxWidth="290dp">
+
+            <!-- Reply preview -->
+            <LinearLayout
+                android:id="@+id/replyPreviewContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:background="@drawable/bg_reply_preview"
+                android:layout_marginBottom="9dp"
+                android:minHeight="44dp"
+                android:visibility="gone">
+
+                <View
+                    android:layout_width="3.5dp"
+                    android:layout_height="match_parent"
+                    android:minHeight="44dp"
+                    android:background="@color/ds_accent"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="7dp"
+                    android:paddingBottom="7dp">
+
+                    <TextView
+                        android:id="@+id/replyAuthorText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="12.5sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/ds_accent"
+                        android:fontFamily="sans-serif-medium"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:visibility="gone"/>
+
+                    <TextView
+                        android:id="@+id/replyPreviewText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textSize="12.5sp"
+                        android:textColor="@color/ds_text_secondary"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        android:layout_marginTop="1dp"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Text message -->
+            <TextView
+                android:id="@+id/messageText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="15.5sp"
+                android:textColor="@color/ds_text_primary"
+                android:lineSpacingExtra="2dp"
+                android:lineSpacingMultiplier="1.2"
+                android:visibility="gone"/>
+
+            <!-- Image message -->
+            <ImageView
+                android:id="@+id/messageImage"
+                android:layout_width="230dp"
+                android:layout_height="170dp"
+                android:scaleType="centerCrop"
+                android:contentDescription="Image"
+                android:background="@drawable/bg_media_rounded"
+                android:clipToOutline="true"
+                android:outlineProvider="background"
+                android:visibility="gone"/>
+
+            <!-- Video message -->
+            <FrameLayout
+                android:id="@+id/videoContainer"
+                android:layout_width="230dp"
+                android:layout_height="170dp"
+                android:background="@drawable/bg_media_rounded"
+                android:clipToOutline="true"
+                android:outlineProvider="background"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/videoThumbnail"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:scaleType="centerCrop"
+                    android:background="#FF0D1825"
+                    android:contentDescription="Video"/>
+
+                <FrameLayout
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:layout_gravity="center"
+                    android:background="#88000000">
+
+                    <ImageView
+                        android:id="@+id/videoPlayBtn"
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_play_video"
+                        android:tint="#FFFFFFFF"
+                        android:contentDescription="Play video"/>
+                </FrameLayout>
+            </FrameLayout>
+
+            <!-- Contact card -->
+            <LinearLayout
+                android:id="@+id/contactCardContainer"
+                android:layout_width="200dp"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="6dp"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:src="@drawable/ic_person"
+                    android:tint="#AAFFFFFF"
+                    android:layout_marginEnd="10dp"
+                    android:contentDescription="Contact"/>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/cardName"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFFFF"
+                        android:textSize="14.5sp"/>
+
+                    <TextView
+                        android:id="@+id/cardUid"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="12sp"
+                        android:textColor="#AAFFFFFF"/>
+
+                    <Button
+                        android:id="@+id/cardCopyBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:text="Copy ID"
+                        android:textSize="12sp"
+                        android:textColor="@color/accent"
+                        style="@style/Widget.AppCompat.Button.Borderless"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="0dp"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Voice note player — WhatsApp-style single row -->
+            <LinearLayout
+                android:id="@+id/voiceNoteContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:minWidth="220dp"
+                android:visibility="gone">
+
+                <!-- Solid circular play/pause button -->
+                <ImageView
+                    android:id="@+id/voicePlayPauseBtn"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:src="@drawable/ic_play_audio"
+                    android:tint="#FFFFFF"
+                    android:background="@drawable/bg_voice_play_circle"
+                    android:padding="10dp"
+                    android:contentDescription="Play voice note"/>
+
+                <!-- Waveform (with progress thumb) + duration, one row like WhatsApp.
+                     Fixed width, NOT layout_weight="1" with 0dp: the parent
+                     (voiceNoteContainer) is wrap_content, and a 0dp+weight child
+                     inside a wrap_content LinearLayout gets measured against the
+                     remaining AT_MOST space of the *screen*, not a real width cap —
+                     since plain LinearLayout doesn't support android:maxWidth, that
+                     let the waveform (and the whole bubble around it) balloon out to
+                     almost full screen width. A fixed dp width keeps the bubble sized
+                     like every other bubble. -->
+                <com.duoshield.app.ui.WaveformView
+                    android:id="@+id/voiceWaveform"
+                    android:layout_width="140dp"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="8dp"/>
+
+                <TextView
+                    android:id="@+id/voiceDuration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textSize="10.5sp"
+                    android:textColor="#80FFFFFF"
+                    android:fontFamily="monospace"
+                    android:minWidth="28dp"
+                    android:gravity="end"/>
+
+                <!-- Trailing slot: partner avatar (idle) swaps to a speed pill while
+                     this note is playing. Hidden entirely for the sender's own idle
+                     notes — see MessageAdapter#bindMessage voice branch. -->
+                <FrameLayout
+                    android:id="@+id/voiceTrailingSlot"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="8dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/voiceAvatarImg"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:scaleType="centerCrop"
+                        android:visibility="gone"
+                        android:contentDescription="Sender avatar"/>
+
+                    <TextView
+                        android:id="@+id/voiceAvatarInitial"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:gravity="center"
+                        android:background="@drawable/bg_avatar_circle"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"/>
+
+                    <TextView
+                        android:id="@+id/voiceSpeedPill"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/bg_voice_speed_pill"
+                        android:gravity="center"
+                        android:minWidth="36dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="1x"
+                        android:textColor="#FFFFFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:visibility="gone"/>
+                </FrameLayout>
+            </LinearLayout>
+
+            <!-- Link preview card -->
+            <LinearLayout
+                android:id="@+id/linkPreviewCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#14FFFFFF"
+                android:layout_marginTop="7dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/linkPreviewImage"
+                    android:layout_width="match_parent"
+                    android:layout_height="90dp"
+                    android:scaleType="centerCrop"
+                    android:contentDescription="Link preview image"
+                    android:visibility="gone"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:layout_width="3dp"
+                        android:layout_height="match_parent"
+                        android:background="@color/accent"/>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:paddingStart="9dp"
+                        android:paddingEnd="9dp"
+                        android:paddingTop="7dp"
+                        android:paddingBottom="7dp">
+
+                        <TextView
+                            android:id="@+id/linkPreviewDomain"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textSize="12sp"
+                            android:textColor="@color/accent"
+                            android:textAllCaps="true"
+                            android:letterSpacing="0.06"/>
+
+                        <TextView
+                            android:id="@+id/linkPreviewTitle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="12.5sp"
+                            android:textColor="#EEFFFFFF"
+                            android:textStyle="bold"
+                            android:maxLines="2"
+                            android:ellipsize="end"
+                            android:layout_marginTop="2dp"/>
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Meta row: edited + timestamp + tick -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_gravity="end"
+                android:layout_marginTop="4dp">
+
+                <TextView
+                    android:id="@+id/editedLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="edited"
+                    android:textSize="12sp"
+                    android:textColor="@color/ds_text_tertiary"
+                    android:layout_marginEnd="5dp"
+                    android:visibility="gone"/>
+
+                <TextView
+                    android:id="@+id/messageTimestamp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="10.5sp"
+                    android:textColor="@color/ds_text_timestamp"
+                    android:layout_marginEnd="5dp"/>
+
+                <ImageView
+                    android:id="@+id/tickIcon"
+                    android:layout_width="15dp"
+                    android:layout_height="15dp"
+                    android:visibility="gone"
+                    android:contentDescription="Status"/>
+
+                <ImageView
+                    android:id="@+id/starIcon"
+                    android:layout_width="13dp"
+                    android:layout_height="13dp"
+                    android:src="@android:drawable/btn_star_big_on"
+                    android:tint="@color/ds_text_tertiary"
+                    android:layout_marginStart="4dp"
+                    android:visibility="gone"
+                    android:contentDescription="Starred"/>
+            </LinearLayout>
+
+            <!-- Seen-at label -->
+            <TextView
+                android:id="@+id/tvSeenAt"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:textSize="9.5sp"
+                android:textColor="#5500C9E0"
+                android:fontFamily="sans-serif"
+                android:letterSpacing="0.02"
+                android:layout_marginTop="1dp"
+                android:visibility="gone"/>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Reaction pill -->
+    <TextView
+        android:id="@+id/reactionText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="20sp"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="3dp"
+        android:elevation="2dp"
+        android:visibility="gone"/>
+
+</LinearLayout>

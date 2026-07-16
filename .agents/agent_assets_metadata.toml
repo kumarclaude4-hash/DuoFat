@@ -1,0 +1,272 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "YveYtRv1oKjYOAkefp1pO"
+uri = "file://DuoShield-debug.zip"
+type = "unspecified"
+title = "DuoShield-debug.apk (zipped, 80 MB)"
+
+[[outputs]]
+id = "jFTRyXPEtUH4c2CFrVuhw"
+uri = "file://app/build/outputs/apk/debug/DuoShield-debug.zip"
+type = "unspecified"
+title = "DuoShield-debug.apk (debug build)"
+
+[[outputs]]
+id = "4ss2AQBA86PZUx153Auq1"
+uri = "file://app/build/outputs/apk/debug/DuoShield-ui-v2.zip"
+type = "unspecified"
+title = "DuoShield UI v2 — Replies + Reactions"
+
+[[outputs]]
+id = "mcPhhWDvJOFvPiBXVLZDp"
+uri = "file://app/build/outputs/apk/debug/DuoShield-reply-scroll.zip"
+type = "unspecified"
+title = "DuoShield — Reply Scroll + Highlight"
+
+[[outputs]]
+id = "eUZhTY8mlKPLWOi4ZtFmh"
+uri = "file://app/build/outputs/apk/debug/duoshield-debug.zip"
+type = "unspecified"
+title = "DuoShield — UI Refined + Perf APKs (arm64 + armv7 + x86_64)"
+
+[[outputs]]
+id = "fu0AaUmTZCZEuPNP6tSBJ"
+uri = "file://app/build/outputs/apk/debug/duoshield-shield-assembly.zip"
+type = "unspecified"
+title = "DuoShield — Shield Assembly Splash APKs (arm64 + armv7 + x86_64)"
+
+[[outputs]]
+id = "N0NFytJljzxk3qccC97mZ"
+uri = "file://app/build/outputs/apk/debug/DuoShield-v1.1-debug.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — debug APK (unzip to get app-debug.apk)"
+
+[[outputs]]
+id = "ZZrjyl4g2cN_nJJC2XU7n"
+uri = "file://app/build/outputs/apk/debug/DuoShield-v1.1-mobile.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — mobile-only APK (112 MB → 53 MB zipped)"
+
+[[outputs]]
+id = "OkjqCV_cEgArYAOp8YJHO"
+uri = "file://DuoShield-v1.1-fixed.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — Notifications + Crash Fixes"
+
+[[outputs]]
+id = "JGMfRxrKifwlUNanWoTD_"
+uri = "file://DuoShield-APKs.zip"
+type = "unspecified"
+title = "DuoShield APKs — contacts fix + all updates"
+
+[[outputs]]
+id = "IIr19S76OtBtkdVJsTYi7"
+uri = "file://DuoShield-v1.2-debug.zip"
+type = "unspecified"
+title = "DuoShield v1.2 Debug APK"
+
+[[outputs]]
+id = "s2fckVVbqGSjP2-1VL0Hf"
+uri = "file://DuoShield-v1.2-duress-fix.zip"
+type = "unspecified"
+title = "DuoShield v1.2 — Duress PIN Fix"
+
+[[outputs]]
+id = "inkS6Om8muNoKJ1JEGZDO"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.2-release.zip"
+type = "unspecified"
+title = "DuoShield v1.2 — Signed Release APK"
+
+[[outputs]]
+id = "Hdsu5qVLa3TxyOYTPbMMR"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.2-backup-fixed.zip"
+type = "unspecified"
+title = "DuoShield v1.2 — Backup Fixed Release APK"
+
+[[outputs]]
+id = "uwkZFuU1Re6s6JnqRh2kk"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.3-delete-sync.zip"
+type = "unspecified"
+title = "DuoShield v1.3 — Delete Sync + B2 Fix"
+
+[[outputs]]
+id = "rBAy-Xv5Jx5Kcoum7NYJN"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.4-b2fix.zip"
+type = "unspecified"
+title = "DuoShield v1.4 — B2 Fix (trim credentials)"
+
+[[outputs]]
+id = "ms01-spYC_XeYUnq55r_V"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.4-release.zip"
+type = "unspecified"
+title = "DuoShield v1.4 — Release APK (signed, B2 key fixed)"
+
+[[outputs]]
+id = "umpIKRNVMQOKZ0jTPhsO4"
+uri = "file://app/build/outputs/apk/debug/DuoShield-v1.4-debug.zip"
+type = "unspecified"
+title = "DuoShield v1.4 — Debug APK (B2 key fixed)"
+
+[[outputs]]
+id = "qtk_n-JATISjPQlIYTH8X"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.4-final.zip"
+type = "unspecified"
+title = "DuoShield v1.4 Final — B2 key + bucket trim fixed"
+
+[[outputs]]
+id = "aj767czuUPaI78gg8acFM"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.5-smooth.zip"
+type = "unspecified"
+title = "DuoShield v1.5 — No duplicates • Fast images • Fixed viewer"
+
+[[outputs]]
+id = "SwG0u7EabXmdLSevlintg"
+uri = "file://app/build/outputs/apk/release/DuoShield-release.tar.gz"
+type = "unspecified"
+title = "DuoShield Release APK (tar.gz)"
+
+[[outputs]]
+id = "5o3dOUX5pRwoQjtJtOc7c"
+uri = "file://app/build/outputs/apk/release/DuoShield-release-v2.tar.gz"
+type = "unspecified"
+title = "DuoShield Release APK — All Fixes Applied"
+
+[[outputs]]
+id = "DNJewQOUHlrwN6fxBSXTs"
+uri = "file://DuoShield-v1.3-release.zip"
+type = "unspecified"
+title = "DuoShield v1.3 — Release APK"
+
+[[outputs]]
+id = "a9ruGBfMoB9qEbcNJlJlh"
+uri = "file://DuoShield-v1.4-release.zip"
+type = "unspecified"
+title = "DuoShield v1.4 — Release APK"
+
+[[outputs]]
+id = "mYWvNs5KIfQEM3mGFm6gi"
+uri = "file://DuoShield-server-update.zip"
+type = "unspecified"
+title = "DuoShield Push Server — Updated (with /mintToken)"
+
+[[outputs]]
+id = "PHmvZV012tNRER9wDrbE5"
+uri = "file://app/build/outputs/apk/release/duoshield-v1.1-release.apk.gz"
+type = "unspecified"
+title = "DuoShield v1.1 — Release APK (gzipped, all 6 fixes)"
+
+[[outputs]]
+id = "MHpa09T2VmoYGB8i2NA6B"
+uri = "file://DuoShield-v1.2-release.zip"
+type = "unspecified"
+title = "DuoShield v1.2 — WhatsApp-Style Backup Release APK"
+
+[[outputs]]
+id = "yh5Q5KJ3ftA7_4z1_bixv"
+uri = "file://app/build/outputs/apk/release/duoshield-v1.3-release.zip"
+type = "unspecified"
+title = "DuoShield v1.3 — Release APK (zipped)"
+
+[[outputs]]
+id = "dpk3jw5G_J4NcJabAx6xo"
+uri = "file://app/build/outputs/apk/release/duoshield-release.tar.gz"
+type = "unspecified"
+title = "DuoShield — Signed Release APK (tar.gz)"
+
+[[outputs]]
+id = "x80FEMp671ex0YHfPNFr3"
+uri = "file://app/build/outputs/apk/release/duoshield-release.zip"
+type = "unspecified"
+title = "DuoShield v1.3 — Final Signed Release APK"
+
+[[outputs]]
+id = "1RDELPV6Ib9_XrsLpUNiV"
+uri = "file://DuoShield-release.zip"
+type = "unspecified"
+title = "DuoShield-release.apk (v1.1)"
+
+[[outputs]]
+id = "WckBECGTKa7CDunPuKr1p"
+uri = "file://DuoShield-v1.1.tar.gz"
+type = "unspecified"
+title = "DuoShield v1.1 APK (tar.gz)"
+
+[[outputs]]
+id = "49612r1ky2D2Lxb73-LYj"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.1-release.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — Release APK (103 MB, clean build)"
+
+[[outputs]]
+id = "TD8KJsVs2QNePlff5-I-E"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.1-storage-diag.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — with Storage Diagnostics"
+
+[[outputs]]
+id = "D66JjSRzmScGzp2nDNJBQ"
+uri = "file://app/build/outputs/apk/release/DuoShield-v1.1-fixed.zip"
+type = "unspecified"
+title = "DuoShield v1.1 — Fixed Release APK (fresh build, 103 MB)"
+
+[[outputs]]
+id = "MYCxASj2V-ilJ_QBF51w8"
+uri = "file://firestore-rules.md"
+type = "text"
+title = "DuoShield Firestore Security Rules"
+
+[[outputs]]
+id = "BrgQZZFlzaZr7aCeOViQ7"
+uri = "file://app/build/outputs/apk/debug/app-debug.apk"
+type = "unspecified"
+title = "DuoShield debug APK (voice bubble sizing + real waveform persistence)"
+
+[[outputs]]
+id = "0o4kSND7uj3mWbbow31bg"
+uri = "file://apk-output/DuoShield-v1.3-POCO-C51-32bit.apk"
+type = "unspecified"
+title = "DuoShield v1.3 — POCO C51 / Vivo Y11 (32-bit armeabi-v7a)"
+
+[[outputs]]
+id = "z9PBfjJt7JzESuVK7rKG2"
+uri = "file://apk-output/DuoShield-v1.3-Realme12X-64bit.apk"
+type = "unspecified"
+title = "DuoShield v1.3 — Realme 12X 5G (64-bit arm64-v8a)"
+
+[[outputs]]
+id = "WNgrlgiBPV4NhcW4PRV0u"
+uri = "file://apk-output/DuoShield-v1.3.1-POCO-C51-32bit.apk"
+type = "unspecified"
+title = "DuoShield v1.3.1 — POCO C51 / Vivo Y11 (32-bit)"
+
+[[outputs]]
+id = "pL3VRfAN-IOtke5GFNnws"
+uri = "file://apk-output/DuoShield-v1.3.1-Realme12X-64bit.apk"
+type = "unspecified"
+title = "DuoShield v1.3.1 — Realme 12X 5G (64-bit)"
+
+[[outputs]]
+id = "ljzARHTl1MpYX9DGgS-0T"
+uri = "file://apks/armeabi_final/app-armeabi-v7a-release.apk"
+type = "unspecified"
+title = "DuoShield — 32-bit (POCO C51 / Vivo Y11)"
+
+[[outputs]]
+id = "lynOsTJt4sb_2EfGwfzHt"
+uri = "file://apks/arm64_final/app-arm64-v8a-release.apk"
+type = "unspecified"
+title = "DuoShield — 64-bit (Realme 12X 5G)"
+
+[[outputs]]
+id = "VLEbZ34gGF66YiUvJM-tp"
+uri = "file://apks/armeabi_out/app-armeabi-v7a-release.apk"
+type = "unspecified"
+title = "DuoShield — 32-bit (POCO C51 / Vivo Y11)"
+
+[[outputs]]
+id = "iZP_n4AiJxUVrllWBsC0R"
+uri = "file://apks/arm64_out/app-arm64-v8a-release.apk"
+type = "unspecified"
+title = "DuoShield — 64-bit (Realme 12X 5G)"

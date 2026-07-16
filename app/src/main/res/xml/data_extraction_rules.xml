@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31) data-extraction rules.
+  DuoShield stores end-to-end-encrypted messages, Signal identity keys, and
+  PIN hashes locally — none of this should ever leave the device via cloud
+  backup or device-to-device transfer.  Every domain is excluded here to
+  complement android:allowBackup="false" and android:fullBackupContent="false"
+  which only apply to older API levels.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

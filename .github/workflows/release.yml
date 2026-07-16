@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release tag (e.g. v1.3.1). Leave blank to use versionName from build.gradle.'
+        required: false
+        type: string
+
+# Only one release job runs at a time; a newer push cancels an in-progress build.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # create/delete releases and tags
+
+jobs:
+  release:
+    name: Build & publish signed release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - run: chmod +x gradlew
+
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON secret is required for a release build."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Write service-account.json
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          mkdir -p app/src/main/assets
+          if [ -n "$SERVICE_ACCOUNT" ]; then
+            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
+          else
+            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
+            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+              > app/src/main/assets/service-account.json
+          fi
+
+      - name: Write local.properties
+        env:
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+          B2_REGION:          ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                                        > local.properties
+          echo "b2.key.id=${B2_KEY_ID:-}"                                        >> local.properties
+          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                      >> local.properties
+          echo "b2.bucket=${B2_BUCKET:-yyush-duoshield}"                         >> local.properties
+          echo "b2.region=${B2_REGION:-eu-central-003}"                          >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}" >> local.properties
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 secret is missing — cannot sign release APKs."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/duoshield-release.keystore
+
+      - name: Build signed release APKs
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Erase keystore from runner disk
+        if: always()
+        run: rm -f app/duoshield-release.keystore
+
+      # ── Resolve the release tag ──────────────────────────────────────────────
+      # Manual dispatch with an explicit tag  → use it as-is.
+      # Manual dispatch without a tag         → v{versionName}.
+      # Automatic push                        → v{versionName}  (always the same
+      #   rolling tag; old release is replaced and prior ones are deleted below).
+      - name: Resolve release tag
+        id: tag
+        run: |
+          VERSION_NAME=$(grep -m1 'versionName' app/build.gradle | grep -oP '"\K[^"]+')
+
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            TAG="${{ inputs.version_tag }}"
+          else
+            TAG="v${VERSION_NAME}"
+          fi
+
+          echo "name=${TAG}" >> $GITHUB_OUTPUT
+          echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "Resolved release tag: ${TAG}"
+
+      # ── Delete ALL existing releases + their tags ────────────────────────────
+      # Runs after a successful build, before publishing the new release, so we
+      # never have more than one release live at a time.
+      # Uses paginated REST API calls (100 per page) so it never misses releases
+      # regardless of how many have accumulated.
+      - name: Delete all previous releases and tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          PAGE=1
+          TOTAL=0
+
+          while true; do
+            # Fetch one page of releases (id + tag_name pairs).
+            BATCH=$(gh api "repos/${REPO}/releases?per_page=100&page=${PAGE}" \
+              --jq '.[] | "\(.id) \(.tag_name)"' 2>/dev/null || true)
+
+            [ -z "$BATCH" ] && break   # no more releases
+
+            while IFS=' ' read -r RELEASE_ID TAG_NAME; do
+              [ -z "$RELEASE_ID" ] && continue
+              echo "Deleting release '${TAG_NAME}' (id=${RELEASE_ID})..."
+              # Delete the release record
+              gh api --method DELETE "repos/${REPO}/releases/${RELEASE_ID}" \
+                2>/dev/null || echo "  could not delete release ${RELEASE_ID}"
+              # Delete the git tag
+              gh api --method DELETE "repos/${REPO}/git/refs/tags/${TAG_NAME}" \
+                2>/dev/null || echo "  could not delete tag ${TAG_NAME}"
+              TOTAL=$((TOTAL + 1))
+            done <<< "$BATCH"
+
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "Done — deleted ${TOTAL} release(s)."
+
+      # ── Publish the new release ──────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:             ${{ steps.tag.outputs.name }}
+          name:                 "DuoShield ${{ steps.tag.outputs.name }}"
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            Pick the APK for your device architecture:
+
+            | File | Architecture | Devices |
+            |---|---|---|
+            | `app-arm64-v8a-release.apk` | 64-bit | Most phones from 2017 onwards |
+            | `app-armeabi-v7a-release.apk` | 32-bit | Older / budget devices |
+
+            Enable **Install from unknown sources** in Settings → Security, then tap the APK to install.
+
+            ---
+            Built from commit `${{ github.sha }}` on `${{ github.ref_name }}`.
+          files: app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

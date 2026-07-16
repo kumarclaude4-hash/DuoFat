@@ -1,0 +1,35 @@
+# local.properties.template
+# Copy this file to local.properties and fill in your credentials.
+# local.properties is git-ignored — never commit it.
+# Alternatively set these as Replit Secrets (lock icon) — the build reads env vars as fallback.
+
+sdk.dir=/home/runner/android-sdk
+
+# ── Backblaze B2 ─────────────────────────────────────────────────────────────
+b2.key.id=
+b2.application.key=
+b2.bucket=yyush-duoshield
+b2.region=eu-central-003
+
+# ── Push relay server ─────────────────────────────────────────────────────────
+push.server.url=https://duofat.onrender.com
+
+# ── Cloudflare TURN relay ─────────────────────────────────────────────────────
+# Obtain these from: Cloudflare Dashboard → Calls → TURN Keys
+#
+# turn.url accepts a comma-separated list — supply all three variants for best
+# relay connectivity (UDP, TCP, TLS).  Example:
+#
+# turn.url=turn:turn.cloudflare.com:3478?transport=udp,turn:turn.cloudflare.com:3478?transport=tcp,turns:turn.cloudflare.com:5349?transport=tcp
+#
+# The TURN username and credential come from the "Generate Credentials" button
+# in the Cloudflare dashboard (they are time-scoped tokens, not your API key).
+turn.url=
+turn.username=
+turn.credential=
+
+# ── Release signing ───────────────────────────────────────────────────────────
+# Set these as Replit Secrets — do not put them here.
+# KEY_ALIAS=duoshield
+# KEY_PASSWORD=
+# STORE_PASSWORD=

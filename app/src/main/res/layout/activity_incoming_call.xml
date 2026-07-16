@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:background="#191620">
+
+    <View android:layout_width="0dp" android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Avatar -->
+    <FrameLayout
+        android:layout_width="120dp"
+        android:layout_height="120dp">
+        <TextView
+            android:id="@+id/tvIncomingAvatarInitial"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:gravity="center"
+            android:textColor="#FFFFFF"
+            android:textSize="48sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_avatar_circle"
+            android:text="?" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/tvIncomingCallerName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="#FFFFFF"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginTop="24dp" />
+
+    <TextView
+        android:id="@+id/tvIncomingCallType"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Incoming voice call"
+        android:textColor="#A0A0A0"
+        android:textSize="16sp"
+        android:layout_marginTop="8dp" />
+
+    <View android:layout_width="0dp" android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Accept / Decline buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingBottom="64dp"
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp">
+
+        <!-- Decline -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center">
+            <ImageView
+                android:id="@+id/btnDeclineCall"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:src="@drawable/ic_call_end"
+                android:padding="20dp"
+                android:background="@drawable/bg_call_btn_red"
+                android:tint="#FFFFFF"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="Decline" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Decline"
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                android:layout_marginTop="10dp" />
+        </LinearLayout>
+
+        <!-- Accept -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center">
+            <ImageView
+                android:id="@+id/btnAcceptCall"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:src="@drawable/ic_call_phone"
+                android:padding="20dp"
+                android:background="@drawable/bg_call_btn_green"
+                android:tint="#FFFFFF"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="Accept" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Accept"
+                android:textColor="#CCFFFFFF"
+                android:textSize="14sp"
+                android:layout_marginTop="10dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+        App implements Configuration.Provider for on-demand WorkManager init.
+        The default WorkManagerInitializer is removed at runtime by WorkManager itself
+        when it detects Configuration.Provider; suppress the stale lint check.
+    -->
+    <issue id="RemoveWorkManagerInitializer" severity="ignore" />
+
+    <!--
+        BUG-R04 fix: elevate security-critical lint checks to errors so they
+        fail the build on release.  abortOnError is still false globally to allow
+        informational warnings, but these specific categories are hard errors.
+    -->
+    <issue id="HardcodedCredentials"          severity="error" />
+    <issue id="SetTextI18n"                   severity="warning" />
+    <issue id="TrustAllX509TrustManager"      severity="error" />
+    <issue id="AllowAllHostnameVerifier"       severity="error" />
+    <issue id="BadHostnameVerifier"            severity="error" />
+    <issue id="SSLCertificateSocketFactoryCreateSocket" severity="error" />
+    <issue id="SecureRandom"                  severity="error" />
+    <issue id="LogTagMismatch"                severity="warning" />
+</lint>

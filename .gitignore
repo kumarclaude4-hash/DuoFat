@@ -1,0 +1,94 @@
+# =============================================================================
+# Android
+# =============================================================================
+
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Local configuration — never commit
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+captures/
+__pycache__/
+
+# APKs and bundles
+*.apk
+*.ap_
+*.aab
+
+# Keystore files — NEVER commit signing keys
+*.keystore
+*.jks
+KEYSTORE_BASE64_VALUE.txt
+
+# =============================================================================
+# Firebase / Google
+# =============================================================================
+
+# google-services.json contains API keys — use the template instead
+app/google-services.json
+
+# Firebase service account — server-side credential
+app/src/main/assets/service-account.json
+
+# Firebase emulator data
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log
+
+# =============================================================================
+# Secrets and credentials
+# =============================================================================
+
+*.env
+.env.*
+secrets/
+
+# =============================================================================
+# Replit workspace files — not part of the project
+# =============================================================================
+
+.agents/
+.local/
+.cache/
+.replit
+replit.nix
+replit.md
+skills-lock.json
+attached_assets/
+
+# =============================================================================
+# Android SDK (installed locally in CI / dev containers — never commit)
+# =============================================================================
+
+.android-sdk/
+
+# =============================================================================
+# Logs and temp files
+# =============================================================================
+
+*.log
+*.tmp
+
+# =============================================================================
+# OS artefacts
+# =============================================================================
+
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Git LFS (kept for historical zips — do not remove these lines)
+# =============================================================================
+
+# Keep the pre-stripped libsignal JAR required for CI builds
+!app/libs/libsignal-client-0.54.1-stripped.jar

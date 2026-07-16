@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.duoshield.app">
+
+    <!-- ── Permissions ────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- ── Calling permissions ──────────────────────────── -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!--
+      Required for the incoming-call full-screen intent to launch IncomingCallActivity
+      over the lock screen on Android 14+ (API 34+).  Without this the system silently
+      drops the full-screen intent and the callee never sees the ringing screen.
+      On Android 10-13 the permission is auto-granted; on 14+ the user must allow it
+      via Settings → Apps → Special app access → Display over other apps.
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <application
+        android:name=".DuoShieldApp"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:label="DuoShield"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DuoShield"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        android:enableOnBackInvokedCallback="true"
+        android:extractNativeLibs="false"
+        android:allowNativeHeapPointerTagging="false">
+
+        <!-- ── LAUNCHER ────────────────────────────────────── -->
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.DuoShield.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Sign-In (no longer the launcher) -->
+        <activity
+            android:name=".SignInActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"/>
+
+        <!-- ── Main routing trampoline ────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <!-- ── Conversations & Chat ────────────────────────── -->
+        <activity
+            android:name=".ConversationListActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ChatMediaActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
+        <!-- ── Security ────────────────────────────────────── -->
+        <activity
+            android:name=".LockScreenActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DuoShield" />
+
+        <!-- ── Identity / Recovery (Phase 1a) ────────────── -->
+        <activity
+            android:name=".DisplayNameActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.SeedPhraseDisplayActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.RestoreFromSeedActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- ── Add Contact & Settings ──────────────────────── -->
+        <activity
+            android:name=".ui.AddContactActivity"
+            android:exported="true">
+            <!-- Handle duoshield://add/<userId> deep links -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="duoshield"
+                    android:host="add" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.SecurityPrivacySettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.AppearanceNotificationsSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
+            android:name=".ui.BackupStorageSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
+            android:name=".ui.DangerZoneSettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <activity
+            android:name=".ui.ManageUnlockCodesActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- ── Utility screens ────────────────────────────── -->
+        <activity
+            android:name=".KeyFingerprintActivity"
+            android:exported="false"
+            android:parentActivityName=".ChatMediaActivity" />
+
+        <activity
+            android:name=".FullScreenImageActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DuoShield.FullScreen" />
+
+        <activity
+            android:name=".MediaViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DuoShield.FullScreen" />
+
+        <activity
+            android:name=".MediaSendPreviewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DuoShield.FullScreen"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".MessageSearchActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- ── Group conversations ────────────────────────── -->
+        <activity
+            android:name=".GroupChatActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:parentActivityName=".ConversationListActivity" />
+
+        <activity
+            android:name=".ui.CreateGroupActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:parentActivityName=".ConversationListActivity" />
+
+        <activity
+            android:name=".ui.StorageDiagnosticsActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.SettingsActivity" />
+
+        <!-- ── Voice & Video Calling ──────────────────────── -->
+        <activity
+            android:name=".call.CallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.DuoShield.FullScreen"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+
+        <activity
+            android:name=".call.IncomingCallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.DuoShield.FullScreen"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+
+        <activity
+            android:name=".call.CallHistoryActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.DuoShield" />
+
+        <activity
+            android:name=".call.InCallChatActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.DuoShield.FullScreen" />
+
+        <activity
+            android:name=".ui.ContactDetailActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.DuoShield" />
+
+        <!-- ── FCM Push Notifications ─────────────────────── -->
+        <service
+            android:name=".notifications.DuoShieldMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- ── Broadcast Receivers ────────────────────────── -->
+        <receiver
+            android:name=".notifications.MarkReadReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notifications.NotificationDismissReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notifications.MessageReplyReceiver"
+            android:exported="false" />
+
+        <!-- ── FileProvider (for image/PDF sharing) ──────── -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>
