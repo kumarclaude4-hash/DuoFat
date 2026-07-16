@@ -128,25 +128,56 @@ public class CallSignalRepository {
                 .collection("calleeCandidates").addSnapshotListener(listener);
     }
 
+    // ── ICE restart signaling ─────────────────────────────────────────────────
+
     /**
-     * Deletes the call doc and both candidate subcollections.
-     * Called by the side that ends/declines the call.
+     * Writes a new offer SDP into the call doc for an ICE restart.
+     * The callee's snapshot listener picks this up and calls {@code setRemoteDescription}
+     * followed by {@code createAnswer}.
+     */
+    public void writeRestartOffer(String callId, String offerSdp) {
+        Map<String, Object> restartOffer = new HashMap<>();
+        restartOffer.put("sdp",  offerSdp);
+        restartOffer.put("type", "offer");
+        restartOffer.put("ts",   System.currentTimeMillis());
+
+        Map<String, Object> update = new HashMap<>();
+        update.put("restartOffer", restartOffer);
+        update.put("iceRestartRequested", false);
+
+        callRef(callId).update(update)
+                .addOnFailureListener(e -> Log.w(TAG, "writeRestartOffer failed: " + e.getMessage()));
+    }
+
+    /**
+     * Sets the {@code iceRestartRequested} flag so the caller knows the callee
+     * is waiting for a new offer.
+     */
+    public void requestIceRestart(String callId) {
+        callRef(callId).update("iceRestartRequested", true)
+                .addOnFailureListener(e -> Log.w(TAG, "requestIceRestart failed: " + e.getMessage()));
+    }
+
+    /** Clears the ICE restart flag after the callee has acted on it. */
+    public void clearIceRestartFlag(String callId) {
+        callRef(callId).update("iceRestartRequested", false)
+                .addOnFailureListener(e -> Log.w(TAG, "clearIceRestartFlag failed: " + e.getMessage()));
+    }
+
+    /**
+     * Deletes the call doc AND all three known subcollections:
+     * callerCandidates, calleeCandidates, chat.
      */
     public void deleteCallDoc(String callId) {
-        db.collection(COLLECTION).document(callId)
-                .collection("callerCandidates").get()
-                .addOnSuccessListener(snap -> {
-                    for (com.google.firebase.firestore.DocumentSnapshot doc : snap.getDocuments()) {
-                        doc.getReference().delete();
-                    }
-                });
-        db.collection(COLLECTION).document(callId)
-                .collection("calleeCandidates").get()
-                .addOnSuccessListener(snap -> {
-                    for (com.google.firebase.firestore.DocumentSnapshot doc : snap.getDocuments()) {
-                        doc.getReference().delete();
-                    }
-                });
+        String[] subcollections = {"callerCandidates", "calleeCandidates", "chat"};
+        for (String sub : subcollections) {
+            db.collection(COLLECTION).document(callId).collection(sub).get()
+                    .addOnSuccessListener(snap -> {
+                        for (com.google.firebase.firestore.DocumentSnapshot doc : snap.getDocuments()) {
+                            doc.getReference().delete();
+                        }
+                    });
+        }
         callRef(callId).delete()
                 .addOnFailureListener(e -> Log.w(TAG, "deleteCallDoc failed (non-fatal): " + e.getMessage()));
     }

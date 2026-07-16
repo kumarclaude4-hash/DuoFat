@@ -3,6 +3,7 @@ package com.duoshield.app.call;
 import android.content.Intent;
 import android.graphics.Color;
 import android.media.AudioDeviceInfo;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -94,6 +95,9 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View     bannerTurnWarning;
     private TextView tvTurnWarningText;
 
+    // ── Audio focus ───────────────────────────────────────────────────────────
+    private AudioFocusRequest audioFocusRequest; // API 26+
+
     // ── State ─────────────────────────────────────────────────────────────────
     private boolean isMuted      = false;
     private boolean isCameraOff  = false;
@@ -181,18 +185,32 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         super.onDestroy();
         historyExecutor.shutdownNow();
         durationHandler.removeCallbacksAndMessages(null);
+
+        // Release SurfaceViewRenderers FIRST — this removes the video sink from the tracks
+        // so the tracks can be safely disposed by hangup()/release() without rendering to a
+        // released surface (which can crash the GL thread in libwebrtc).
+        releaseVideoRenderers();
+
         if (callManager != null) {
             CallManager.CallState state = callManager.getCurrentState();
             if (state != CallManager.CallState.ENDED && state != CallManager.CallState.FAILED) {
+                // Normal teardown: write "ended" to Firestore, then free native resources.
                 callManager.hangup();
+            } else {
+                // Remote side ended the call: Firestore was already updated; we still must
+                // free the PeerConnection, tracks, camera, EglBase, and factory — if we skip
+                // this the process holds the camera open indefinitely and the GC cannot
+                // collect the native peer-connection allocation.
+                callManager.release();
             }
         }
-        releaseVideoRenderers();
+
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         if (am != null) {
             am.setMode(AudioManager.MODE_NORMAL);
             am.setSpeakerphoneOn(false);
         }
+        abandonAudioFocus();
     }
 
     // ── View binding ──────────────────────────────────────────────────────────
@@ -285,9 +303,52 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
     private void setupAudio() {
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (am != null) {
-            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-            am.setSpeakerphoneOn(false);
+        if (am == null) return;
+
+        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+        am.setSpeakerphoneOn(false);
+
+        // Request exclusive audio focus so music / media apps pause automatically
+        // and the OS knows a voice call is in progress (affects Bluetooth routing,
+        // notification ducking, etc.). Mandatory for WhatsApp-quality call behaviour.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(new android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build())
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener(focusChange -> {
+                        // LOSS_TRANSIENT: another app briefly grabbed focus (e.g. TTS).
+                        // LOSS: e.g. another call arrived; mute ourselves so the user
+                        // doesn't hear feedback. We don't hang up automatically because
+                        // the user may return to us.
+                        if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                                || focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                            if (callManager != null) callManager.setMuted(true);
+                        } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
+                            if (callManager != null) callManager.setMuted(isMuted);
+                        }
+                    })
+                    .build();
+            am.requestAudioFocus(audioFocusRequest);
+        } else {
+            //noinspection deprecation
+            am.requestAudioFocus(null,
+                    AudioManager.STREAM_VOICE_CALL,
+                    AudioManager.AUDIOFOCUS_GAIN);
+        }
+    }
+
+    private void abandonAudioFocus() {
+        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) return;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O
+                && audioFocusRequest != null) {
+            am.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            //noinspection deprecation
+            am.abandonAudioFocus(null);
         }
     }
 
@@ -443,13 +504,13 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
         if (tracker.isLimitReached()) {
             tvTurnWarningText.setText(
-                    "⚠\uFE0F Monthly TURN data cap reached (900 GB). "
+                    "⚠\uFE0F Monthly TURN data cap reached (100 GB). "
                     + "This call uses direct connection only — it may not connect on mobile data or corporate networks.");
             bannerTurnWarning.setBackgroundColor(0xCC8B1A00);
             bannerTurnWarning.setVisibility(View.VISIBLE);
         } else if (tracker.isNearLimit()) {
             tvTurnWarningText.setText(
-                    "⚠\uFE0F TURN relay usage is above 800 GB this month ("
+                    "⚠\uFE0F TURN relay usage is above 90 GB this month ("
                     + tracker.getSummary() + "). "
                     + "Calls may stop relaying near month end.");
             bannerTurnWarning.setBackgroundColor(0xCC7B2F00);

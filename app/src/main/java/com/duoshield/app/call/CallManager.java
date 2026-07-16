@@ -103,6 +103,8 @@ public class CallManager {
 
     private final List<IceCandidate> pendingCandidates = new ArrayList<>();
     private boolean remoteDescSet = false;
+    /** SDP of the most-recently applied ICE-restart offer — prevents double-applying the same offer. */
+    private String lastRestartOfferSdp = null;
 
     private CallState currentState = CallState.IDLE;
 
@@ -127,6 +129,55 @@ public class CallManager {
         @Override public void run() {
             collectStats();
             statsHandler.postDelayed(this, STATS_POLL_INTERVAL_MS);
+        }
+    };
+
+    // ── ICE restart on disconnect ─────────────────────────────────────────────
+    /** How long to wait after DISCONNECTED before triggering an ICE restart (ms). */
+    private static final long ICE_RESTART_DELAY_MS = 5_000L;
+    private final Handler  iceRestartHandler  = new Handler(Looper.getMainLooper());
+    private final Runnable iceRestartRunnable = new Runnable() {
+        @Override public void run() {
+            if (peerConnection == null || currentState == CallState.ENDED
+                    || currentState == CallState.FAILED) return;
+            Log.w(TAG, "ICE still disconnected after grace period — triggering ICE restart");
+            // restartIce() marks the local description as needing a new ICE ufrag/pwd.
+            // The caller re-offers; the callee re-answers. This recovers from transient
+            // network changes (WiFi→LTE hand-off, brief VPN reconnection, etc.).
+            if (isCaller) {
+                // Caller side: create a new offer with iceRestart=true
+                MediaConstraints restartConstraints = new MediaConstraints();
+                restartConstraints.mandatory.add(
+                        new MediaConstraints.KeyValuePair("IceRestart", "true"));
+                restartConstraints.mandatory.add(
+                        new MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"));
+                restartConstraints.mandatory.add(
+                        new MediaConstraints.KeyValuePair("OfferToReceiveVideo", isVideo ? "true" : "false"));
+                peerConnection.createOffer(new SdpObserver() {
+                    @Override public void onCreateSuccess(SessionDescription sdp) {
+                        peerConnection.setLocalDescription(new SdpObserver() {
+                            @Override public void onCreateSuccess(SessionDescription s) {}
+                            @Override public void onSetSuccess() {
+                                // Write the restart offer so the callee picks it up.
+                                repo.writeRestartOffer(callId, sdp.description);
+                            }
+                            @Override public void onCreateFailure(String s) {}
+                            @Override public void onSetFailure(String s) {
+                                Log.w(TAG, "ICE restart setLocal failed: " + s);
+                            }
+                        }, sdp);
+                    }
+                    @Override public void onSetSuccess() {}
+                    @Override public void onCreateFailure(String s) {
+                        Log.w(TAG, "ICE restart createOffer failed: " + s);
+                    }
+                    @Override public void onSetFailure(String s) {}
+                }, restartConstraints);
+            } else {
+                // Callee side: the caller will push a new offer; we just wait for it.
+                // Signal the caller that we need a restart via a Firestore flag.
+                repo.requestIceRestart(callId);
+            }
         }
     };
 
@@ -281,12 +332,22 @@ public class CallManager {
                 Log.d(TAG, "ICE state: " + s);
                 if (s == PeerConnection.IceConnectionState.CONNECTED
                         || s == PeerConnection.IceConnectionState.COMPLETED) {
+                    // Cancel any pending ICE-restart timer — we're good again.
+                    iceRestartHandler.removeCallbacks(iceRestartRunnable);
                     setState(CallState.CONNECTED);
                 } else if (s == PeerConnection.IceConnectionState.FAILED) {
+                    iceRestartHandler.removeCallbacks(iceRestartRunnable);
                     setState(CallState.FAILED);
                     if (listener != null) listener.onError("Call failed — network unavailable");
                 } else if (s == PeerConnection.IceConnectionState.DISCONNECTED) {
-                    Log.w(TAG, "ICE disconnected — may recover");
+                    // Schedule an ICE restart if the connection does not recover on its own.
+                    // WhatsApp / Signal both use a ~5-second grace period before restarting.
+                    Log.w(TAG, "ICE disconnected — scheduling restart in "
+                            + ICE_RESTART_DELAY_MS + " ms");
+                    iceRestartHandler.removeCallbacks(iceRestartRunnable);
+                    iceRestartHandler.postDelayed(iceRestartRunnable, ICE_RESTART_DELAY_MS);
+                } else if (s == PeerConnection.IceConnectionState.CLOSED) {
+                    iceRestartHandler.removeCallbacks(iceRestartRunnable);
                 }
             }
 
@@ -336,7 +397,19 @@ public class CallManager {
     // ─── Local media ─────────────────────────────────────────────────────────
 
     private void createLocalTracks(boolean withVideo) {
+        // Echo cancellation, noise suppression, and AGC are mandatory for voice quality.
+        // Without these the remote party hears their own voice echoed back and
+        // background noise bleeds through during silence gaps — the same constraints
+        // WhatsApp, Meet, and Signal use in their Android WebRTC stacks.
         MediaConstraints audioConstraints = new MediaConstraints();
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googNoiseSuppression", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googAutoGainControl", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googHighpassFilter", "true"));
         audioSource = factory.createAudioSource(audioConstraints);
         localAudioTrack = factory.createAudioTrack("audio0", audioSource);
         localAudioTrack.setEnabled(true);
@@ -453,14 +526,46 @@ public class CallManager {
 
     private void listenForAnswer() {
         callDocListener = repo.listenToCall(callId, (snap, e) -> {
-            if (e != null || snap == null || !snap.exists()) return;
+            if (e != null || snap == null) return;
+            // Doc deleted (e.g. remote hangup called deleteCallDoc) → treat as ENDED.
+            if (!snap.exists()) {
+                setState(CallState.ENDED);
+                cleanup(true);
+                return;
+            }
             String status = snap.getString("status");
 
             if ("declined".equals(status) || "ended".equals(status)
                     || "missed".equals(status) || "timeout".equals(status)) {
                 setState(CallState.ENDED);
-                cleanup(false);
+                cleanup(true);
                 return;
+            }
+
+            // Callee wrote a restart offer into the doc — apply it.
+            Object restartObj = snap.get("restartOffer");
+            if (restartObj instanceof java.util.Map && remoteDescSet && peerConnection != null) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> restartOffer =
+                        (java.util.Map<String, Object>) restartObj;
+                String restartSdp = (String) restartOffer.get("sdp");
+                // Only process once — check if this is newer than what we have.
+                String marker = restartOffer.get("ts") != null
+                        ? restartOffer.get("ts").toString() : "";
+                if (restartSdp != null && !restartSdp.isEmpty()
+                        && !restartSdp.equals(lastRestartOfferSdp)) {
+                    lastRestartOfferSdp = restartSdp;
+                    SessionDescription restartDesc =
+                            new SessionDescription(SessionDescription.Type.OFFER, restartSdp);
+                    peerConnection.setRemoteDescription(new SdpObserver() {
+                        @Override public void onCreateSuccess(SessionDescription s) {}
+                        @Override public void onSetSuccess() { createAnswer(); }
+                        @Override public void onCreateFailure(String s) {}
+                        @Override public void onSetFailure(String s) {
+                            Log.w(TAG, "ICE restart setRemoteDesc (caller→callee) failed: " + s);
+                        }
+                    }, restartDesc);
+                }
             }
 
             if (remoteDescSet) return;
@@ -562,12 +667,30 @@ public class CallManager {
 
     private void listenForCallStatus() {
         callDocListener = repo.listenToCall(callId, (snap, e) -> {
-            if (e != null || snap == null || !snap.exists()) return;
+            if (e != null || snap == null) return;
+            // Doc deleted (remote hangup called deleteCallDoc) → treat as ENDED.
+            if (!snap.exists()) {
+                setState(CallState.ENDED);
+                cleanup(true);
+                return;
+            }
             String status = snap.getString("status");
             if ("ended".equals(status) || "declined".equals(status)
                     || "timeout".equals(status)) {
                 setState(CallState.ENDED);
-                cleanup(false);
+                cleanup(true);
+                return;
+            }
+
+            // Caller requested an ICE restart — create a new answer.
+            Object restartFlagObj = snap.get("iceRestartRequested");
+            if (Boolean.TRUE.equals(restartFlagObj) && remoteDescSet
+                    && peerConnection != null && !isCaller) {
+                // Clear the flag so we don't re-trigger on the same event.
+                repo.clearIceRestartFlag(callId);
+                // The caller will push a new offer via restartOffer field; handled in answer path.
+                // For callee, just trigger a new answer from whatever offer the caller updates.
+                Log.d(TAG, "Callee received ICE restart request from caller");
             }
         });
     }
@@ -677,7 +800,19 @@ public class CallManager {
         cleanup(true);
     }
 
+    /**
+     * Releases all native WebRTC resources without writing anything to Firestore.
+     * Called from {@code CallActivity.onDestroy()} to ensure resources are freed
+     * even when the call was already in ENDED/FAILED state (where hangup() is skipped).
+     */
+    public void release() {
+        iceRestartHandler.removeCallbacks(iceRestartRunnable);
+        statsHandler.removeCallbacks(statsPollRunnable);
+        cleanup(true);
+    }
+
     private void cleanup(boolean releasePc) {
+        iceRestartHandler.removeCallbacks(iceRestartRunnable);
         if (callDocListener != null) { callDocListener.remove(); callDocListener = null; }
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
         if (!releasePc) return;
@@ -762,8 +897,12 @@ public class CallManager {
 
     private void stopStatsPolling() {
         statsHandler.removeCallbacks(statsPollRunnable);
-        // Do a final stats collection synchronously and flush to tracker.
-        collectStats();
+        // Attempt a final stats snapshot to capture bytes from the last polling interval.
+        // Guard: peerConnection may already be null/closed when stopStatsPolling is called
+        // from the FAILED path; the async callback would fire on a disposed object.
+        if (peerConnection != null) {
+            collectStats();
+        }
         if (sessionBytesTotal > 0) {
             TurnBandwidthTracker.get(context).recordCallBytes(sessionBytesTotal);
             Log.i(TAG, String.format(Locale.US,

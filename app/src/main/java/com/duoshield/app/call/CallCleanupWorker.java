@@ -109,7 +109,8 @@ public class CallCleanupWorker extends Worker {
 
     private void deleteDocAndSubcollections(String callId) {
         FirebaseFirestore db = FirebaseFirestore.getInstance();
-        String[] subcollections = {"callerCandidates", "calleeCandidates"};
+        // Include "chat" — in-call ephemeral messages must also be swept.
+        String[] subcollections = {"callerCandidates", "calleeCandidates", "chat"};
         for (String sub : subcollections) {
             db.collection("calls").document(callId).collection(sub).get()
                     .addOnSuccessListener(snap -> {
