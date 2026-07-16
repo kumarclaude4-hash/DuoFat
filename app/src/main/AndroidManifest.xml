@@ -28,6 +28,13 @@
       via Settings → Apps → Special app access → Display over other apps.
     -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Keep the process alive during active calls (required by CallForegroundService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ requires declaring microphone/camera foreground service types. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Required for PROXIMITY_SCREEN_OFF_WAKE_LOCK (screen-off when held to ear). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
@@ -228,6 +235,18 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.DuoShield" />
+
+        <!-- ── Call foreground service ───────────────────────── -->
+        <!--
+          Keeps the process alive (and holds microphone/camera) while a call is active.
+          The foregroundServiceType must match what is declared in FOREGROUND_SERVICE_MICROPHONE
+          / FOREGROUND_SERVICE_CAMERA permissions above, and what CallForegroundService passes
+          to startForeground() on API 29+.
+        -->
+        <service
+            android:name=".call.CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
 
         <!-- ── FCM Push Notifications ─────────────────────── -->
         <service

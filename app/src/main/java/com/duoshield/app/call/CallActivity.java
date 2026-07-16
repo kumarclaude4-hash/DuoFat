@@ -36,6 +36,12 @@ import org.webrtc.VideoTrack;
 import com.duoshield.app.call.TurnBandwidthTracker;
 import com.duoshield.app.call.TurnCredentialFetcher;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.os.PowerManager;
+import androidx.core.content.ContextCompat;
+
 /**
  * Full-screen call UI — voice or video.
  *
@@ -98,6 +104,51 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     // ── Audio focus ───────────────────────────────────────────────────────────
     private AudioFocusRequest audioFocusRequest; // API 26+
 
+    // ── Proximity screen-off (voice calls only) ───────────────────────────────
+    /** Turns the screen off when the phone is held to the user's ear during voice calls. */
+    private PowerManager.WakeLock proximityWakeLock;
+
+    // ── Wired headset routing ─────────────────────────────────────────────────
+    /** Re-routes audio when the user plugs/unplugs wired earphones mid-call. */
+    private final BroadcastReceiver headsetReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!AudioManager.ACTION_HEADSET_PLUG.equals(intent.getAction())) return;
+            int state = intent.getIntExtra("state", -1);
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) return;
+            if (state == 1) {
+                // Headset plugged in — route to headset (earpiece/headphones), not speaker.
+                am.setSpeakerphoneOn(false);
+                isSpeakerOn = false;
+                if (callManager != null) callManager.setSpeakerOn(false);
+            } else if (state == 0) {
+                // Headset unplugged — restore the speaker state from before it was plugged in.
+                am.setSpeakerphoneOn(isSpeakerOn);
+                if (callManager != null) callManager.setSpeakerOn(isSpeakerOn);
+            }
+        }
+    };
+
+    // ── Notification quick-action receiver ────────────────────────────────────
+    /** Handles "End" and "Mute" taps on the ongoing call notification. */
+    private final BroadcastReceiver notifActionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (CallForegroundService.BROADCAST_END_CALL.equals(intent.getAction())) {
+                if (callManager != null) callManager.hangup();
+                finish();
+            } else if (CallForegroundService.BROADCAST_TOGGLE_MUTE.equals(intent.getAction())) {
+                isMuted = !isMuted;
+                if (callManager != null) callManager.setMuted(isMuted);
+                if (btnMute != null) {
+                    btnMute.setImageResource(isMuted ? R.drawable.ic_mic_off : R.drawable.ic_mic);
+                    btnMute.setAlpha(isMuted ? 0.5f : 1f);
+                }
+            }
+        }
+    };
+
     // ── State ─────────────────────────────────────────────────────────────────
     private boolean isMuted      = false;
     private boolean isCameraOff  = false;
@@ -157,6 +208,24 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         callManager = new CallManager(this);
         callManager.setListener(this);
 
+        // Start the foreground service — this keeps the process alive when the user
+        // presses Home, preventing the OS from killing the WebRTC PeerConnection.
+        startForegroundCallService();
+
+        // Acquire the proximity wake lock so the screen turns off when the phone is
+        // held to the user's ear during a voice call (same behaviour as WhatsApp).
+        acquireProximityWakeLock();
+
+        // Register receivers: (a) wired headset plug/unplug for auto audio-routing,
+        // (b) End/Mute actions from the ongoing call notification.
+        IntentFilter headsetFilter = new IntentFilter(AudioManager.ACTION_HEADSET_PLUG);
+        registerReceiver(headsetReceiver, headsetFilter);
+        IntentFilter notifFilter = new IntentFilter();
+        notifFilter.addAction(CallForegroundService.BROADCAST_END_CALL);
+        notifFilter.addAction(CallForegroundService.BROADCAST_TOGGLE_MUTE);
+        ContextCompat.registerReceiver(this, notifActionReceiver, notifFilter,
+                ContextCompat.RECEIVER_NOT_EXPORTED);
+
         // Warm the TURN credential cache from disk (EncryptedSharedPreferences) before
         // prefetch runs.  If credentials were persisted from a previous call and are still
         // within the 1-hour TTL, buildIceServers() in CallManager will use them immediately
@@ -190,6 +259,17 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        // Stop the foreground service (removes the ongoing notification).
+        stopForegroundCallService();
+
+        // Release the proximity wake lock — screen can turn back on normally.
+        releaseProximityWakeLock();
+
+        // Unregister dynamic broadcast receivers.
+        try { unregisterReceiver(headsetReceiver);   } catch (Exception ignored) {}
+        try { unregisterReceiver(notifActionReceiver); } catch (Exception ignored) {}
+
         historyExecutor.shutdownNow();
         durationHandler.removeCallbacksAndMessages(null);
 
@@ -313,7 +393,15 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         if (am == null) return;
 
         am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-        am.setSpeakerphoneOn(false);
+        // Video calls default to speaker-on (WhatsApp/FaceTime behaviour — the user is
+        // looking at the screen so earpiece audio doesn't make sense).
+        // Voice calls default to earpiece so the user can hold the phone naturally.
+        if (isVideo) {
+            am.setSpeakerphoneOn(true);
+            isSpeakerOn = true;
+        } else {
+            am.setSpeakerphoneOn(false);
+        }
 
         // Request exclusive audio focus so music / media apps pause automatically
         // and the OS knows a voice call is in progress (affects Bluetooth routing,
@@ -620,6 +708,71 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         record.durationSeconds = durationSec;
         historyExecutor.execute(() ->
                 AppDatabase.getInstance(getApplicationContext()).callHistoryDao().insert(record));
+    }
+
+    // ── Foreground service lifecycle ──────────────────────────────────────────
+
+    /**
+     * Starts {@link CallForegroundService}, which shows the ongoing call notification and
+     * keeps the process alive when the user presses Home during a call.
+     */
+    private void startForegroundCallService() {
+        Intent svcIntent = new Intent(this, CallForegroundService.class);
+        svcIntent.setAction(CallForegroundService.ACTION_START);
+        svcIntent.putExtra(CallForegroundService.EXTRA_PARTNER_NAME, partnerName);
+        svcIntent.putExtra(CallForegroundService.EXTRA_CALL_ID, callId);
+        svcIntent.putExtra(CallForegroundService.EXTRA_IS_VIDEO, isVideo);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svcIntent);
+        } else {
+            startService(svcIntent);
+        }
+    }
+
+    /** Stops {@link CallForegroundService} — removes the ongoing notification. */
+    private void stopForegroundCallService() {
+        Intent svcIntent = new Intent(this, CallForegroundService.class);
+        svcIntent.setAction(CallForegroundService.ACTION_STOP);
+        startService(svcIntent);
+    }
+
+    // ── Proximity wake lock (screen off when held to ear) ─────────────────────
+
+    /**
+     * Acquires {@code PROXIMITY_SCREEN_OFF_WAKE_LOCK} for voice calls, which makes the OS
+     * automatically turn the screen off when the proximity sensor detects a nearby object
+     * (e.g. the user's cheek).  This prevents accidental touches and saves battery —
+     * the same mechanism used by WhatsApp, Signal, and the stock Phone app.
+     *
+     * <p>Not used for video calls — the user needs to see the screen.
+     */
+    private void acquireProximityWakeLock() {
+        if (isVideo) return;
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pm == null) return;
+        if (pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+            proximityWakeLock = pm.newWakeLock(
+                    PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                    "duoshield:proximity_call");
+            proximityWakeLock.setReferenceCounted(false);
+            proximityWakeLock.acquire();
+            Log.d(TAG, "Proximity wake lock acquired");
+        }
+    }
+
+    /**
+     * Releases the proximity wake lock.
+     *
+     * <p>Passes {@code PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY} (flag value 1) so
+     * the screen only turns back on once the sensor reports "far" — prevents a brief
+     * screen flash if the phone is still against the user's ear when the call ends.
+     */
+    private void releaseProximityWakeLock() {
+        if (proximityWakeLock != null && proximityWakeLock.isHeld()) {
+            proximityWakeLock.release(PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY);
+            proximityWakeLock = null;
+            Log.d(TAG, "Proximity wake lock released");
+        }
     }
 
     // ── Renderer release ──────────────────────────────────────────────────────

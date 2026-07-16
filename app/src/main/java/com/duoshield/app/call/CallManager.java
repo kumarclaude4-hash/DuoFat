@@ -181,6 +181,27 @@ public class CallManager {
         }
     };
 
+    // ── Connection timeout ────────────────────────────────────────────────────
+    /**
+     * Maximum time to wait for ICE to reach CONNECTED/COMPLETED before giving up.
+     * WhatsApp uses ~60 s; Signal uses ~45 s.  We use 60 s to be generous on
+     * slow-start TURN relays while still not leaving the caller hanging indefinitely.
+     */
+    private static final long CONNECTION_TIMEOUT_MS = 60_000L;
+    private final Handler  connectionTimeoutHandler  = new Handler(Looper.getMainLooper());
+    private final Runnable connectionTimeoutRunnable = () -> {
+        if (currentState != CallState.CONNECTED
+                && currentState != CallState.ENDED
+                && currentState != CallState.FAILED) {
+            Log.w(TAG, "Connection timed out after " + CONNECTION_TIMEOUT_MS / 1000 + "s");
+            setState(CallState.FAILED);
+            if (listener != null) {
+                listener.onError("Call connection timed out — check your network");
+            }
+            cleanup(true);
+        }
+    };
+
     // ── 32-bit thermal watchdog ───────────────────────────────────────────────
     /**
      * Hard bitrate ceiling for 32-bit devices (armeabi-v7a, e.g. POCO C51 / Helio G36).
@@ -501,6 +522,9 @@ public class CallManager {
         this.chatIdForCall = chatId;
 
         setState(CallState.OUTGOING_RINGING);
+        // Start connection watchdog — if ICE never reaches CONNECTED within 60 s, fail the call.
+        connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
+        connectionTimeoutHandler.postDelayed(connectionTimeoutRunnable, CONNECTION_TIMEOUT_MS);
         initFactory();
         peerConnection = createPeerConnection();
         createLocalTracks(video);
@@ -621,6 +645,9 @@ public class CallManager {
         this.callId = callId;
 
         setState(CallState.CONNECTING);
+        // Start connection watchdog — if ICE never reaches CONNECTED within 60 s, fail the call.
+        connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
+        connectionTimeoutHandler.postDelayed(connectionTimeoutRunnable, CONNECTION_TIMEOUT_MS);
         initFactory();
         peerConnection = createPeerConnection();
         createLocalTracks(video);
@@ -832,6 +859,7 @@ public class CallManager {
     }
 
     private void cleanup(boolean releasePc) {
+        connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
         iceRestartHandler.removeCallbacks(iceRestartRunnable);
         if (callDocListener != null) { callDocListener.remove(); callDocListener = null; }
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
@@ -854,10 +882,13 @@ public class CallManager {
         currentState = state;
         if (listener != null) listener.onCallStateChanged(state);
 
-        // Start stats polling once connected; stop and flush on terminal states.
         if (state == CallState.CONNECTED) {
+            // Cancel the connection watchdog — we made it.
+            connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
             startStatsPolling();
         } else if (state == CallState.ENDED || state == CallState.FAILED) {
+            // Cancel the watchdog in case we're terminating before ever connecting.
+            connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
             stopStatsPolling();
         }
     }
