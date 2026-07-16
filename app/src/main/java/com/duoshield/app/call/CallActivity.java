@@ -157,10 +157,17 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         callManager = new CallManager(this);
         callManager.setListener(this);
 
+        // Warm the TURN credential cache from disk (EncryptedSharedPreferences) before
+        // prefetch runs.  If credentials were persisted from a previous call and are still
+        // within the 1-hour TTL, buildIceServers() in CallManager will use them immediately
+        // without racing against the async HTTP fetch — important for calls answered right
+        // after a process kill (tap-on-notification cold start).
+        TurnCredentialCache.init(this);
+
         // Prefetch fresh TURN credentials from the push server (non-blocking).
         // By the time startCall/acceptCall fires ICE gathering, credentials are
         // typically ready; if the fetch is still in-flight the call falls back
-        // to STUN-only and TurnCredentialFetcher logs a warning.
+        // to the disk-warmed cache or STUN-only if both are cold/expired.
         TurnCredentialFetcher.prefetch();
 
         // Show TURN quota warning before the call starts so user knows what to expect.

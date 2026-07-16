@@ -183,16 +183,36 @@ public class CallManager {
 
     // ── 32-bit thermal watchdog ───────────────────────────────────────────────
     /**
-     * Max video bitrate for 32-bit devices (armeabi-v7a, e.g. POCO C51 / Helio G36).
-     * 400 kbps at 640×480 is well within the encoder budget; 64-bit devices use
-     * 800 kbps at 1280×720 (visually identical to 1 500 kbps on a phone screen
-     * and halves TURN relay costs when the call cannot go direct P2P).
+     * Hard bitrate ceiling for 32-bit devices (armeabi-v7a, e.g. POCO C51 / Helio G36).
+     *
+     * <p>The Helio G36's four Cortex-A53 cores cannot sustain 1 280×720 @ 30 fps
+     * encoding without thermal throttle.  640×480 @ 24 fps + 400 kbps cap is the
+     * largest operating point that stays below the thermal threshold on a 5-minute
+     * call in a warm room.
+     *
+     * <p>64-bit devices use BWE (Bandwidth Estimation) instead of a static cap — see
+     * {@link #applyBitrateConstraints()} for the full rationale.
      */
-    private static final int VIDEO_BITRATE_32BIT_BPS  = 400_000;
-    private static final int VIDEO_BITRATE_64BIT_BPS  = 800_000;
-    /** Audio bitrate: 32-bit gets OPUS 20 kbps; 64-bit gets 32 kbps. */
-    private static final int AUDIO_BITRATE_32BIT_BPS  =  20_000;
-    private static final int AUDIO_BITRATE_64BIT_BPS  =  32_000;
+    private static final int VIDEO_BITRATE_32BIT_MAX_BPS =  400_000;
+    private static final int VIDEO_BITRATE_32BIT_MIN_BPS =  150_000;
+    private static final int AUDIO_BITRATE_32BIT_MAX_BPS =   20_000;
+    private static final int AUDIO_BITRATE_32BIT_MIN_BPS =   16_000;
+
+    /**
+     * BWE floor for 64-bit devices — the minimum bitrate libwebrtc's congestion
+     * controller is allowed to settle at.  Without a floor, BWE may drop all the way
+     * to ~30 kbps on a saturated network, causing severe pixelation.  With a floor it
+     * degrades gracefully to the lowest still-watchable quality and only drops further
+     * if the network genuinely cannot sustain even that.
+     *
+     * <p>No {@code maxBitrateBps} is set for 64-bit; instead, libwebrtc's Transport-CC
+     * congestion controller picks the ceiling dynamically.  On a good WiFi connection
+     * it will climb to 2–4 Mbps naturally; on LTE it typically stabilises at 500–
+     * 1 500 kbps — all without hard-coding a number that is almost certainly wrong
+     * for some fraction of network conditions.
+     */
+    private static final int VIDEO_BITRATE_64BIT_MIN_BPS =  300_000;
+    private static final int AUDIO_BITRATE_64BIT_MIN_BPS =   24_000;
 
     /**
      * Thermal step: if the outbound-rtp encoder is delivering fewer than this many
@@ -849,36 +869,67 @@ public class CallManager {
     // ── Bitrate / encoder constraints ─────────────────────────────────────────
 
     /**
-     * Caps bitrate on every video and audio RtpSender.
+     * Configures per-sender bitrate policy immediately after ICE connects.
      *
-     * <p>On 32-bit devices (e.g. POCO C51 / Helio G36) the video encoder is already
-     * running at a reduced 640×480 @ 24fps.  Capping the bitrate to 400 kbps gives
-     * the encoder an easy target that comfortably fits within the Cortex-A53's compute
-     * budget, preventing the encode thread from saturating the CPU and triggering ANR
-     * or audio-glitch conditions on long calls.
+     * <h3>Strategy by device class</h3>
+     *
+     * <b>32-bit (armeabi-v7a) devices</b> — hard ceiling + floor:
+     * <ul>
+     *   <li>Video: {@link #VIDEO_BITRATE_32BIT_MAX_BPS} / {@link #VIDEO_BITRATE_32BIT_MIN_BPS}</li>
+     *   <li>Audio: {@link #AUDIO_BITRATE_32BIT_MAX_BPS} / {@link #AUDIO_BITRATE_32BIT_MIN_BPS}</li>
+     *   <li>Rationale: the Helio G36 (and similar low-end SoCs) cannot encode 640×480 @ 24 fps
+     *       at more than ~400 kbps without thermal throttle.  Locking the ceiling prevents the
+     *       encoder from overshooting on a fast WiFi link and then getting throttled.</li>
+     * </ul>
+     *
+     * <b>64-bit (arm64-v8a) devices</b> — BWE-managed ceiling, floor only:
+     * <ul>
+     *   <li>Video floor: {@link #VIDEO_BITRATE_64BIT_MIN_BPS}; ceiling: {@code null} (BWE)</li>
+     *   <li>Audio floor: {@link #AUDIO_BITRATE_64BIT_MIN_BPS}; ceiling: {@code null} (BWE)</li>
+     *   <li>Rationale: libwebrtc's Transport-CC congestion controller picks a ceiling that
+     *       matches the real available bandwidth — it climbs on good WiFi (1–4 Mbps) and backs
+     *       off on congested LTE without ever hardcoding a number that is wrong for some
+     *       fraction of network conditions.  A floor prevents BWE from degrading past the
+     *       point where the call is unusable rather than just lower quality.</li>
+     * </ul>
      *
      * <p>Called once from {@link #startStatsPolling()} (i.e. on every CONNECTED transition)
      * so it also fires on call resume after a temporary ICE disconnect.
      */
     private void applyBitrateConstraints() {
         if (peerConnection == null) return;
-        int videoBps = is32BitOnly() ? VIDEO_BITRATE_32BIT_BPS : VIDEO_BITRATE_64BIT_BPS;
-        int audioBps = is32BitOnly() ? AUDIO_BITRATE_32BIT_BPS : AUDIO_BITRATE_64BIT_BPS;
+        boolean is32Bit = is32BitOnly();
 
         for (RtpSender sender : peerConnection.getSenders()) {
             if (sender.track() == null) continue;
             RtpParameters params = sender.getParameters();
             if (params == null || params.encodings == null || params.encodings.isEmpty()) continue;
 
-            boolean isVideo = sender.track() instanceof VideoTrack;
-            int cap = isVideo ? videoBps : audioBps;
+            boolean isVideoTrack = sender.track() instanceof VideoTrack;
+
             for (RtpParameters.Encoding enc : params.encodings) {
-                enc.maxBitrateBps = cap;
+                if (is32Bit) {
+                    // Hard ceiling — prevents thermal throttle on weak SoCs.
+                    enc.maxBitrateBps = isVideoTrack
+                            ? VIDEO_BITRATE_32BIT_MAX_BPS : AUDIO_BITRATE_32BIT_MAX_BPS;
+                    enc.minBitrateBps = isVideoTrack
+                            ? VIDEO_BITRATE_32BIT_MIN_BPS : AUDIO_BITRATE_32BIT_MIN_BPS;
+                } else {
+                    // BWE-managed ceiling: null tells libwebrtc to use Transport-CC output.
+                    enc.maxBitrateBps = null;
+                    enc.minBitrateBps = isVideoTrack
+                            ? VIDEO_BITRATE_64BIT_MIN_BPS : AUDIO_BITRATE_64BIT_MIN_BPS;
+                }
             }
             sender.setParameters(params);
             Log.d(TAG, String.format(Locale.US,
-                    "Bitrate cap applied: %s → %d kbps (32-bit=%b)",
-                    isVideo ? "video" : "audio", cap / 1000, is32BitOnly()));
+                    "Bitrate policy: %s — %s, floor=%d kbps (32-bit=%b)",
+                    isVideoTrack ? "video" : "audio",
+                    is32Bit ? "hard cap" : "BWE-managed",
+                    (isVideoTrack
+                            ? (is32Bit ? VIDEO_BITRATE_32BIT_MIN_BPS : VIDEO_BITRATE_64BIT_MIN_BPS)
+                            : (is32Bit ? AUDIO_BITRATE_32BIT_MIN_BPS : AUDIO_BITRATE_64BIT_MIN_BPS)) / 1000,
+                    is32Bit));
         }
     }
 
@@ -1048,8 +1099,15 @@ public class CallManager {
     }
 
     /**
-     * Overrides video {@code maxBitrateBps} on all existing video senders.
-     * Used by the thermal watchdog to tighten the cap after a resolution downgrade.
+     * Applies an emergency video bitrate ceiling after a thermal-downgrade resolution change.
+     *
+     * <p>This is the one case where we force a hard ceiling even on 64-bit devices: the
+     * thermal watchdog has already lowered the capture to 320×240 @ 15 fps because the
+     * encoder was visibly falling behind.  Giving BWE a ceiling consistent with that
+     * resolution (150 kbps) prevents the encoder from immediately clawing back towards its
+     * uncapped target and re-triggering the thermal event.
+     *
+     * @param videoBps hard ceiling in bps (typically 150 000 after downgrade to 320×240 @ 15 fps)
      */
     private void applyBitrateConstraintsForResolution(int videoBps) {
         if (peerConnection == null) return;
@@ -1059,9 +1117,11 @@ public class CallManager {
             if (params == null || params.encodings == null) continue;
             for (RtpParameters.Encoding enc : params.encodings) {
                 enc.maxBitrateBps = videoBps;
+                enc.minBitrateBps = Math.min(enc.minBitrateBps != null
+                        ? enc.minBitrateBps : videoBps, videoBps);
             }
             sender.setParameters(params);
-            Log.d(TAG, "Thermal downgrade: video bitrate capped to " + videoBps / 1000 + " kbps");
+            Log.d(TAG, "Thermal downgrade: video hard cap → " + videoBps / 1000 + " kbps");
         }
     }
 
