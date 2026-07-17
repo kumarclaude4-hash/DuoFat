@@ -275,15 +275,41 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             initVideoRenderers();
         };
 
-        // Hard deadline: start the call after 3 s even if TURN fetch is still in-flight.
-        // Callee ring timeout is 30 s, so 3 s is safe but still generous for slow networks.
-        turnTimeoutHandler.postDelayed(doStartCall, 3_000);
+        // Hard deadline: wait up to 8 s for TURN credentials before starting anyway.
+        //
+        // Why 8 s: calls now use IceTransportsType.RELAY (TURN-only) because virtually
+        // all users are on SIM / CGNAT networks where P2P ICE cannot work.  In RELAY mode,
+        // having no TURN credentials means ICE gathers zero candidates and the call fails
+        // immediately — so the wait time here directly trades user-perceived delay at call
+        // start for a working call rather than an instant failure.  8 s is generous enough
+        // for TurnCredentialFetcher's 3-attempt retry loop (3 × 2 s gap) to complete on a
+        // slow data radio wake-up, while still staying well inside the 30-second callee
+        // ring window.
+        turnTimeoutHandler.postDelayed(() -> {
+            // If TURN credentials are still absent at timeout, warn before starting so
+            // the user understands why the call may not connect on mobile data.
+            if (!TurnCredentialCache.get().isValid()) {
+                Log.e(TAG, "TURN credentials not available after 8 s — call will likely "
+                        + "fail on SIM/CGNAT networks (RELAY-only mode)");
+                Toast.makeText(CallActivity.this,
+                        "Could not reach the relay server — call may not connect on mobile data",
+                        Toast.LENGTH_LONG).show();
+            }
+            doStartCall.run();
+        }, 8_000);
 
         // Preferred path: start as soon as credentials are confirmed ready (typically <1 s
-        // if the disk cache is warm, or 1–3 s for a fresh network fetch).
+        // if the disk cache is warm, or <6 s for a fresh 3-attempt network fetch).
         TurnCredentialFetcher.prefetch(success -> runOnUiThread(() -> {
             Log.d(TAG, "TURN prefetch done (success=" + success + ") — starting call");
             turnTimeoutHandler.removeCallbacks(doStartCall);
+            if (!success && !TurnCredentialCache.get().isValid()) {
+                // All retries exhausted and cache is cold — warn before proceeding.
+                Log.e(TAG, "TURN credential fetch failed (all retries) — call will likely fail on SIM");
+                Toast.makeText(CallActivity.this,
+                        "Could not reach the relay server — call may not connect on mobile data",
+                        Toast.LENGTH_LONG).show();
+            }
             doStartCall.run();
         }));
 

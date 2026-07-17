@@ -22,6 +22,11 @@ import okhttp3.Response;
  * {@code POST /turnCredentials} endpoint and stores them in
  * {@link TurnCredentialCache}.
  *
+ * <p>Designed for SIM / CGNAT users: since all calls are forced through TURN
+ * relay ({@code IceTransportsType.RELAY}), having valid credentials before ICE
+ * starts is mandatory — not optional.  This class therefore retries failed
+ * network attempts before giving up.
+ *
  * <p>Call {@link #prefetch} early (e.g., in {@code CallActivity.onCreate}) so
  * credentials are ready before {@link CallManager#startCall} /
  * {@link CallManager#acceptCall} fires.  Subsequent calls within the 1-hour
@@ -33,9 +38,17 @@ public class TurnCredentialFetcher {
     private static final MediaType JSON_TYPE =
             MediaType.get("application/json; charset=utf-8");
 
+    /**
+     * How many times to attempt the credential fetch before giving up.
+     * SIM networks can have transient 2-3 s connectivity blips; 3 attempts
+     * with a 2-second gap between each covers the majority of those cases.
+     */
+    private static final int  MAX_RETRIES       = 3;
+    private static final long RETRY_DELAY_MS    = 2_000L;
+
     private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
             .build();
 
     public interface Callback {
@@ -49,6 +62,7 @@ public class TurnCredentialFetcher {
 
     /**
      * Fetches TURN credentials if the cache is empty or expired.
+     * Retries up to {@link #MAX_RETRIES} times on failure.
      * Calls {@code callback.onResult(true/false)} on a background thread.
      */
     public static void prefetch(Callback callback) {
@@ -64,7 +78,7 @@ public class TurnCredentialFetcher {
             return;
         }
 
-        // getIdToken runs on the main thread; the network call moves to a bg thread.
+        // getIdToken runs on the main thread; the retry loop moves to a bg thread.
         user.getIdToken(/* forceRefresh= */ false)
             .addOnSuccessListener(result -> {
                 String idToken = result.getToken();
@@ -73,7 +87,8 @@ public class TurnCredentialFetcher {
                     if (callback != null) callback.onResult(false);
                     return;
                 }
-                new Thread(() -> doFetch(idToken, callback), "turn-cred-fetch").start();
+                new Thread(() -> doFetchWithRetry(idToken, MAX_RETRIES, callback),
+                        "turn-cred-fetch").start();
             })
             .addOnFailureListener(e -> {
                 Log.w(TAG, "getIdToken failed: " + e.getMessage());
@@ -81,14 +96,39 @@ public class TurnCredentialFetcher {
             });
     }
 
-    // ── Network call (runs on background thread) ─────────────────────────────
+    // ── Network call with retry (runs on background thread) ──────────────────
 
-    private static void doFetch(String idToken, Callback callback) {
+    /**
+     * Attempts the credential fetch; if it fails and {@code retriesLeft > 0},
+     * sleeps {@link #RETRY_DELAY_MS} then recurses.  Critical for SIM users
+     * whose data radio may take 1-2 s to wake from sleep (3GPP RRC idle→active).
+     */
+    private static void doFetchWithRetry(String idToken, int retriesLeft, Callback callback) {
+        boolean ok = doFetch(idToken);
+        if (ok) {
+            if (callback != null) callback.onResult(true);
+            return;
+        }
+        if (retriesLeft > 0) {
+            Log.w(TAG, "TURN fetch failed — retrying in " + RETRY_DELAY_MS
+                    + " ms (" + retriesLeft + " attempt(s) left)");
+            try { Thread.sleep(RETRY_DELAY_MS); } catch (InterruptedException ignored) {}
+            doFetchWithRetry(idToken, retriesLeft - 1, callback);
+        } else {
+            Log.e(TAG, "TURN credential fetch failed after " + MAX_RETRIES + " attempts");
+            if (callback != null) callback.onResult(false);
+        }
+    }
+
+    /**
+     * Executes one HTTP attempt.  Returns {@code true} on success (credentials
+     * stored in cache), {@code false} on any error.
+     */
+    private static boolean doFetch(String idToken) {
         String baseUrl = BuildConfig.PUSH_SERVER_URL;
         if (baseUrl == null || baseUrl.isEmpty()) {
             Log.w(TAG, "PUSH_SERVER_URL not configured — cannot fetch TURN credentials");
-            if (callback != null) callback.onResult(false);
-            return;
+            return false;
         }
 
         Request request = new Request.Builder()
@@ -100,8 +140,7 @@ public class TurnCredentialFetcher {
         try (Response response = CLIENT.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 Log.w(TAG, "TURN credential fetch HTTP " + response.code());
-                if (callback != null) callback.onResult(false);
-                return;
+                return false;
             }
 
             String body = response.body() != null ? response.body().string() : "{}";
@@ -116,11 +155,11 @@ public class TurnCredentialFetcher {
 
             TurnCredentialCache.get().set(urls, username, credential);
             Log.d(TAG, "TURN credentials cached — " + urls.length + " URL(s)");
-            if (callback != null) callback.onResult(true);
+            return true;
 
         } catch (Exception e) {
-            Log.w(TAG, "TURN credential fetch failed: " + e.getMessage());
-            if (callback != null) callback.onResult(false);
+            Log.w(TAG, "TURN credential fetch attempt failed: " + e.getMessage());
+            return false;
         }
     }
 }

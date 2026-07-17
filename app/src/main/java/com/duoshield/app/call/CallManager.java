@@ -369,14 +369,26 @@ public class CallManager {
         PeerConnection.RTCConfiguration config =
                 new PeerConnection.RTCConfiguration(buildIceServers());
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // Use ALL transport type so the ICE agent can negotiate direct P2P
-        // (srflx / host) and fall back to TURN relay only when P2P genuinely
-        // fails (strict CGNAT / symmetric NAT on both sides).  The previous
-        // RELAY-only mode forced every call through Cloudflare even when both
-        // peers could connect directly, draining the free-tier allowance
-        // unnecessarily.  With ALL, TURN is still available as a fallback but
-        // is not the first choice, keeping most calls free of relay cost.
-        config.iceTransportsType = PeerConnection.IceTransportsType.ALL;
+        // Force RELAY-only ICE transport.
+        //
+        // Rationale: virtually all users are on SIM / mobile data networks.
+        // Mobile carriers use CGNAT (Carrier-Grade NAT) and symmetric NAT by
+        // design — both peers are assigned private IPs from the carrier's shared
+        // address space, so direct P2P (host / srflx candidates) can never
+        // traverse the double-NAT and ICE will fail every time after a 30-60 s
+        // futile wait.
+        //
+        // With IceTransportsType.ALL the ICE agent tries host → srflx → relay in
+        // order, spending 15-30 s on paths that provably cannot work on CGNAT,
+        // then eventually reaching the relay candidate.  That wasted negotiation
+        // time is exactly the lag users experience.
+        //
+        // With RELAY, the ICE agent only gathers and checks relay (TURN) candidates.
+        // On a working TURN connection ICE completes in 1-3 s regardless of NAT
+        // topology — guaranteed connectivity for every SIM user.  The only cost is
+        // that every call routes through Cloudflare, but that is already the case
+        // in practice for CGNAT users; we are just making it explicit and fast.
+        config.iceTransportsType = PeerConnection.IceTransportsType.RELAY;
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
             @Override
