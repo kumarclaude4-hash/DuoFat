@@ -59,7 +59,7 @@
 - [DuoShield security review plan](security-review-plan.md) — 44 findings; F3/F8/F9/F12/F15/F34 fixed + Firestore deployed; remaining open: F1/F2/F5/F11 (arch-level)
 - [DuoShield duress wipe guard](duoshield-duress-wipe-guard.md) — duress_wipe_in_progress flag in duoshield_prefs (commit before intent, remove after signOut); checked in SignInActivity/SplashActivity/MainActivity; logSync() before clearInstance()
 - [DuoShield status race guard](duoshield-status-race-guard.md) — any write of message `status` must transaction-guard against downgrading "read" back to "delivered"; applies to client FCM ACK and server push dispatch alike
-- [DuoShield push server broken](duoshield-push-server-broken.md) — Push Server workflow fails on missing/invalid Firebase service-account credential (GOOGLE_APPLICATION_CREDENTIALS_JSON); pre-existing, user deferred fixing it
+- [DuoShield push server on Render](duoshield-push-server-broken.md) — server is live on Render (https://duoshield.onrender.com); credential lives on Render, not Replit; debug there, not the local workflow
 - [DuoShield git push preference](duoshield-git-push-pref.md) — push every change to origin/main via GIT PAT secret; use existing git config author; never fix Push Server on Replit
 - [DuoShield UX audit 2026-07](duoshield-ux-audit-2026-07.md) — all critical/high-impact items done; Settings now split into 4 sub-screens; Sanctuary UI mode fully removed; onboarding walkthrough + shimmer loading deferred as follow-ups
 - [DuoShield Cloudflare TURN migration](duoshield-turn-cloudflare.md) — TURN_URL is comma-separated; NO_HOST ICE (not RELAY); 100 GB/user/month cap; relay-only byte counting; Settings usage dialog

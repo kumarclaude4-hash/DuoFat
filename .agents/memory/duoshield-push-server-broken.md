@@ -1,19 +1,15 @@
 ---
-name: DuoShield Push Server broken (missing credential)
-description: Push Server workflow fails to start due to missing Firebase service-account credential
+name: DuoShield Push Server — Render deployment
+description: Push server is live on Render, not run locally on Replit
 ---
 
-`server/index.js` requires `GOOGLE_APPLICATION_CREDENTIALS_JSON` (a full Firebase
-service-account JSON) to call `admin.credential.cert()`. Without a valid value it
-fails with `FirebaseAppError: Service account object must contain a string
-"project_id" property` and the "Push Server" workflow exits immediately.
+The push server runs on **Render.com**, not as a Replit workflow.
 
-**Why:** this is a pre-existing environment/config gap, not something introduced
-by app code changes — `npm install` alone gets the workflow to start, but it
-still needs a real service-account secret to actually run.
+- URL: `https://duoshield.onrender.com` (stored as `PUSH_SERVER_URL` env var)
+- Endpoints: `POST /mintToken`, `POST /turnCredentials`, `GET /status`
+- Firebase service-account credential is configured on Render's side — no action needed in Replit
+- The `Push Server` workflow in Replit (if it still exists) is unused; the production server is Render
 
-**How to apply:** the user was asked (2026-07-08) whether to fix it and declined
-for now ("leave it for later"). Don't attempt to silently fix or ignore this the
-next time push notifications need debugging — surface it again if it's blocking
-new work, and get a valid service-account JSON via the environment-secrets flow
-before touching `server/index.js` credential logic further.
+**Why:** Server was migrated to Render for always-on hosting. Render handles the `GOOGLE_APPLICATION_CREDENTIALS_JSON` secret independently.
+
+**How to apply:** When debugging TURN credential failures or push notification issues, check the Render dashboard logs first — not the Replit workflow. `PUSH_SERVER_URL` in local.properties / Replit env vars must point to the Render URL.
