@@ -806,15 +806,18 @@ http.createServer((req, res) => {
     return;
   }
 
+  // Strip query string once for all route checks below
+  const parsedUrl = (req.url || "/").split("?")[0];
+
   // ── GET /health — minimal 200 for UptimeRobot / load-balancer probes ────────
-  if (req.url === "/health") {
+  if (parsedUrl === "/health") {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("OK");
     return;
   }
 
   // ── GET /status — machine-readable JSON stats ────────────────────────────────
-  if (req.url === "/status") {
+  if (parsedUrl === "/status") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       status: "running",
@@ -830,7 +833,7 @@ http.createServer((req, res) => {
   }
 
   // ── GET / — live HTML dashboard ───────────────────────────────────────────────
-  if (req.method === "GET" && (req.url === "/" || req.url === "")) {
+  if ((req.method === "GET" || req.method === "HEAD") && (parsedUrl === "/" || parsedUrl === "")) {
     const uptime  = Math.floor(process.uptime());
     const hours   = Math.floor(uptime / 3600);
     const minutes = Math.floor((uptime % 3600) / 60);
