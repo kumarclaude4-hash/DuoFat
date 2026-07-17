@@ -151,10 +151,8 @@ public class CallManager {
                 MediaConstraints restartConstraints = new MediaConstraints();
                 restartConstraints.mandatory.add(
                         new MediaConstraints.KeyValuePair("IceRestart", "true"));
-                restartConstraints.mandatory.add(
-                        new MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"));
-                restartConstraints.mandatory.add(
-                        new MediaConstraints.KeyValuePair("OfferToReceiveVideo", isVideo ? "true" : "false"));
+                // Do NOT add OfferToReceiveAudio/Video — see createAnswer() for why.
+                // Transceivers are already established; only the ICE credentials change.
                 peerConnection.createOffer(new SdpObserver() {
                     @Override public void onCreateSuccess(SessionDescription sdp) {
                         peerConnection.setLocalDescription(new SdpObserver() {
@@ -714,9 +712,19 @@ public class CallManager {
     }
 
     private void createAnswer() {
+        // UNIFIED_PLAN: do NOT pass OfferToReceiveAudio/Video here.
+        //
+        // These are legacy Plan-B constraints. In UNIFIED_PLAN the direction of
+        // each m-line is governed exclusively by the transceivers that were created
+        // via addTrack() — not by these constraints. However, some versions of
+        // libwebrtc-android still process the mandatory constraints and use them to
+        // override transceiver direction, forcing the callee's audio/video m-lines
+        // to "recvonly" even though addTrack() set up a "sendrecv" transceiver.
+        // The result: the callee's audio never reaches the caller — one-way audio.
+        //
+        // The fix: pass empty constraints. The transceivers from addTrack() already
+        // encode the correct "sendrecv" direction; nothing needs to override them.
         MediaConstraints constraints = new MediaConstraints();
-        constraints.mandatory.add(new MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"));
-        constraints.mandatory.add(new MediaConstraints.KeyValuePair("OfferToReceiveVideo", isVideo ? "true" : "false"));
 
         peerConnection.createAnswer(new SdpObserver() {
             @Override

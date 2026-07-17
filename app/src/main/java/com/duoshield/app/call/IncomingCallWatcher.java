@@ -72,17 +72,23 @@ public class IncomingCallWatcher {
         if (reg != null) return; // already attached
         if (myUid == null || myUid.isEmpty()) return;
 
-        // Query: calls where I'm the callee and status is still ringing.
-        // Requires a composite index on (calleeId ASC, status ASC) in Firestore —
-        // Firebase will log the index-creation URL on the first run if missing.
+        // Single-field query on calleeId only — no composite index required.
+        //
+        // A two-field query (.whereEqualTo("calleeId").whereEqualTo("status","ringing"))
+        // requires a composite Firestore index. If that index hasn't been created in the
+        // Firebase console, Firestore returns an error and addSnapshotListener silently
+        // delivers nothing — every incoming call misses the watcher and falls back to FCM
+        // via the Render push server, which can take 10+ seconds when Render cold-starts.
+        //
+        // Filtering "status == ringing" in handleCallDoc (client-side) is safe: each user
+        // has at most one active call at a time, so the document volume is tiny.
         Query q = FirebaseFirestore.getInstance()
                 .collection("calls")
-                .whereEqualTo("calleeId", myUid)
-                .whereEqualTo("status", "ringing");
+                .whereEqualTo("calleeId", myUid);
 
         reg = q.addSnapshotListener((snap, err) -> {
             if (err != null) {
-                Log.w(TAG, "Watch error (non-fatal): " + err.getMessage());
+                Log.w(TAG, "Incoming call watch error: " + err.getMessage());
                 return;
             }
             if (snap == null) return;
@@ -110,6 +116,10 @@ public class IncomingCallWatcher {
 
     private void handleCallDoc(DocumentSnapshot doc) {
         String callId = doc.getId();
+
+        // Client-side status filter (replaces the removed Firestore whereEqualTo("status")).
+        String status = doc.getString("status");
+        if (!"ringing".equals(status)) return;
 
         // Dedup — FCM path may have already shown this call.
         if (isShown(callId)) return;
