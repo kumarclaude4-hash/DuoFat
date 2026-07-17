@@ -133,8 +133,10 @@ public class CallManager {
     };
 
     // ── ICE restart on disconnect ─────────────────────────────────────────────
-    /** How long to wait after DISCONNECTED before triggering an ICE restart (ms). */
-    private static final long ICE_RESTART_DELAY_MS = 5_000L;
+    /** How long to wait after DISCONNECTED before triggering an ICE restart (ms).
+     * Reduced from 5 s → 2 s: modern networks (WiFi↔LTE handover) recover within
+     * 1–2 s, so the 5 s grace period was adding unnecessary perceived lag. */
+    private static final long ICE_RESTART_DELAY_MS = 2_000L;
     private final Handler  iceRestartHandler  = new Handler(Looper.getMainLooper());
     private final Runnable iceRestartRunnable = new Runnable() {
         @Override public void run() {
@@ -307,9 +309,21 @@ public class CallManager {
         List<PeerConnection.IceServer> list = new ArrayList<>();
 
         // Always include STUN so direct P2P works regardless of TURN availability.
+        // Multiple STUN servers across different providers give ICE more candidate
+        // sources, reducing the time to find a working reflexive (srflx) candidate
+        // on restricted NATs. Google provides 4 STUN servers that round-robin across
+        // different PoPs; Cloudflare and Metered add geographic diversity.
         list.add(PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478")
                 .createIceServer());
         list.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302")
+                .createIceServer());
+        list.add(PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302")
+                .createIceServer());
+        list.add(PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302")
+                .createIceServer());
+        list.add(PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302")
+                .createIceServer());
+        list.add(PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302")
                 .createIceServer());
 
         TurnCredentialCache cache = TurnCredentialCache.get();
@@ -426,10 +440,19 @@ public class CallManager {
 
             @Override
             public void onAddTrack(RtpReceiver receiver, MediaStream[] streams) {
-                if (receiver.track() instanceof VideoTrack) {
-                    VideoTrack remote = (VideoTrack) receiver.track();
+                org.webrtc.MediaStreamTrack track = receiver.track();
+                if (track instanceof VideoTrack) {
+                    VideoTrack remote = (VideoTrack) track;
                     remote.setEnabled(true);
                     if (listener != null) listener.onRemoteVideoTrack(remote);
+                } else if (track instanceof AudioTrack) {
+                    // Root-cause fix for one-way audio: the remote AudioTrack can arrive
+                    // in a disabled state on certain devices / libwebrtc builds.
+                    // Without this explicit enable() call, the local user hears the remote
+                    // peer but the remote peer hears nothing — even though both sides
+                    // have added their local audio tracks to the PeerConnection.
+                    track.setEnabled(true);
+                    Log.d(TAG, "Remote audio track received and enabled");
                 }
             }
         });

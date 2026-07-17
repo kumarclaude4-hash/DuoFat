@@ -160,6 +160,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private String  callId;
     private String  partnerId;
 
+    /** Cancels the TURN-credential wait if the activity is destroyed before it fires. */
+    private Handler turnTimeoutHandler;
     private final Handler  durationHandler = new Handler(Looper.getMainLooper());
     private long           callStartMs     = 0;
     private final Runnable durationTick    = new Runnable() {
@@ -226,32 +228,64 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         ContextCompat.registerReceiver(this, notifActionReceiver, notifFilter,
                 ContextCompat.RECEIVER_NOT_EXPORTED);
 
-        // Warm the TURN credential cache from disk (EncryptedSharedPreferences) before
-        // prefetch runs.  If credentials were persisted from a previous call and are still
-        // within the 1-hour TTL, buildIceServers() in CallManager will use them immediately
-        // without racing against the async HTTP fetch — important for calls answered right
-        // after a process kill (tap-on-notification cold start).
-        TurnCredentialCache.init(this);
-
-        // Prefetch fresh TURN credentials from the push server (non-blocking).
-        // By the time startCall/acceptCall fires ICE gathering, credentials are
-        // typically ready; if the fetch is still in-flight the call falls back
-        // to the disk-warmed cache or STUN-only if both are cold/expired.
-        TurnCredentialFetcher.prefetch();
+        // ── TURN credential warm-up ───────────────────────────────────────────
+        // ROOT CAUSE OF 20-SECOND LAG (fixed here):
+        //
+        // The previous code called TurnCredentialFetcher.prefetch() (fire-and-forget)
+        // and then IMMEDIATELY called startCall()/acceptCall().  Both of those call
+        // createPeerConnection() → buildIceServers() synchronously.  Because the async
+        // HTTP prefetch had not completed yet, buildIceServers() found an empty cache
+        // and created the PeerConnection with STUN-only — no TURN relay servers.
+        //
+        // On mobile networks with CGNAT or symmetric NAT, STUN-only ICE gathers
+        // candidates but they never connect (both sides are behind non-traversable NAT).
+        // ICE then waits the full 60-second CONNECTION_TIMEOUT_MS before failing, which
+        // manifests as the 20-second lag the user observes before audio/video starts
+        // (on lucky networks ICE stumbles into a working path eventually; on strict
+        // networks it never connects at all).
+        //
+        // FIX: use the callback form of prefetch().  The call only starts after
+        // credentials are confirmed cached (success path) or after a 3-second hard
+        // timeout (failure path — avoids blocking the callee's ring-accept window).
+        // For callees the disk-warmed cache (TurnCredentialCache.init) handles the
+        // common cold-start case; the 3 s timeout covers the rare "first ever call"
+        // case where no credentials were ever persisted.
+        TurnCredentialCache.init(this); // load previously persisted creds from disk
 
         // Show TURN quota warning before the call starts so user knows what to expect.
         checkAndShowTurnWarning();
 
-        // FIX #1: startCall()/acceptCall() both call initFactory() synchronously as their
-        // first statement, which creates eglBase.  initVideoRenderers() must run AFTER
-        // that so eglBase is non-null when the SurfaceViewRenderers are initialised.
-        if (isCaller) {
-            String chatId = getIntent().getStringExtra(EXTRA_CHAT_ID);
-            callManager.startCall(myUid, partnerId, isVideo, chatId);
-        } else {
-            callManager.acceptCall(myUid, callId, isVideo);
-        }
-        initVideoRenderers(); // eglBase guaranteed non-null now
+        final String    chatId      = isCaller ? getIntent().getStringExtra(EXTRA_CHAT_ID) : null;
+        final boolean[] started     = {false};
+        turnTimeoutHandler = new Handler(Looper.getMainLooper());
+
+        // doStartCall is idempotent — the timeout and the callback both reference it;
+        // the boolean guard ensures the PeerConnection is created exactly once.
+        final Runnable doStartCall = () -> {
+            if (started[0]) return;
+            started[0] = true;
+            // startCall/acceptCall call initFactory() synchronously as their first step,
+            // which creates eglBase.  initVideoRenderers() must run right after so
+            // eglBase is non-null when the SurfaceViewRenderers are initialised.
+            if (isCaller) {
+                callManager.startCall(myUid, partnerId, isVideo, chatId);
+            } else {
+                callManager.acceptCall(myUid, callId, isVideo);
+            }
+            initVideoRenderers();
+        };
+
+        // Hard deadline: start the call after 3 s even if TURN fetch is still in-flight.
+        // Callee ring timeout is 30 s, so 3 s is safe but still generous for slow networks.
+        turnTimeoutHandler.postDelayed(doStartCall, 3_000);
+
+        // Preferred path: start as soon as credentials are confirmed ready (typically <1 s
+        // if the disk cache is warm, or 1–3 s for a fresh network fetch).
+        TurnCredentialFetcher.prefetch(success -> runOnUiThread(() -> {
+            Log.d(TAG, "TURN prefetch done (success=" + success + ") — starting call");
+            turnTimeoutHandler.removeCallbacks(doStartCall);
+            doStartCall.run();
+        }));
 
         updateStatusUi(CallManager.CallState.OUTGOING_RINGING);
     }
@@ -272,6 +306,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
         historyExecutor.shutdownNow();
         durationHandler.removeCallbacksAndMessages(null);
+        // Cancel the TURN-credential wait if it hasn't fired yet.
+        if (turnTimeoutHandler != null) turnTimeoutHandler.removeCallbacksAndMessages(null);
 
         // Release SurfaceViewRenderers FIRST — this removes the video sink from the tracks
         // so the tracks can be safely disposed by hangup()/release() without rendering to a
