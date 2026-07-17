@@ -369,26 +369,19 @@ public class CallManager {
         PeerConnection.RTCConfiguration config =
                 new PeerConnection.RTCConfiguration(buildIceServers());
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // Force RELAY-only ICE transport.
+        // Use ALL transport types — the same strategy WhatsApp and Signal use.
         //
-        // Rationale: virtually all users are on SIM / mobile data networks.
-        // Mobile carriers use CGNAT (Carrier-Grade NAT) and symmetric NAT by
-        // design — both peers are assigned private IPs from the carrier's shared
-        // address space, so direct P2P (host / srflx candidates) can never
-        // traverse the double-NAT and ICE will fail every time after a 30-60 s
-        // futile wait.
+        // The ICE agent gathers host, STUN-reflexive (srflx), and TURN relay
+        // candidates simultaneously and runs connectivity checks in parallel.
+        // Whichever path succeeds first wins:
+        //   • Same LAN / hotspot  → host candidate connects in <100 ms
+        //   • Different networks  → srflx (STUN) or relay (TURN) connects in 1-3 s
         //
-        // With IceTransportsType.ALL the ICE agent tries host → srflx → relay in
-        // order, spending 15-30 s on paths that provably cannot work on CGNAT,
-        // then eventually reaching the relay candidate.  That wasted negotiation
-        // time is exactly the lag users experience.
-        //
-        // With RELAY, the ICE agent only gathers and checks relay (TURN) candidates.
-        // On a working TURN connection ICE completes in 1-3 s regardless of NAT
-        // topology — guaranteed connectivity for every SIM user.  The only cost is
-        // that every call routes through Cloudflare, but that is already the case
-        // in practice for CGNAT users; we are just making it explicit and fast.
-        config.iceTransportsType = PeerConnection.IceTransportsType.RELAY;
+        // RELAY-only would guarantee connectivity on symmetric NAT networks but
+        // forces every call through Cloudflare even when a direct path is available,
+        // adds unnecessary latency, and burns TURN quota on calls that didn't need
+        // relay.  ALL lets ICE pick the optimal path for each call automatically.
+        config.iceTransportsType = PeerConnection.IceTransportsType.ALL;
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
             @Override
