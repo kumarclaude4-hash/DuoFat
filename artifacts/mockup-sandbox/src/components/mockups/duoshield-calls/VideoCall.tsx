@@ -1,4 +1,4 @@
-import { ArrowLeft, Volume2, Video, FlipHorizontal2, Camera, Mic, MessageSquare, PhoneOff } from "lucide-react";
+import { ArrowLeft, Volume2, Video, Camera, Mic, MessageSquare, PhoneOff } from "lucide-react";
 
 function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
@@ -130,7 +130,7 @@ export function VideoCall() {
             display: "flex", alignItems: "center", justifyContent: "space-between"
           }}>
             <span style={{ fontSize: "10px", color: "rgba(255,255,255,0.85)", fontWeight: 500 }}>You</span>
-            <FlipHorizontal2 size={12} color="rgba(255,255,255,0.8)" />
+            <Camera size={13} color="rgba(255,255,255,0.85)" />
           </div>
         </div>
 
@@ -145,7 +145,6 @@ export function VideoCall() {
             paddingLeft: "10px", paddingRight: "10px"
           }}>
             <IconBtn icon={<Video size={22} color="white" strokeWidth={2} />} />
-            <IconBtn icon={<Camera size={22} color="white" strokeWidth={2} />} />
             <IconBtn icon={<Mic size={22} color="white" strokeWidth={2} />} />
             <IconBtn icon={<MessageSquare size={22} color="white" strokeWidth={2} />} />
             <IconBtn
