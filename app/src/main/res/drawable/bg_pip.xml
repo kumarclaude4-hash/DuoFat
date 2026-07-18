@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Local video PiP container — ds_surface_2 (#2D2938) with 14 dp corners.
+     Slightly lighter than ds_background so the PiP reads as a raised card
+     over the remote video feed, consistent with the brand elevation system. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#000000" />
-    <corners android:radius="12dp" />
+    <solid android:color="#2D2938" />
+    <corners android:radius="14dp" />
 </shape>

@@ -40,9 +40,17 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Incoming voice call"
-        android:textColor="#A0A0A0"
+        android:textColor="@color/ds_text_secondary"
         android:textSize="16sp"
         android:layout_marginTop="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="🔒 End-to-end encrypted"
+        android:textColor="@color/ds_text_caption"
+        android:textSize="12sp"
+        android:layout_marginTop="6dp" />
 
     <View android:layout_width="0dp" android:layout_height="0dp"
         android:layout_weight="1" />

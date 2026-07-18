@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#0A0A12">
+    android:background="@color/ds_background">
 
     <!-- ── Header row ── -->
     <LinearLayout
@@ -95,7 +95,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Everyone in the call can see your messages"
-        android:textColor="#666666"
+        android:textColor="@color/ds_text_caption"
         android:textSize="12sp"
         android:gravity="center"
         android:paddingTop="4dp"
@@ -118,7 +118,7 @@
             android:layout_height="40dp"
             android:padding="8dp"
             android:src="@drawable/ic_emoji"
-            android:tint="#888888"
+            android:tint="@color/ds_text_tertiary"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Emoji" />
@@ -134,7 +134,7 @@
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
             android:hint="Type a message..."
-            android:textColorHint="#888888"
+            android:textColorHint="@color/ds_text_tertiary"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:inputType="textCapSentences"

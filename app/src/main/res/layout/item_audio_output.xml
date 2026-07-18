@@ -25,7 +25,7 @@
         android:layout_weight="1"
         android:layout_marginStart="16dp"
         android:text="Speaker"
-        android:textColor="#1A1A2A"
+        android:textColor="#F4F1FA"
         android:textSize="16sp" />
 
     <!-- Purple checkmark shown for the currently active device -->

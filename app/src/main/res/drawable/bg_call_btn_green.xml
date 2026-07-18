@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Accept-call button — semantic green so users instantly recognise "answer".
+     Premium gradient (135°) consistent with other call button styles. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="#6BBF8A" />
+    <gradient
+        android:angle="135"
+        android:startColor="#3EC878"
+        android:centerColor="#28A85A"
+        android:endColor="#1A8044" />
 </shape>

@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Audio-output bottom sheet background — ds_surface_2 (#2D2938) with
+     rounded top corners.  Replaces the old light-lavender (#F4EDFF) fill which
+     required dark text and looked out of place on the dark call screen. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#F4EDFF" />
+    <solid android:color="#2D2938" />
     <corners
         android:topLeftRadius="20dp"
         android:topRightRadius="20dp" />

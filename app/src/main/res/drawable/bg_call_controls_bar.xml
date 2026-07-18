@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Gradient: transparent at top → dark at bottom; blends call controls into video/voice-only bg -->
+<!-- Bottom gradient: transparent → very opaque brand-dark (#191620).
+     Floats the call controls bar over video/voice-only bg with a soft edge.
+     Extra opacity vs the header because the controls are the primary action area. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <gradient
         android:angle="270"
-        android:startColor="#00000000"
-        android:endColor="#DD000000" />
+        android:startColor="#00191620"
+        android:centerColor="#BB191620"
+        android:endColor="#F8191620" />
 </shape>

@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Decline / End-call button — danger red gradient, 135° to add depth.
+     Uses a richer gradient than a flat colour for premium feel. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="#F44336" />
+    <gradient
+        android:angle="135"
+        android:startColor="#D96A7C"
+        android:centerColor="#C04060"
+        android:endColor="#A03050" />
 </shape>
