@@ -506,6 +506,15 @@ public class CallManager {
                 localVideoTrack = factory.createVideoTrack("video0", videoSource);
                 localVideoTrack.setEnabled(true);
                 if (listener != null) listener.onLocalVideoTrack(localVideoTrack);
+            } else {
+                // No camera device found — most commonly caused by CAMERA permission being
+                // denied, or the device reporting no cameras.  Surface this to the UI so the
+                // user isn't left staring at a black PiP with no explanation.
+                Log.e(TAG, "createCameraCapturer() returned null — no camera available " +
+                        "(check CAMERA permission and device hardware)");
+                if (listener != null) {
+                    listener.onError("Camera unavailable — check app permissions in Settings");
+                }
             }
         }
 

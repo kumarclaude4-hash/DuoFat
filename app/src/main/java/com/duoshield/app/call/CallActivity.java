@@ -38,9 +38,11 @@ import org.webrtc.VideoTrack;
 import com.duoshield.app.call.TurnBandwidthTracker;
 import com.duoshield.app.call.TurnCredentialFetcher;
 
+import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.os.PowerManager;
 import androidx.core.content.ContextCompat;
 
@@ -296,6 +298,18 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             // we start the call so addSink() always finds a ready renderer.
             callManager.prepareEgl();
             initVideoRenderers();
+
+            // Guard: camera permission may have been revoked after the call was initiated
+            // (e.g. user denied via system dialog that appeared concurrently).  Fall back to
+            // audio-only rather than silently showing a permanently black local PiP.
+            if (isVideo && ContextCompat.checkSelfPermission(CallActivity.this,
+                    Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                Log.w(TAG, "Camera permission not granted — falling back to audio-only");
+                isVideo = false;
+                runOnUiThread(() -> Toast.makeText(CallActivity.this,
+                        "Camera unavailable — starting voice-only call",
+                        Toast.LENGTH_LONG).show());
+            }
 
             if (isCaller) {
                 callManager.startCall(myUid, partnerId, isVideo, chatId);
@@ -843,23 +857,24 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      */
     private void showNewMessageBanner(String preview) {
         if (bannerNewMessage == null || tvNewMsgPreview == null) return;
+        float slideY = 44f * getResources().getDisplayMetrics().density;
         tvNewMsgPreview.setText(preview);
         bannerNewMessage.setVisibility(View.VISIBLE);
         bannerNewMessage.setAlpha(0f);
-        bannerNewMessage.setTranslationY(-40f);
+        bannerNewMessage.setTranslationY(-slideY);
         bannerNewMessage.animate()
                 .alpha(1f)
                 .translationY(0f)
-                .setDuration(200)
+                .setDuration(220)
                 .start();
-        // Reset the auto-dismiss timer on each new message
+        // Reset the auto-dismiss timer on each new message so rapid messages extend the window
         bannerDismissHandler.removeCallbacksAndMessages(null);
         bannerDismissHandler.postDelayed(() -> {
             if (bannerNewMessage != null) {
                 bannerNewMessage.animate()
                         .alpha(0f)
-                        .translationY(-40f)
-                        .setDuration(200)
+                        .translationY(-slideY)
+                        .setDuration(180)
                         .withEndAction(() -> {
                             if (bannerNewMessage != null)
                                 bannerNewMessage.setVisibility(View.GONE);
