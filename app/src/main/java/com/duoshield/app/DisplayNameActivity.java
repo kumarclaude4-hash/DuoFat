@@ -96,7 +96,7 @@ public class DisplayNameActivity extends AppCompatActivity {
                 IdentityKeyPair identityKeyPair = SeedPhraseHelper.deriveIdentityKeyPair(seed);
                 String          userId          = SeedPhraseHelper.deriveUserId(seed);
 
-                Log.i(TAG, "[1/3] derived userId=" + userId);
+                Log.i(TAG, "[1/3] Derivation complete");
 
                 // Sign out any stale Firebase session. Also clear explicit_signout so
                 // BaseActivity.onStart() in ConversationListActivity doesn't redirect back.
@@ -122,7 +122,7 @@ public class DisplayNameActivity extends AppCompatActivity {
                         identityKeyPair.getPublicKey().serialize(),
                         new AuthTokenHelper.Callback() {
                             @Override public void onSuccess(String firebaseUid) {
-                                Log.i(TAG, "[2/3] Firebase sign-in complete  uid=" + firebaseUid);
+                                Log.i(TAG, "[2/3] Firebase sign-in complete");
                                 synchronized (lock) {
                                     result[0] = firebaseUid;
                                     lock.notifyAll();

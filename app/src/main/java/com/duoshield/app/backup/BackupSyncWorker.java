@@ -39,7 +39,7 @@ public final class BackupSyncWorker extends Worker {
             return Result.success();
         }
 
-        Log.d(TAG, "Starting scheduled backup sync for uid=" + user.getUid());
+        Log.d(TAG, "Starting scheduled backup sync");
 
         final CountDownLatch latch   = new CountDownLatch(1);
         final boolean[]      success = {false};

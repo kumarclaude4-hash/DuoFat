@@ -115,12 +115,12 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    lintOptions {
+    lint {
         abortOnError false
-        checkReleaseBuilds false
+        checkDependencies false
     }
 
-    packagingOptions {
+    packaging {
         resources {
             excludes += [
                 'META-INF/INDEX.LIST',

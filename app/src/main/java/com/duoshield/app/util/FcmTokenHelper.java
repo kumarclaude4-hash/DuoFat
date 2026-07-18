@@ -29,10 +29,17 @@ public class FcmTokenHelper {
 
     public static void register(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE);
-        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
-            prefs.edit().putString("fcm_token", token).apply();
-            uploadWithRetry(ctx.getApplicationContext(), token, 0);
-        });
+        FirebaseMessaging.getInstance().getToken()
+            .addOnSuccessListener(token -> {
+                if (token == null || token.isEmpty()) {
+                    Log.w(TAG, "register: received null/empty FCM token — skipping upload");
+                    return;
+                }
+                prefs.edit().putString("fcm_token", token).apply();
+                uploadWithRetry(ctx.getApplicationContext(), token, 0);
+            })
+            .addOnFailureListener(e ->
+                Log.w(TAG, "register: getToken() failed: " + e.getMessage()));
     }
 
     /**

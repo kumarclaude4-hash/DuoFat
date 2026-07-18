@@ -363,6 +363,53 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+// ── Per-UID authenticated-endpoint rate limiter ───────────────────────────────
+// Prevents an authenticated user from flooding B2 presign/delete or other
+// server-mediated endpoints.  Each endpoint has its own per-minute bucket.
+const AUTH_RATE_WINDOW_MS = 60_000;
+const AUTH_RATE_LIMITS = {
+  b2PresignedPut:  30,   // 30 PUT presigns / min per user
+  b2PresignedGet:  60,   // 60 GET presigns / min per user
+  b2Delete:        10,   // 10 deletes / min per user
+  createChat:      10,   // 10 chat creations / min per user
+  migrateUid:       2,   //  2 migrations / min per user
+  turnCredentials: 20,   // 20 TURN fetches / min per user
+  removeGroupMember: 20, // 20 removals / min per user
+  linkPreview:     30,   // 30 link previews / min per user
+};
+const authRateLimits = new Map(); // uid → { counts: {ep: n}, windowStart }
+
+function checkAuthRateLimit(uid, endpoint) {
+  const now   = Date.now();
+  const limit = AUTH_RATE_LIMITS[endpoint] || 30;
+  const rec   = authRateLimits.get(uid);
+  if (!rec || now - rec.windowStart >= AUTH_RATE_WINDOW_MS) {
+    authRateLimits.set(uid, { counts: { [endpoint]: 1 }, windowStart: now });
+    return true;
+  }
+  const cur = rec.counts[endpoint] || 0;
+  if (cur >= limit) return false;
+  rec.counts[endpoint] = cur + 1;
+  return true;
+}
+
+// Purge stale auth rate-limit entries every 5 minutes.
+setInterval(() => {
+  const cutoff = Date.now() - AUTH_RATE_WINDOW_MS;
+  for (const [uid, rec] of authRateLimits) {
+    if (rec.windowStart < cutoff) authRateLimits.delete(uid);
+  }
+}, 5 * 60 * 1000);
+
+// ── Global unhandled-rejection / exception guards ─────────────────────────────
+// Prevents a single async exception from crashing the process.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason instanceof Error ? reason.message : reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err.message, "\n", err.stack);
+});
+
 function getClientIp(req) {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) return forwarded.split(",")[0].trim();
@@ -385,8 +432,42 @@ function sha256hex(hexStr) {
   return crypto.createHash("sha256").update(Buffer.from(hexStr, "hex")).digest("hex");
 }
 
+// ── Request body size limit ───────────────────────────────────────────────────
+// Prevents DoS via oversized request bodies. 64 KB is plenty for all valid
+// JSON payloads; media goes to B2 directly via presigned URLs, never here.
+const MAX_BODY_BYTES = 64 * 1024; // 64 KB
+
+function readBody(req, res) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    let bytes = 0;
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        res.writeHead(413, { "Content-Type": "text/plain" });
+        res.end("Request body too large");
+        req.destroy();
+        reject(new Error("body_too_large"));
+        return;
+      }
+      body += chunk;
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
 // ── Health + status + mintToken HTTP server ───────────────────────────────────
 http.createServer((req, res) => {
+
+  // Reject oversized bodies before any routing (DoS guard).
+  // Content-Length may be absent (chunked), so also enforce via readBody().
+  const declaredLength = parseInt(req.headers["content-length"] || "0", 10);
+  if (declaredLength > MAX_BODY_BYTES) {
+    res.writeHead(413, { "Content-Type": "text/plain" });
+    res.end("Request body too large");
+    return;
+  }
 
   // ── POST /mintToken ─────────────────────────────────────────────────────────
   //
@@ -524,6 +605,12 @@ http.createServer((req, res) => {
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
+          return;
+        }
+
+        if (!checkAuthRateLimit(decodedToken.uid, "migrateUid")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded — slow down and retry");
           return;
         }
 
@@ -683,6 +770,12 @@ http.createServer((req, res) => {
           return;
         }
 
+        if (!checkAuthRateLimit(decodedToken.uid, "createChat")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded — slow down and retry");
+          return;
+        }
+
         const { myUid, partnerUid, myDisplayName, partnerDisplayName } = JSON.parse(body);
         if (!myUid || !partnerUid || typeof myUid !== "string" || typeof partnerUid !== "string") {
           res.writeHead(400, { "Content-Type": "text/plain" });
@@ -757,11 +850,18 @@ http.createServer((req, res) => {
           res.end("Missing Authorization header");
           return;
         }
+        let turnUid;
         try {
-          await admin.auth().verifyIdToken(idToken);
+          turnUid = (await admin.auth().verifyIdToken(idToken)).uid;
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
+          return;
+        }
+
+        if (!checkAuthRateLimit(turnUid, "turnCredentials")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded — slow down and retry");
           return;
         }
 
@@ -924,8 +1024,12 @@ http.createServer((req, res) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
-        try { await admin.auth().verifyIdToken(tok); }
+        let lpUid;
+        try { lpUid = (await admin.auth().verifyIdToken(tok)).uid; }
         catch { res.writeHead(401); res.end("Invalid token"); return; }
+        if (!checkAuthRateLimit(lpUid, "linkPreview")) {
+          res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
+        }
 
         let targetUrl;
         try { targetUrl = JSON.parse(body).url; }
@@ -939,10 +1043,14 @@ http.createServer((req, res) => {
         if (!["http:", "https:"].includes(parsed.protocol)) {
           res.writeHead(400); res.end("Invalid URL scheme"); return;
         }
-        // SSRF guard — block private/loopback addresses
+        // SSRF guard — block private/loopback addresses and cloud metadata endpoints
         const host = parsed.hostname.toLowerCase();
-        if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host)) {
-          res.writeHead(403); res.end("Private addresses forbidden"); return;
+        if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host) ||
+            host === "metadata.google.internal" ||
+            host === "169.254.169.254" ||
+            host.endsWith(".internal") ||
+            host.endsWith(".local")) {
+          res.writeHead(403); res.end("Forbidden address"); return;
         }
 
         try {
@@ -994,8 +1102,12 @@ http.createServer((req, res) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
-        try { await admin.auth().verifyIdToken(tok); }
+        let putUid;
+        try { putUid = (await admin.auth().verifyIdToken(tok)).uid; }
         catch { res.writeHead(401); res.end("Invalid token"); return; }
+        if (!checkAuthRateLimit(putUid, "b2PresignedPut")) {
+          res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
+        }
         let objectKey, contentType;
         try { ({ objectKey, contentType } = JSON.parse(body)); contentType = contentType || "application/octet-stream"; }
         catch { res.writeHead(400); res.end("Bad JSON"); return; }
@@ -1019,8 +1131,12 @@ http.createServer((req, res) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
-        try { await admin.auth().verifyIdToken(tok); }
+        let getUid;
+        try { getUid = (await admin.auth().verifyIdToken(tok)).uid; }
         catch { res.writeHead(401); res.end("Invalid token"); return; }
+        if (!checkAuthRateLimit(getUid, "b2PresignedGet")) {
+          res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
+        }
         let objectKey;
         try { ({ objectKey } = JSON.parse(body)); }
         catch { res.writeHead(400); res.end("Bad JSON"); return; }
@@ -1044,8 +1160,12 @@ http.createServer((req, res) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
-        try { await admin.auth().verifyIdToken(tok); }
+        let delUid;
+        try { delUid = (await admin.auth().verifyIdToken(tok)).uid; }
         catch { res.writeHead(401); res.end("Invalid token"); return; }
+        if (!checkAuthRateLimit(delUid, "b2Delete")) {
+          res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
+        }
         let objectKey;
         try { ({ objectKey } = JSON.parse(body)); }
         catch { res.writeHead(400); res.end("Bad JSON"); return; }
@@ -1058,6 +1178,7 @@ http.createServer((req, res) => {
         const rgn  = process.env.B2_REGION   || "eu-central-003";
         if (!kId || !kApp) { res.writeHead(503); res.end("B2 credentials not configured"); return; }
         const host = "s3." + rgn + ".backblazeb2.com";
+
         const now  = new Date();
         const ds   = now.toISOString().slice(0,10).replace(/-/g,"");
         const az   = now.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}/,"");
@@ -1090,6 +1211,9 @@ http.createServer((req, res) => {
         let callerUid;
         try { callerUid = (await admin.auth().verifyIdToken(tok)).uid; }
         catch { res.writeHead(401); res.end("Invalid token"); return; }
+        if (!checkAuthRateLimit(callerUid, "removeGroupMember")) {
+          res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
+        }
         let groupId, memberUid;
         try { ({ groupId, memberUid } = JSON.parse(body)); }
         catch { res.writeHead(400); res.end("Bad JSON"); return; }

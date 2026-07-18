@@ -67,14 +67,14 @@ public final class AuthTokenHelper {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             try {
-                Log.i(TAG, "signInWithSeed: fetching custom token for userId=" + userId);
+                Log.i(TAG, "signInWithSeed: fetching custom token…");
                 String customToken = fetchCustomToken(userId, toHex(identityPubKeyBytes));
                 Log.i(TAG, "signInWithSeed: token received, signing in with Firebase…");
                 String uid = doSignIn(customToken);
-                Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS  uid=" + uid);
+                Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS");
                 main.post(() -> cb.onSuccess(uid));
             } catch (Exception e) {
-                Log.e(TAG, "signInWithSeed FAILED  userId=" + userId, e);
+                Log.e(TAG, "signInWithSeed FAILED", e);
                 main.post(() -> cb.onFailure(e));
             }
         }, "auth-token").start();
