@@ -10,8 +10,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -456,6 +458,99 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         if (btnChat != null) {
             btnChat.setOnClickListener(v -> openInCallChat());
         }
+
+        // Draggable PiP — WhatsApp-style free drag, snaps to edge on release.
+        setupPipDrag();
+    }
+
+    // ── Draggable local-video PiP ─────────────────────────────────────────────
+
+    /**
+     * Makes the "You" PiP freely draggable anywhere on screen.  On release it
+     * snaps to whichever vertical edge (left or right) the PiP's centre is
+     * closest to — the same behaviour as WhatsApp, FaceTime, and Signal.
+     *
+     * <p><b>Tap-vs-drag:</b> a displacement of less than 8 dp from the finger-down
+     * point is treated as a tap, so the flip-camera button inside the PiP is still
+     * perfectly clickable.
+     *
+     * <p><b>Snap animation:</b> 250 ms with {@link DecelerateInterpolator}, using a
+     * hardware layer ({@code withLayer()}) for a smooth GPU composite over the
+     * SurfaceViewRenderer.
+     */
+    private void setupPipDrag() {
+        if (localVideoPip == null) return;
+
+        final float[] dX      = {0f}; // view.getX() − rawX at ACTION_DOWN
+        final float[] dY      = {0f}; // view.getY() − rawY at ACTION_DOWN
+        final float[] downRX  = {0f}; // raw X at ACTION_DOWN (tap-vs-drag check)
+        final float[] downRY  = {0f};
+        final boolean[] moved = {false};
+
+        localVideoPip.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+
+                case MotionEvent.ACTION_DOWN:
+                    v.animate().cancel(); // stop any ongoing snap
+                    dX[0]     = v.getX() - event.getRawX();
+                    dY[0]     = v.getY() - event.getRawY();
+                    downRX[0] = event.getRawX();
+                    downRY[0] = event.getRawY();
+                    moved[0]  = false;
+                    return true;
+
+                case MotionEvent.ACTION_MOVE: {
+                    float threshold =
+                            8f * getResources().getDisplayMetrics().density;
+                    if (!moved[0]
+                            && (Math.abs(event.getRawX() - downRX[0]) > threshold
+                             || Math.abs(event.getRawY() - downRY[0]) > threshold)) {
+                        moved[0] = true;
+                    }
+                    if (moved[0]) {
+                        View parent  = (View) v.getParent();
+                        float newX   = Math.max(0, Math.min(
+                                event.getRawX() + dX[0], parent.getWidth()  - v.getWidth()));
+                        float newY   = Math.max(0, Math.min(
+                                event.getRawY() + dY[0], parent.getHeight() - v.getHeight()));
+                        v.setX(newX);
+                        v.setY(newY);
+                    }
+                    return true;
+                }
+
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (!moved[0]) {
+                        // Pure tap — forward to the flip-camera button if the
+                        // finger landed inside its bounds.
+                        if (btnFlipCamera != null) {
+                            float relX = event.getX() - btnFlipCamera.getLeft();
+                            float relY = event.getY() - btnFlipCamera.getTop();
+                            if (relX >= 0 && relX <= btnFlipCamera.getWidth()
+                                    && relY >= 0 && relY <= btnFlipCamera.getHeight()) {
+                                btnFlipCamera.performClick();
+                            }
+                        }
+                        return true;
+                    }
+                    // Snap to nearest vertical edge, WhatsApp-style.
+                    View parent  = (View) v.getParent();
+                    float margin = 16f * getResources().getDisplayMetrics().density;
+                    float pipCX  = v.getX() + v.getWidth() / 2f;
+                    float snapX  = (pipCX < parent.getWidth() / 2f)
+                            ? margin
+                            : parent.getWidth() - v.getWidth() - margin;
+                    v.animate()
+                            .x(snapX)
+                            .setDuration(250)
+                            .setInterpolator(new DecelerateInterpolator())
+                            .withLayer() // smooth composite over SurfaceViewRenderer
+                            .start();
+                    return true;
+            }
+            return false;
+        });
     }
 
     // ── Audio setup ───────────────────────────────────────────────────────────
