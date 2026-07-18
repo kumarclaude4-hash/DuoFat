@@ -1,4 +1,4 @@
-import { ArrowLeft, Volume2, Video, FlipHorizontal2, SwitchCamera, Mic, MessageSquare, PhoneOff } from "lucide-react";
+import { ArrowLeft, Volume2, Video, FlipHorizontal2, RotateCcw, Mic, MessageSquare, PhoneOff } from "lucide-react";
 
 function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
@@ -145,7 +145,7 @@ export function VideoCall() {
             paddingLeft: "10px", paddingRight: "10px"
           }}>
             <IconBtn icon={<Video size={22} color="white" strokeWidth={2} />} />
-            <IconBtn icon={<SwitchCamera size={22} color="white" strokeWidth={2} />} />
+            <IconBtn icon={<RotateCcw size={22} color="white" strokeWidth={2} />} />
             <IconBtn icon={<Mic size={22} color="white" strokeWidth={2} />} />
             <IconBtn icon={<MessageSquare size={22} color="white" strokeWidth={2} />} />
             <IconBtn

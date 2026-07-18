@@ -1,4 +1,4 @@
-import { ArrowLeft, Volume2, Video, FlipHorizontal2, SwitchCamera, Mic, MessageSquare, PhoneOff, MessageCircle } from "lucide-react";
+import { ArrowLeft, Volume2, Video, FlipHorizontal2, RotateCcw, Mic, MessageSquare, PhoneOff, MessageCircle } from "lucide-react";
 
 function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
@@ -164,7 +164,7 @@ export function VideoBanner() {
             paddingLeft: "10px", paddingRight: "10px"
           }}>
             <IconBtn icon={<Video size={22} color="white" strokeWidth={2} />} />
-            <IconBtn icon={<SwitchCamera size={22} color="white" strokeWidth={2} />} />
+            <IconBtn icon={<RotateCcw size={22} color="white" strokeWidth={2} />} />
             <IconBtn icon={<Mic size={22} color="white" strokeWidth={2} />} />
             {/* Chat button lit up in accent */}
             <IconBtn
