@@ -105,8 +105,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private ImageView           btnSpeaker;
     private ImageView           btnFlipCamera;     // inside PiP
     private View                btnFlipLayout;
-    private ImageView           btnFlipCameraBar;  // in controls bar (always accessible)
-    private View                btnFlipCameraBarLayout;
     private View                btnBack;
     private ImageView           btnChat;
 
@@ -419,8 +417,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnSpeaker          = findViewById(R.id.btnSpeaker);
         btnFlipCamera         = findViewById(R.id.btnFlipCamera);
         btnFlipLayout         = findViewById(R.id.btnFlipLayout);
-        btnFlipCameraBar      = findViewById(R.id.btnFlipCameraBar);
-        btnFlipCameraBarLayout = findViewById(R.id.btnFlipCameraBarLayout);
         btnBack               = findViewById(R.id.btnBack);
         btnChat               = findViewById(R.id.btnChat);
 
@@ -451,7 +447,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // Camera, flip, and chat buttons are only relevant in video calls
         if (isVideo) {
             btnCameraLayout.setVisibility(View.VISIBLE);
-            if (btnFlipCameraBarLayout != null) btnFlipCameraBarLayout.setVisibility(View.VISIBLE);
             if (btnChatLayout          != null) btnChatLayout.setVisibility(View.VISIBLE);
             // btnFlipLayout lives inside localVideoPip; visible once PiP appears
         }
@@ -497,9 +492,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnFlipCamera.setOnClickListener(v -> callManager.flipCamera());
 
         // Flip camera (controls-bar button — always accessible in video calls)
-        if (btnFlipCameraBar != null) {
-            btnFlipCameraBar.setOnClickListener(v -> callManager.flipCamera());
-        }
 
         // In-call chat
         if (btnChat != null) {
