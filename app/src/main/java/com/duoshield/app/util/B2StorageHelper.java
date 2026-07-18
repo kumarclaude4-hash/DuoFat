@@ -938,55 +938,92 @@ public final class B2StorageHelper {
      */
     public static String testConnection() {
         try {
-            if (getKeyId().isEmpty() || getAppKey().isEmpty()) {
-                return "B2 credentials not configured — add B2_KEY_ID and B2_APPLICATION_KEY to project secrets and rebuild";
-            }
-            String bucket  = getBucket();
-            String region  = getRegion();
-            String urlStr  = getEndpoint() + "/" + bucket + "?max-keys=1";
-            String host    = "s3." + region + ".backblazeb2.com";
-            Date now       = new Date();
-            String dateStamp = utcFormat("yyyyMMdd", now);
-            String amzDate   = utcFormat("yyyyMMdd'T'HHmmss'Z'", now);
-            String canonicalHeaders =
-                    "host:" + host + "\n"
-                    + "x-amz-content-sha256:" + EMPTY_BODY_HASH + "\n"
-                    + "x-amz-date:" + amzDate + "\n";
-            String signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-            String canonicalRequest = "GET\n/" + bucket + "\nmax-keys=1\n"
-                    + canonicalHeaders + "\n" + signedHeaders + "\n" + EMPTY_BODY_HASH;
-            String credentialScope = dateStamp + "/" + region + "/" + SERVICE + "/aws4_request";
-            String stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n"
-                    + credentialScope + "\n"
-                    + sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
-            byte[] signingKey   = getSigningKey(dateStamp, region);
-            String signature    = hmacSha256Hex(signingKey, stringToSign);
-            String authorization = "AWS4-HMAC-SHA256 Credential="
-                    + getKeyId() + "/" + credentialScope
-                    + ", SignedHeaders=" + signedHeaders
-                    + ", Signature=" + signature;
+            if (!getKeyId().isEmpty() && !getAppKey().isEmpty()) {
+                // Direct SigV4 test — credentials baked into APK
+                String bucket  = getBucket();
+                String region  = getRegion();
+                String urlStr  = getEndpoint() + "/" + bucket + "?max-keys=1";
+                String host    = "s3." + region + ".backblazeb2.com";
+                Date now       = new Date();
+                String dateStamp = utcFormat("yyyyMMdd", now);
+                String amzDate   = utcFormat("yyyyMMdd'T'HHmmss'Z'", now);
+                String canonicalHeaders =
+                        "host:" + host + "\n"
+                        + "x-amz-content-sha256:" + EMPTY_BODY_HASH + "\n"
+                        + "x-amz-date:" + amzDate + "\n";
+                String signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+                String canonicalRequest = "GET\n/" + bucket + "\nmax-keys=1\n"
+                        + canonicalHeaders + "\n" + signedHeaders + "\n" + EMPTY_BODY_HASH;
+                String credentialScope = dateStamp + "/" + region + "/" + SERVICE + "/aws4_request";
+                String stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n"
+                        + credentialScope + "\n"
+                        + sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
+                byte[] signingKey   = getSigningKey(dateStamp, region);
+                String signature    = hmacSha256Hex(signingKey, stringToSign);
+                String authorization = "AWS4-HMAC-SHA256 Credential="
+                        + getKeyId() + "/" + credentialScope
+                        + ", SignedHeaders=" + signedHeaders
+                        + ", Signature=" + signature;
 
-            Request request = new Request.Builder()
-                    .url(urlStr)
-                    .get()
-                    .addHeader("Authorization",        authorization)
-                    .addHeader("x-amz-date",           amzDate)
-                    .addHeader("x-amz-content-sha256", EMPTY_BODY_HASH)
-                    .build();
+                Request request = new Request.Builder()
+                        .url(urlStr)
+                        .get()
+                        .addHeader("Authorization",        authorization)
+                        .addHeader("x-amz-date",           amzDate)
+                        .addHeader("x-amz-content-sha256", EMPTY_BODY_HASH)
+                        .build();
 
-            try (Response response = HTTP_CLIENT.newCall(request).execute()) {
-                int code = response.code();
-                if (code == 200 || code == 204) return null;
-                ResponseBody errBody = response.body();
-                String body = errBody != null ? errBody.string() : "";
-                // F36 fix: use masked key ID to avoid exposing credential in on-screen error card
-                if (code == 403) return "HTTP 403 — credentials rejected by B2 for bucket \""
-                        + bucket + "\". Verify B2_KEY_ID='" + getMaskedKeyId()
-                        + "' endpoint='" + getEndpoint()
-                        + "' and B2_APPLICATION_KEY are correct.\nB2 response: " + body;
-                if (code == 404) return "HTTP 404 — bucket \"" + bucket
-                        + "\" not found. Verify the B2_BUCKET secret matches your actual bucket name exactly.\nB2 response: " + body;
-                return "HTTP " + code + " — check bucket name and credentials.\nB2 response: " + body;
+                try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                    int code = response.code();
+                    if (code == 200 || code == 204) return null;
+                    ResponseBody errBody = response.body();
+                    String body = errBody != null ? errBody.string() : "";
+                    // F36 fix: use masked key ID to avoid exposing credential in on-screen error card
+                    if (code == 403) return "HTTP 403 — credentials rejected by B2 for bucket \""
+                            + bucket + "\". Verify B2_KEY_ID='" + getMaskedKeyId()
+                            + "' endpoint='" + getEndpoint()
+                            + "' and B2_APPLICATION_KEY are correct.\nB2 response: " + body;
+                    if (code == 404) return "HTTP 404 — bucket \"" + bucket
+                            + "\" not found. Verify the B2_BUCKET secret matches your actual bucket name exactly.\nB2 response: " + body;
+                    return "HTTP " + code + " — check bucket name and credentials.\nB2 response: " + body;
+                }
+            } else {
+                // Presign-server path — credentials live on the server (F9 design).
+                // Test by requesting a presigned URL for a probe key; if the server
+                // returns one, B2 credentials are correctly configured on Render.
+                String idToken = getIdTokenSync();
+                if (idToken == null) {
+                    return "Not signed in — open the app and sign in, then test again.";
+                }
+                java.net.URL url = new java.net.URL(
+                        com.duoshield.app.BuildConfig.PUSH_SERVER_URL + "/b2PresignedPut");
+                java.net.HttpURLConnection conn =
+                        (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Authorization", "Bearer " + idToken);
+                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(10_000);
+                org.json.JSONObject reqBody = new org.json.JSONObject();
+                reqBody.put("objectKey", "_connection_test_/probe.bin");
+                reqBody.put("contentType", "application/octet-stream");
+                conn.getOutputStream().write(reqBody.toString().getBytes(StandardCharsets.UTF_8));
+                conn.getOutputStream().close();
+                int code = conn.getResponseCode();
+                conn.disconnect();
+                if (code == 200) {
+                    return null; // presign server returned a valid URL — B2 is configured
+                } else if (code == 503) {
+                    return "Push server returned 503 — B2_KEY_ID and B2_APPLICATION_KEY are not set "
+                            + "on your Render deployment. Add them in the Render dashboard → "
+                            + "Environment, then redeploy the service.";
+                } else if (code == 401 || code == 403) {
+                    return "Push server rejected auth (HTTP " + code + ") — "
+                            + "sign out and back in, then test again.";
+                } else {
+                    return "Push server returned HTTP " + code + " — check server logs on Render.";
+                }
             }
         } catch (Exception e) {
             return e.getMessage();

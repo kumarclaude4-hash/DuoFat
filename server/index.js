@@ -975,6 +975,17 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── /b2Health — credential presence check (no auth required) ────────────
+  // Returns {"configured": true/false} so ops tooling (and testConnection()
+  // in the app) can verify server-side B2 setup without needing a Firebase token.
+  if (req.method === "GET" && req.url === "/b2Health") {
+    const kId  = process.env.B2_KEY_ID  || "";
+    const kApp = process.env.B2_APPLICATION_KEY || "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ configured: !!(kId && kApp) }));
+    return;
+  }
+
   // ── /b2PresignedPut — generate presigned S3 PUT URL (F9) ─────────────────
   if (req.method === "POST" && req.url === "/b2PresignedPut") {
     let body = "";
