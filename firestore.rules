@@ -195,6 +195,19 @@ service cloud.firestore {
                                || request.auth.uid ==
                                  get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
       }
+
+      // Ephemeral in-call chat messages (InCallChatActivity).
+      // Messages are stored under calls/{callId}/chat and are swept when the call
+      // document is deleted.  Only the two call participants may read or write.
+      // Previously this subcollection had no rule — any authenticated write attempt
+      // silently failed with PERMISSION_DENIED, making "Chat" unusable for both sides.
+      match /chat/{msgId} {
+        allow read, write: if request.auth != null
+                           && (request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.callerId
+                               || request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
+      }
     }
 
     // Server health-check collection written by the push server's Admin SDK.

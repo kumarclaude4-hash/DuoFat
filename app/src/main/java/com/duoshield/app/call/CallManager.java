@@ -260,6 +260,20 @@ public class CallManager {
         return eglBase;
     }
 
+    /**
+     * Initialises the EGL context and PeerConnectionFactory without starting a call.
+     *
+     * <p>CallActivity calls this <em>before</em> {@code startCall}/{@code acceptCall} so
+     * that {@link #getEglBase()} is non-null by the time {@code initVideoRenderers()} runs.
+     * Without this the renderers are initialised only <em>after</em> {@code createLocalTracks()}
+     * has already called {@link CallListener#onLocalVideoTrack}, resulting in
+     * {@code addSink()} being called on an uninitialised {@code SurfaceViewRenderer} — causing
+     * the "You" PiP to be blank for the entire call.
+     */
+    public void prepareEgl() {
+        initFactory();
+    }
+
     public String getCallId() {
         return callId;
     }

@@ -92,8 +92,10 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View                btnCameraLayout;
     private ImageView           btnEndCall;
     private ImageView           btnSpeaker;
-    private ImageView           btnFlipCamera;
+    private ImageView           btnFlipCamera;     // inside PiP
     private View                btnFlipLayout;
+    private ImageView           btnFlipCameraBar;  // in controls bar (always accessible)
+    private View                btnFlipCameraBarLayout;
     private View                btnBack;
     private ImageView           btnChat;
 
@@ -264,15 +266,30 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         final Runnable doStartCall = () -> {
             if (started[0]) return;
             started[0] = true;
-            // startCall/acceptCall call initFactory() synchronously as their first step,
-            // which creates eglBase.  initVideoRenderers() must run right after so
-            // eglBase is non-null when the SurfaceViewRenderers are initialised.
+
+            // BUG FIX — local video was always blank:
+            // startCall/acceptCall call createLocalTracks() which fires onLocalVideoTrack()
+            // → track.addSink(localVideoView) SYNCHRONOUSLY.  If initVideoRenderers() runs
+            // AFTER that call (the previous ordering), the sink is attached to an
+            // uninitialised SurfaceViewRenderer and the "You" PiP stays blank for the
+            // entire call.
+            //
+            // Fix: prepareEgl() calls initFactory() to create eglBase, then
+            // initVideoRenderers() initialises both SurfaceViewRenderers.  Only THEN do
+            // we start the call so addSink() always finds a ready renderer.
+            callManager.prepareEgl();
+            initVideoRenderers();
+
             if (isCaller) {
                 callManager.startCall(myUid, partnerId, isVideo, chatId);
+                // BUG FIX — in-call chat always said "call not established" for the caller:
+                // callId in CallActivity was read from the Intent (null for the caller —
+                // ChatMediaActivity never puts EXTRA_CALL_ID).  The real callId is generated
+                // inside CallManager.startCall(), so we sync it back here immediately.
+                callId = callManager.getCallId();
             } else {
                 callManager.acceptCall(myUid, callId, isVideo);
             }
-            initVideoRenderers();
         };
 
         // Hard deadline: start the call after 3 s even if TURN fetch is still in-flight.
@@ -362,10 +379,12 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnCameraLayout     = findViewById(R.id.btnCameraLayout);
         btnEndCall          = findViewById(R.id.btnEndCall);
         btnSpeaker          = findViewById(R.id.btnSpeaker);
-        btnFlipCamera       = findViewById(R.id.btnFlipCamera);
-        btnFlipLayout       = findViewById(R.id.btnFlipLayout);
-        btnBack             = findViewById(R.id.btnBack);
-        btnChat             = findViewById(R.id.btnChat);
+        btnFlipCamera         = findViewById(R.id.btnFlipCamera);
+        btnFlipLayout         = findViewById(R.id.btnFlipLayout);
+        btnFlipCameraBar      = findViewById(R.id.btnFlipCameraBar);
+        btnFlipCameraBarLayout = findViewById(R.id.btnFlipCameraBarLayout);
+        btnBack               = findViewById(R.id.btnBack);
+        btnChat               = findViewById(R.id.btnChat);
 
         // TURN banner
         bannerTurnWarning = findViewById(R.id.bannerTurnWarning);
@@ -379,10 +398,13 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         tvCallPartnerName.setText(partnerName);
         tvCallAvatarInitial.setText(partnerName.substring(0, 1).toUpperCase());
 
-        // Camera and flip are only relevant in video calls
+        // Camera toggle and flip buttons are only relevant in video calls
         if (isVideo) {
             btnCameraLayout.setVisibility(View.VISIBLE);
-            // btnFlipLayout lives inside localVideoPip; already visible within the PiP
+            if (btnFlipCameraBarLayout != null) {
+                btnFlipCameraBarLayout.setVisibility(View.VISIBLE);
+            }
+            // btnFlipLayout lives inside localVideoPip; visible once PiP appears
         }
     }
 
@@ -405,11 +427,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             btnMute.setAlpha(isMuted ? 0.5f : 1f);
         });
 
-        // Camera toggle (video calls only)
+        // Camera toggle (video calls only) — turns camera on/off
         btnCamera.setOnClickListener(v -> {
             isCameraOff = !isCameraOff;
             callManager.setCameraEnabled(!isCameraOff);
-            btnCamera.setAlpha(isCameraOff ? 0.5f : 1f);
+            btnCamera.setAlpha(isCameraOff ? 0.4f : 1f);
             localVideoPip.setVisibility(isCameraOff ? View.GONE : View.VISIBLE);
         });
 
@@ -422,8 +444,13 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // Audio output — opens a bottom-sheet picker instead of simple toggle
         btnSpeaker.setOnClickListener(v -> showAudioOutputPicker());
 
-        // Flip camera (button is inside the PiP FrameLayout)
+        // Flip camera (PiP button — visible when local video is live)
         btnFlipCamera.setOnClickListener(v -> callManager.flipCamera());
+
+        // Flip camera (controls-bar button — always accessible in video calls)
+        if (btnFlipCameraBar != null) {
+            btnFlipCameraBar.setOnClickListener(v -> callManager.flipCamera());
+        }
 
         // In-call chat
         if (btnChat != null) {
@@ -438,13 +465,38 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         if (am == null) return;
 
         am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-        // Video calls default to speaker-on (WhatsApp/FaceTime behaviour — the user is
-        // looking at the screen so earpiece audio doesn't make sense).
-        // Voice calls default to earpiece so the user can hold the phone naturally.
-        if (isVideo) {
+
+        // BUG FIX — Bluetooth headset was ignored at call start:
+        // The old code blindly set speaker on/off based on call type, overriding any
+        // already-connected Bluetooth SCO device.  Now we check first: if a BT SCO
+        // device is connected, route there unconditionally (highest priority, matches
+        // WhatsApp / Signal behaviour).  Fall back to speaker (video) or earpiece (voice).
+        boolean btConnected = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                AudioDeviceInfo[] outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+                for (AudioDeviceInfo d : outputs) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+                        btConnected = true;
+                        break;
+                    }
+                }
+            } catch (SecurityException ignored) {
+                // BLUETOOTH_CONNECT not yet granted — will handle in picker
+            }
+        }
+
+        if (btConnected) {
+            // Start SCO session so the headset's mic is also used.
+            try { am.setBluetoothScoOn(true); am.startBluetoothSco(); } catch (Exception ignored) {}
+            am.setSpeakerphoneOn(false);
+            isSpeakerOn = false;
+        } else if (isVideo) {
+            // Video calls default to speaker (user is watching the screen).
             am.setSpeakerphoneOn(true);
             isSpeakerOn = true;
         } else {
+            // Voice calls default to earpiece so the user can hold the phone naturally.
             am.setSpeakerphoneOn(false);
         }
 
@@ -583,13 +635,23 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 false, () -> {
                     if (am != null) {
                         am.setSpeakerphoneOn(false);
-                        am.setBluetoothScoOn(false);
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            am.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL,
-                                    AudioManager.ADJUST_MUTE, 0);
-                        } else {
-                            am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
-                        }
+                        try { am.stopBluetoothSco(); am.setBluetoothScoOn(false); } catch (Exception ignored) {}
+                        // BUG FIX — "Turn off sound" did nothing:
+                        // adjustStreamVolume(ADJUST_MUTE) on STREAM_VOICE_CALL is silently
+                        // ignored on most devices (AudioPolicy restricts it during calls).
+                        // setStreamVolume(0) is more reliable across Android versions / OEMs.
+                        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                    }
+                    isSpeakerOn = false;
+                    // Also mute the outbound audio track — otherwise we keep sending mic
+                    // audio to the remote party even though our own speaker is silent.
+                    if (callManager != null) callManager.setMuted(true);
+                    isMuted = true;
+                    if (btnMute != null) {
+                        runOnUiThread(() -> {
+                            btnMute.setImageResource(R.drawable.ic_mic_off);
+                            btnMute.setAlpha(0.5f);
+                        });
                     }
                     dialog.dismiss();
                 });

@@ -240,7 +240,7 @@
             android:paddingStart="8dp"
             android:paddingEnd="8dp">
 
-            <!-- Camera (shown only for video calls) -->
+            <!-- Camera toggle off/on (video calls only) -->
             <LinearLayout
                 android:id="@+id/btnCameraLayout"
                 android:layout_width="0dp"
@@ -253,17 +253,46 @@
                     android:id="@+id/btnCamera"
                     android:layout_width="64dp"
                     android:layout_height="64dp"
-                    android:src="@drawable/ic_camera"
+                    android:src="@drawable/ic_videocam"
                     android:padding="16dp"
                     android:background="@drawable/bg_call_btn_circle"
                     android:tint="#FFFFFF"
                     android:clickable="true"
                     android:focusable="true"
-                    android:contentDescription="Camera" />
+                    android:contentDescription="Toggle camera" />
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Camera"
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="12sp"
+                    android:layout_marginTop="6dp" />
+            </LinearLayout>
+
+            <!-- Flip camera front↔back (video calls only) -->
+            <LinearLayout
+                android:id="@+id/btnFlipCameraBarLayout"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:visibility="gone">
+                <ImageView
+                    android:id="@+id/btnFlipCameraBar"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:src="@drawable/ic_flip_camera"
+                    android:padding="16dp"
+                    android:background="@drawable/bg_call_btn_circle"
+                    android:tint="#FFFFFF"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Switch camera" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Flip"
                     android:textColor="#CCFFFFFF"
                     android:textSize="12sp"
                     android:layout_marginTop="6dp" />
