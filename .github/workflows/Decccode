@@ -1,5 +1,0 @@
-- name: Print SHA-256
-  run: |
-    keytool -list -v \
-      -keystore app/duoshield-release.keystore \
-      -storepass "${{ secrets.KEYSTORE_PASSWORD }}"
