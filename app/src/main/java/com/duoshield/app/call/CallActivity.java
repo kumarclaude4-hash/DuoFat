@@ -44,6 +44,13 @@ import android.content.IntentFilter;
 import android.os.PowerManager;
 import androidx.core.content.ContextCompat;
 
+import com.google.firebase.firestore.DocumentChange;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.ListenerRegistration;
+import org.webrtc.RendererCommon;
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Full-screen call UI — voice or video.
  *
@@ -104,6 +111,14 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     // TURN quota warning banner
     private View     bannerTurnWarning;
     private TextView tvTurnWarningText;
+
+    // New-message banner (Google Meet-style pill)
+    private View     bannerNewMessage;
+    private TextView tvNewMsgPreview;
+    private View     btnChatLayout;
+    private final Handler         bannerDismissHandler = new Handler(Looper.getMainLooper());
+    private ListenerRegistration  chatMessageListener;
+    private final Set<String>     seenChatMsgIds = new HashSet<>();
 
     // ── Audio focus ───────────────────────────────────────────────────────────
     private AudioFocusRequest audioFocusRequest; // API 26+
@@ -292,6 +307,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             } else {
                 callManager.acceptCall(myUid, callId, isVideo);
             }
+
+            // Start listening for in-call chat messages so we can show Google Meet-style
+            // banners when the partner sends a message (video calls only — audio calls
+            // have no chat feature).
+            if (isVideo) listenForInCallMessages();
         };
 
         // Hard deadline: start the call after 3 s even if TURN fetch is still in-flight.
@@ -334,6 +354,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
         historyExecutor.shutdownNow();
         durationHandler.removeCallbacksAndMessages(null);
+        bannerDismissHandler.removeCallbacksAndMessages(null);
+        if (chatMessageListener != null) { chatMessageListener.remove(); chatMessageListener = null; }
         // Cancel the TURN-credential wait if it hasn't fired yet.
         if (turnTimeoutHandler != null) turnTimeoutHandler.removeCallbacksAndMessages(null);
 
@@ -396,16 +418,27 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             btnDismiss.setOnClickListener(v -> bannerTurnWarning.setVisibility(View.GONE));
         }
 
+        // New-message banner
+        bannerNewMessage = findViewById(R.id.bannerNewMessage);
+        tvNewMsgPreview  = findViewById(R.id.tvNewMsgPreview);
+        btnChatLayout    = findViewById(R.id.btnChatLayout);
+        if (bannerNewMessage != null) {
+            bannerNewMessage.setOnClickListener(v -> {
+                bannerNewMessage.setVisibility(View.GONE);
+                bannerDismissHandler.removeCallbacksAndMessages(null);
+                openInCallChat();
+            });
+        }
+
         // Populate static text
         tvCallPartnerName.setText(partnerName);
         tvCallAvatarInitial.setText(partnerName.substring(0, 1).toUpperCase());
 
-        // Camera toggle and flip buttons are only relevant in video calls
+        // Camera, flip, and chat buttons are only relevant in video calls
         if (isVideo) {
             btnCameraLayout.setVisibility(View.VISIBLE);
-            if (btnFlipCameraBarLayout != null) {
-                btnFlipCameraBarLayout.setVisibility(View.VISIBLE);
-            }
+            if (btnFlipCameraBarLayout != null) btnFlipCameraBarLayout.setVisibility(View.VISIBLE);
+            if (btnChatLayout          != null) btnChatLayout.setVisibility(View.VISIBLE);
             // btnFlipLayout lives inside localVideoPip; visible once PiP appears
         }
     }
@@ -646,8 +679,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         if (eglBase == null) return;
         remoteVideoView.init(eglBase.getEglBaseContext(), null);
         remoteVideoView.setMirror(false);
+        remoteVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
         localVideoView.init(eglBase.getEglBaseContext(), null);
-        localVideoView.setMirror(true);
+        // mirror=false: local preview shows what the remote party sees (not reversed)
+        localVideoView.setMirror(false);
+        localVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
     }
 
     // ── Audio output picker ───────────────────────────────────────────────────
@@ -768,6 +804,69 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 .setVisibility(checked ? View.VISIBLE : View.GONE);
         item.setOnClickListener(v -> onClick.run());
         container.addView(item);
+    }
+
+    // ── In-call message notifications ─────────────────────────────────────────
+
+    /**
+     * Listens for new messages in the in-call chat Firestore subcollection and shows a
+     * Google Meet-style pill banner at the top of the screen when the partner sends one.
+     * Only called for video calls (audio calls have no chat feature).
+     */
+    private void listenForInCallMessages() {
+        if (callId == null || myUid == null) return;
+        long listenStartMs = System.currentTimeMillis();
+        chatMessageListener = FirebaseFirestore.getInstance()
+                .collection("calls").document(callId)
+                .collection("chat")
+                .whereGreaterThan("ts", listenStartMs)
+                .addSnapshotListener((snapshots, e) -> {
+                    if (e != null || snapshots == null) return;
+                    for (DocumentChange dc : snapshots.getDocumentChanges()) {
+                        if (dc.getType() != DocumentChange.Type.ADDED) continue;
+                        String senderId = dc.getDocument().getString("senderId");
+                        if (myUid.equals(senderId)) continue; // skip my own messages
+                        String text = dc.getDocument().getString("text");
+                        if (text == null || text.isEmpty()) continue;
+                        String docId = dc.getDocument().getId();
+                        if (seenChatMsgIds.contains(docId)) continue;
+                        seenChatMsgIds.add(docId);
+                        String preview = text.length() > 48 ? text.substring(0, 48) + "…" : text;
+                        runOnUiThread(() -> showNewMessageBanner(preview));
+                    }
+                });
+    }
+
+    /**
+     * Slides in the new-message pill banner at the top of the screen.
+     * Auto-dismisses after 4 seconds. Tapping it opens the in-call chat.
+     */
+    private void showNewMessageBanner(String preview) {
+        if (bannerNewMessage == null || tvNewMsgPreview == null) return;
+        tvNewMsgPreview.setText(preview);
+        bannerNewMessage.setVisibility(View.VISIBLE);
+        bannerNewMessage.setAlpha(0f);
+        bannerNewMessage.setTranslationY(-40f);
+        bannerNewMessage.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(200)
+                .start();
+        // Reset the auto-dismiss timer on each new message
+        bannerDismissHandler.removeCallbacksAndMessages(null);
+        bannerDismissHandler.postDelayed(() -> {
+            if (bannerNewMessage != null) {
+                bannerNewMessage.animate()
+                        .alpha(0f)
+                        .translationY(-40f)
+                        .setDuration(200)
+                        .withEndAction(() -> {
+                            if (bannerNewMessage != null)
+                                bannerNewMessage.setVisibility(View.GONE);
+                        })
+                        .start();
+            }
+        }, 4_000);
     }
 
     // ── In-call chat ──────────────────────────────────────────────────────────
