@@ -119,6 +119,15 @@
     <color name="textPrimary">#F4F1FA</color>
     <color name="white">#FFFFFF</color>
 
+    <!-- ══ Onboarding / Display-Name screen — light lavender mode ══ -->
+    <color name="dn_background">#EDEAF8</color>
+    <color name="dn_accent">#7B63FB</color>
+    <color name="dn_text_title">#13112A</color>
+    <color name="dn_text_subtitle">#7878A0</color>
+    <color name="dn_text_hint">#B0ABCC</color>
+    <color name="dn_button_tint">#C8BBFF</color>
+    <color name="dn_progress_track">#D8D2F8</color>
+
     <!-- ══ Lock Screen — light lavender mode ══ -->
     <color name="ls_background">#EDE9F8</color>
     <color name="ls_key_text">#1A1040</color>

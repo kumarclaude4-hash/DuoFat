@@ -64,7 +64,7 @@ public class FcmTokenHelper {
             FirebaseFirestore.getInstance()
                 .collection("users").document(uid)
                 .set(data, SetOptions.merge())
-                .addOnSuccessListener(v -> Log.d(TAG, "FCM token uploaded for uid=" + uid))
+                .addOnSuccessListener(v -> Log.d(TAG, "FCM token uploaded successfully"))
                 .addOnFailureListener(e -> Log.w(TAG, "FCM token upload failed: " + e.getMessage()));
         } else if (attempt < MAX_RETRY) {
             long delayMs = 3000L * (1L << attempt); // 3 s, 6 s, 12 s
