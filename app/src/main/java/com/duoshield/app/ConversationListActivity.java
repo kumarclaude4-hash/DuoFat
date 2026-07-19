@@ -67,6 +67,8 @@ public class ConversationListActivity extends BaseActivity {
     private List<Conversation>   groupConversations  = new ArrayList<>();
     private ExecutorService      executor;
     private AppDatabase          localDb;
+    /** Incremented each time a new filter pass starts; stale async results are discarded. */
+    private volatile int         filterSeq           = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -417,6 +419,12 @@ public class ConversationListActivity extends BaseActivity {
     }
 
     private void filterConversations(String query) {
+        // Increment the generation counter so any in-flight filter pass from a previous
+        // mergeAndFilter() call is treated as stale and its adapter update is suppressed.
+        // Without this guard, two rapid mergeAndFilter() calls (e.g. Firestore MODIFIED +
+        // group Room reload arriving within milliseconds) can produce out-of-order adapter
+        // updates — the stale one lands last and re-sorts the list incorrectly.
+        final int mySeq = ++filterSeq;
         final List<Conversation> snapshot = new ArrayList<>(allConversations);
         final String lq = query.toLowerCase();
         final boolean incArchived = showArchived;
@@ -439,6 +447,8 @@ public class ConversationListActivity extends BaseActivity {
                 result = filtered;
             }
             runOnUiThread(() -> {
+                // Discard this result if a newer filter pass has already started.
+                if (mySeq != filterSeq) return;
                 adapter.setConversations(result);
                 showEmpty(adapter.getItemCount() == 0);
             });
