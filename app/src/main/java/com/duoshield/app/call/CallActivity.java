@@ -47,6 +47,7 @@ import android.os.PowerManager;
 import androidx.core.content.ContextCompat;
 
 import com.google.firebase.firestore.DocumentChange;
+import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import org.webrtc.RendererCommon;
@@ -819,15 +820,39 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      * Google Meet-style pill banner at the top of the screen when the partner sends one.
      * Only called for video calls (audio calls have no chat feature).
      */
+    /**
+     * Listens for new in-call chat messages and shows a banner for partner messages.
+     *
+     * <p>Previous implementation filtered by {@code ts > System.currentTimeMillis()}.
+     * This caused one-way notification failures: if device clocks differ by even a
+     * few seconds, the partner's messages arrive with a ts < our listenStartMs and
+     * the query silently drops them. The caller or callee would then never see the
+     * banner for the other party's messages.
+     *
+     * <p>Fix: listen from the beginning of the subcollection (no ts filter) and use
+     * an initial-load seed pass to mark all already-existing messages as seen so
+     * they don't trigger spurious banners. Every ADDED document after the first
+     * snapshot is a genuinely new message.
+     */
     private void listenForInCallMessages() {
         if (callId == null || myUid == null) return;
-        long listenStartMs = System.currentTimeMillis();
+        final boolean[] initialLoadDone = {false};
         chatMessageListener = FirebaseFirestore.getInstance()
                 .collection("calls").document(callId)
                 .collection("chat")
-                .whereGreaterThan("ts", listenStartMs)
+                .orderBy("ts", com.google.firebase.firestore.Query.Direction.ASCENDING)
                 .addSnapshotListener((snapshots, e) -> {
                     if (e != null || snapshots == null) return;
+                    if (!initialLoadDone[0]) {
+                        // Seed seen-set with every document already in the subcollection
+                        // so we never banner for messages sent before our listener started.
+                        for (DocumentSnapshot ds : snapshots.getDocuments()) {
+                            seenChatMsgIds.add(ds.getId());
+                        }
+                        initialLoadDone[0] = true;
+                        return;
+                    }
+                    // Incremental updates: only process ADDED changes from the partner
                     for (DocumentChange dc : snapshots.getDocumentChanges()) {
                         if (dc.getType() != DocumentChange.Type.ADDED) continue;
                         String senderId = dc.getDocument().getString("senderId");

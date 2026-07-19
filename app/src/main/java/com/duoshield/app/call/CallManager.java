@@ -486,11 +486,21 @@ public class CallManager {
         audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
         audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googEchoCancellation2", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googDAEchoCancellation", "true"));
+        audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googNoiseSuppression", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googNoiseSuppression2", "true"));
         audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googAutoGainControl", "true"));
         audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googAutoGainControl2", "true"));
+        audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googHighpassFilter", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"));
         audioSource = factory.createAudioSource(audioConstraints);
         localAudioTrack = factory.createAudioTrack("audio0", audioSource);
         localAudioTrack.setEnabled(true);

@@ -1112,15 +1112,18 @@ public final class B2StorageHelper {
     }
 
     /**
-     * Downloads from the B2 public endpoint (no auth).
-     * Safe because content is always AES-256-GCM encrypted before upload.
+     * Downloads from B2 using a server-generated presigned GET URL.
+     *
+     * <p>The bucket requires SigV4 authentication — unauthenticated public GETs return 401.
+     * When B2 credentials are not baked into the APK ({@link #getKeyId()} is empty) we ask
+     * the push server for a short-lived presigned URL (1-hour TTL) and perform a plain GET
+     * against it, just like we do for uploads via {@link #uploadViaPresignedUrl}.
      */
     private static byte[] downloadViaPublicUrl(String b2Path) throws Exception {
         String objectKey = toObjectKey(b2Path);
-        String urlStr    = "https://s3." + getRegion() + ".backblazeb2.com/"
-                         + getBucket() + "/" + objectKey;
-        Request request = new Request.Builder().url(urlStr).get().build();
-        return withRetry("dl-public:" + objectKey, () -> {
+        return withRetry("dl-presigned:" + objectKey, () -> {
+            String presignedUrl = fetchPresignedGetUrl(objectKey);
+            Request request = new Request.Builder().url(presignedUrl).get().build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200) {
@@ -1130,11 +1133,43 @@ public final class B2StorageHelper {
                 }
                 if (code >= 400 && code < 500) {
                     throw new NonRetryableException(code,
-                            "B2 public GET failed [" + code + "]: " + objectKey);
+                            "B2 presigned GET failed [" + code + "]: " + objectKey);
                 }
-                throw new IOException("B2 public GET failed [" + code + "]: " + objectKey);
+                throw new IOException("B2 presigned GET failed [" + code + "]: " + objectKey);
             }
         });
+    }
+
+    /**
+     * Fetches a presigned S3 GET URL from the push server.
+     * Blocks the calling thread — call only from a background thread.
+     */
+    private static String fetchPresignedGetUrl(String objectKey) throws Exception {
+        String idToken = getIdTokenSync();
+        if (idToken == null) throw new Exception("Not authenticated — presign GET unavailable");
+
+        java.net.URL url = new java.net.URL(BuildConfig.PUSH_SERVER_URL + "/b2PresignedGet");
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Authorization", "Bearer " + idToken);
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(10_000);
+        conn.setReadTimeout(10_000);
+        org.json.JSONObject reqBody = new org.json.JSONObject();
+        reqBody.put("objectKey", objectKey);
+        conn.getOutputStream().write(reqBody.toString().getBytes(StandardCharsets.UTF_8));
+        conn.getOutputStream().close();
+        int code = conn.getResponseCode();
+        if (code != 200) throw new IOException("Presign GET server returned HTTP " + code);
+        StringBuilder sb = new StringBuilder();
+        try (java.io.BufferedReader br = new java.io.BufferedReader(
+                new java.io.InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line);
+        }
+        conn.disconnect();
+        return new org.json.JSONObject(sb.toString()).getString("url");
     }
 
     /**
