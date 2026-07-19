@@ -1250,6 +1250,11 @@ public class ChatMediaActivity extends BaseActivity {
             if (msgListener  == null) ensureSignalSession(); // ensures session then starts listener
             if (convListener == null) listenForConvUpdates();
         }
+        // Mark this user as online in the active conversation so the partner's conversation
+        // list and chat header show the online dot immediately.
+        if (conversationId != null && myUid != null) {
+            com.duoshield.app.util.OnlinePresenceHelper.setOnline(this, conversationId, myUid);
+        }
         updateDisappearBanner();
         checkSafetyNumberBanner();
         disappearHandler.post(disappearTicker);
@@ -1263,6 +1268,11 @@ public class ChatMediaActivity extends BaseActivity {
         disappearHandler.removeCallbacks(disappearTicker);
         recordingTimerHandler.removeCallbacks(timerTick);
         player.release();
+        // Mark offline so the partner's conversation list / chat header reflects the
+        // correct presence state as soon as this chat goes to background.
+        if (conversationId != null && myUid != null) {
+            com.duoshield.app.util.OnlinePresenceHelper.setOffline(this, conversationId, myUid);
+        }
     }
 
     @Override protected void onDestroy() {

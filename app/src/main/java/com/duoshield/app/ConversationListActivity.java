@@ -638,5 +638,14 @@ public class ConversationListActivity extends BaseActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        if (AppLockManager.shouldLock(this)) return;
+        // Re-guard: if the Firestore listener was detached for any reason (e.g. the system
+        // called onStop without a matching onStart — a rare but real lifecycle edge-case on
+        // some OEMs), re-attach it here so the list never stays permanently frozen.
+        if (listener == null) listenForConversation();
+        // Groups are stored in Room (no Firestore real-time listener for groups). Reload
+        // them on every resume so that new group messages written to Room while this
+        // activity was in the background are reflected immediately when the user returns.
+        loadGroupsFromRoom();
     }
 }
