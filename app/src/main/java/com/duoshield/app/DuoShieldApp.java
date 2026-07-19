@@ -1,7 +1,9 @@
 package com.duoshield.app;
 
+import android.app.ActivityManager;
 import android.app.Application;
 import android.content.ComponentCallbacks2;
+import android.content.Context;
 import android.util.Log;
 import com.bumptech.glide.Glide;
 import androidx.work.Configuration;
@@ -53,13 +55,21 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
                     + "device ABI is one of arm64-v8a / armeabi-v7a / x86_64 / x86.", e);
         }
 
-        // Enable Firestore offline persistence with a 100 MB disk cache so messages
-        // and user documents load instantly without a network round-trip.
+        // Firestore offline cache: 100 MB on normal devices, 50 MB on low-RAM devices
+        // (e.g. POCO C51, 2 GB RAM — ActivityManager.getMemoryClass() ≤ 128 MB).
+        // Reducing the cache on low-RAM frees ~50 MB of internal storage that is
+        // more valuable for SQLCipher WAL files and B2 media cache.
         try {
+            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            boolean isLowRam = am != null
+                    && (am.isLowRamDevice() || am.getMemoryClass() <= 128);
+            long firestoreCacheBytes = isLowRam
+                    ? 50L * 1024 * 1024   // 50 MB for POCO C51 / 2–3 GB class
+                    : 100L * 1024 * 1024; // 100 MB for well-provisioned devices
             FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
                     .setLocalCacheSettings(
                         PersistentCacheSettings.newBuilder()
-                            .setSizeBytes(100L * 1024 * 1024) // 100 MB offline cache
+                            .setSizeBytes(firestoreCacheBytes)
                             .build())
                     .build();
             FirebaseFirestore.getInstance().setFirestoreSettings(settings);

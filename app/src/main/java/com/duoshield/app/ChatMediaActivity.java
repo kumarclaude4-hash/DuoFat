@@ -432,6 +432,11 @@ public class ChatMediaActivity extends BaseActivity {
         llm.setStackFromEnd(true);
         llm.setInitialPrefetchItemCount(12);
         recyclerView.setLayoutManager(llm);
+        // setHasFixedSize(true): RecyclerView dimensions are fixed to the screen;
+        // adding/removing messages doesn't change the RecyclerView's own size.
+        // This skips requestLayout() on every data-set change — measurable on
+        // slow CPUs (Helio G36) with large chat histories (200+ messages).
+        recyclerView.setHasFixedSize(true);
         recyclerView.setItemViewCacheSize(20);
         recyclerView.setAdapter(adapter);
         if (recyclerView.getItemAnimator() != null) {

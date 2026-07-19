@@ -46,6 +46,16 @@ public class DuoShieldGlideModule extends AppGlideModule {
 
         builder.setBitmapPool(new LruBitmapPool(bitmapPoolMb * MB));
         builder.setMemoryCache(new LruResourceCache(memoryCacheMb * MB));
+
+        if (lowRam) {
+            // RGB_565 uses 2 bytes/pixel vs ARGB_8888's 4 bytes — halves bitmap RAM
+            // on low-RAM devices (e.g. POCO C51, 2 GB).  Chat thumbnails have no
+            // transparency, so there is no visible quality loss for images.
+            // Voice-note waveforms and avatars are drawn programmatically and are
+            // unaffected by decode format.
+            builder.setDefaultRequestOptions(
+                    new RequestOptions().format(DecodeFormat.PREFER_RGB_565));
+        }
     }
 
     /** Disable manifest parsing — we have exactly one GlideModule and don't need the scan. */

@@ -21,8 +21,8 @@ android {
         applicationId "com.duoshield.app"
         minSdk 26
         targetSdk 34
-        versionCode 4
-        versionName "1.3"
+        versionCode 5
+        versionName "1.4"
 
         // Strip unused locale resources from all library dependencies (Firebase, OkHttp,
         // Material Design, etc.).  DuoShield ships English only, so this is safe and saves

@@ -64,6 +64,11 @@ public class TypingDotsView extends View {
     /** Call whenever the view becomes visible. */
     public void startDotAnimation() {
         stopDotAnimation();
+        // Hardware layer: offloads compositing to the GPU. On PowerVR GE8320
+        // (POCO C51) a software rasterise at 60 fps visibly taxed the CPU.
+        // With LAYER_TYPE_HARDWARE the frame is composited on-GPU; CPU is only
+        // needed to update dotY[], not to rasterise the entire view each frame.
+        setLayerType(LAYER_TYPE_HARDWARE, null);
         AnimatorSet set = new AnimatorSet();
         Animator[] anims = new Animator[DOT_COUNT];
         for (int i = 0; i < DOT_COUNT; i++) {
@@ -92,6 +97,9 @@ public class TypingDotsView extends View {
             animatorSet = null;
         }
         for (int i = 0; i < DOT_COUNT; i++) dotY[i] = centerY;
+        // Release the GPU-backed layer so the framebuffer memory is reclaimed
+        // when the partner stops typing.
+        setLayerType(LAYER_TYPE_NONE, null);
         invalidate();
     }
 

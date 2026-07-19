@@ -60,18 +60,62 @@ public class FullScreenImageActivity extends BaseActivity {
         if (progressBar != null) progressBar.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
-    /** Decodes bytes to a Bitmap and hands it to PhotoView directly.
-     *  Glide.load(byte[]) triggers PhotoView layout bugs on some devices. */
+    /**
+     * Decodes bytes to a Bitmap on a background thread, then hands it to PhotoView.
+     *
+     * <p>Decoding runs off the main thread to avoid ANR on slow CPUs (Helio G36 /
+     * POCO C51 takes ~300-800 ms for a high-res JPEG on its A53 cores).
+     *
+     * <p>{@code inSampleSize} is derived from the PhotoView's display area, so we
+     * never allocate more pixels than the screen can show — critical on 2-4 GB
+     * devices where a 12 MP image at full resolution would consume ~35 MB RAM.
+     */
     private void displayBytes(byte[] plainBytes) {
         if (isDestroyed() || isFinishing()) return;
-        Bitmap bmp = BitmapFactory.decodeByteArray(plainBytes, 0, plainBytes.length);
-        showProgress(false);
-        if (bmp != null) {
-            photoView.setImageBitmap(bmp);
-        } else {
-            // fallback — let Glide try (may still work for some formats)
-            Glide.with(FullScreenImageActivity.this).load(plainBytes).into(photoView);
+        final int reqW = (photoView != null) ? photoView.getWidth()  : 0;
+        final int reqH = (photoView != null) ? photoView.getHeight() : 0;
+        Executors.newSingleThreadExecutor().execute(() -> {
+            // Pass 1: decode bounds only (no pixel allocation) to calculate inSampleSize
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(plainBytes, 0, plainBytes.length, opts);
+            opts.inSampleSize      = calculateInSampleSize(opts, reqW, reqH);
+            opts.inJustDecodeBounds = false;
+            // Pass 2: decode at reduced resolution
+            Bitmap bmp = BitmapFactory.decodeByteArray(plainBytes, 0, plainBytes.length, opts);
+            runOnUiThread(() -> {
+                if (isDestroyed() || isFinishing()) return;
+                showProgress(false);
+                if (bmp != null) {
+                    photoView.setImageBitmap(bmp);
+                } else {
+                    // fallback — let Glide try (may still work for some formats)
+                    Glide.with(FullScreenImageActivity.this).load(plainBytes).into(photoView);
+                }
+            });
+        });
+    }
+
+    /**
+     * Calculates the largest power-of-two {@code inSampleSize} such that the
+     * decoded image is no larger than {@code reqWidth × reqHeight}.
+     * Returns 1 (full resolution) when either dimension is unknown.
+     */
+    private static int calculateInSampleSize(BitmapFactory.Options options,
+                                             int reqWidth, int reqHeight) {
+        int rawH = options.outHeight;
+        int rawW = options.outWidth;
+        if (reqWidth <= 0 || reqHeight <= 0) return 1;
+        int inSampleSize = 1;
+        if (rawH > reqHeight || rawW > reqWidth) {
+            int halfH = rawH / 2;
+            int halfW = rawW / 2;
+            while ((halfH / inSampleSize) >= reqHeight
+                    && (halfW / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2;
+            }
         }
+        return inSampleSize;
     }
 
     // Timeout handler: if neither onLoaded nor onError fires within 30 s,

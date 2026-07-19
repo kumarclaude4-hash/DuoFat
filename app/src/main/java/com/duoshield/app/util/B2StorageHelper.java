@@ -129,12 +129,17 @@ public final class B2StorageHelper {
             new ConcurrentHashMap<>();
 
     // ── Bounded thread pool for concurrent media downloads ───────────────────
-    // Cap at 3 threads. Each thread holds an encrypted + decrypted buffer in
-    // memory simultaneously (up to 2× the file size), so 6 concurrent operations
-    // on a 4 GB device (Helio G36 class) created significant memory pressure.
-    // 3 threads still provides good throughput — B2 network latency dominates
-    // decryption time, so the extra threads were largely idle anyway.
-    private static final ExecutorService MEDIA_POOL = Executors.newFixedThreadPool(3);
+    // Adaptive: 2 threads for low-RAM devices (JVM heap ≤ 256 MB, e.g. POCO C51
+    // with 2–3 GB RAM where MIUI leaves ~192 MB for the app), 3 threads otherwise.
+    // Each thread holds an encrypted + decrypted buffer simultaneously (up to 2×
+    // the file size), so reducing from 3→2 cuts peak buffer pressure by ~33 MB
+    // on a 10 MB video download — meaningful when total usable heap is ~150 MB.
+    private static final ExecutorService MEDIA_POOL;
+    static {
+        long maxHeap = Runtime.getRuntime().maxMemory();
+        int  threads = (maxHeap <= 256L * 1024 * 1024) ? 2 : 3;
+        MEDIA_POOL = Executors.newFixedThreadPool(threads);
+    }
     private static final int    GCM_IV_LEN         = 12;
     private static final int    GCM_TAG_LEN        = 128;
     private static final String TAG                = "B2Storage";
@@ -771,7 +776,12 @@ public final class B2StorageHelper {
 
     // ── Persistent disk cache helpers ─────────────────────────────────────────
 
-    private static final String DISK_CACHE_DIR = "b2_cache";
+    private static final String DISK_CACHE_DIR      = "b2_cache";
+    /** Maximum total size of the on-disk media cache in bytes (100 MB).
+     *  On a POCO C51 (64 GB eMMC 5.1) the available storage shrinks quickly
+     *  once MIUI system files, photos, and app data are accounted for.
+     *  LRU eviction (oldest-first) keeps the cache bounded without a wipe. */
+    private static final long   DISK_CACHE_MAX_BYTES = 100L * 1024 * 1024;
 
     private static File diskCacheFile(Context ctx, String b2Path) {
         try {
@@ -810,6 +820,44 @@ public final class B2StorageHelper {
             fos.write(plain);
         } catch (Exception e) {
             Log.w(TAG, "writeDiskCache failed for " + b2Path, e);
+            return;
+        }
+        // Enforce the 100 MB cap after each write (oldest-first LRU eviction).
+        // Called from a MEDIA_POOL background thread so disk I/O is safe here.
+        enforceDiskCacheLimit(ctx);
+    }
+
+    /**
+     * Evicts the oldest cache files until total size is below {@link #DISK_CACHE_MAX_BYTES}.
+     * Uses last-modified time as the LRU proxy; files untouched longest are deleted first.
+     * Must be called from a background thread (performs file I/O).
+     */
+    private static void enforceDiskCacheLimit(Context ctx) {
+        try {
+            File dir = new File(ctx.getFilesDir(), DISK_CACHE_DIR);
+            File[] files = dir.listFiles();
+            if (files == null || files.length == 0) return;
+
+            // Calculate total cache size
+            long totalBytes = 0;
+            for (File f : files) totalBytes += f.length();
+            if (totalBytes <= DISK_CACHE_MAX_BYTES) return;
+
+            // Sort oldest-first by last-modified time
+            java.util.Arrays.sort(files, (a, b) ->
+                    Long.compare(a.lastModified(), b.lastModified()));
+
+            // Evict oldest until under the limit
+            for (File f : files) {
+                if (totalBytes <= DISK_CACHE_MAX_BYTES) break;
+                long sz = f.length();
+                if (f.delete()) {
+                    totalBytes -= sz;
+                    Log.d(TAG, "diskCache evicted: " + f.getName() + " (" + sz + " B)");
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "enforceDiskCacheLimit failed: " + e.getMessage());
         }
     }
 
