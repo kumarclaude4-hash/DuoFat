@@ -176,10 +176,10 @@ export default {
       if (r2Bytes + contentLength > MAX_R2_BYTES) {
         const remainingMB = ((MAX_R2_BYTES - r2Bytes) / 1_048_576).toFixed(1);
         return json({
-          error:        'R2 storage limit reached (9 GB cap). File moved to cold tier or try again later.',
-          r2_used_bytes:   r2Bytes,
-          r2_limit_bytes:  MAX_R2_BYTES,
-          remaining_mb: parseFloat(remainingMB),
+          error:         'Upload rejected — R2 storage hard limit reached (9 GB). No new media accepted.',
+          r2_used_bytes: r2Bytes,
+          r2_limit_bytes: MAX_R2_BYTES,
+          remaining_mb:  parseFloat(remainingMB),
         }, 507);
       }
 
@@ -365,19 +365,11 @@ export default {
     const newB2Total = Math.max(0, parseInt(await kvGet(env, 'global:storage:b2')) + b2DeltaBytes);
     await kvSet(env, 'global:storage:b2', newB2Total);
 
-    const r2UsedPct = (r2TotalBytes / MAX_R2_BYTES * 100).toFixed(1);
-    const b2UsedPct = (newB2Total / (10 * 1024 * 1024 * 1024) * 100).toFixed(1);
-
     console.log(
       `Tiering complete: moved=${moved} purged=${purged} | ` +
-      `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB (${r2UsedPct}% of 9GB cap) ` +
-      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB (${b2UsedPct}% of 10GB free)`
+      `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB / ${(MAX_R2_BYTES / 1_048_576).toFixed(0)}MB cap | ` +
+      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB (uncapped)`
     );
-
-    // Warn only on R2 — it has a credit card attached
-    if (r2TotalBytes > MAX_R2_BYTES * 0.9) {
-      console.warn(`⚠️ R2 at ${r2UsedPct}% of 9 GB cap — approaching limit! New uploads will be rejected.`);
-    }
   },
 };
 
