@@ -1,8 +1,10 @@
 import { AwsClient } from 'aws4fetch';
 
 // ─── Hard limits ──────────────────────────────────────────────────────────────
-const MAX_STORAGE_BYTES    = 9.5 * 1024 * 1024 * 1024; // 9.5 GB (R2 + B2 combined)
-const MAX_MONTHLY_REQUESTS = 90_000;                    // 90K Worker invocations / month
+// R2 free tier = 10 GB/month (credit card on file — enforce at 90% = 9 GB)
+// B2 free tier = 10 GB (no credit card risk — no cap imposed)
+const MAX_R2_BYTES         = 9 * 1024 * 1024 * 1024; // 9 GB R2 cap (90% of free 10 GB)
+const MAX_MONTHLY_REQUESTS = 90_000;                  // 90K Worker invocations / month
 
 // ─── Tier thresholds ──────────────────────────────────────────────────────────
 function hotTierMs(env)  { return parseInt(env.HOT_TIER_DAYS  || '30')  * 86_400_000; }
@@ -75,12 +77,8 @@ async function checkMonthlyRequestLimit(env) {
 }
 
 // ─── Storage tracking ─────────────────────────────────────────────────────────
-async function getTotalStorageBytes(env) {
-  const [r2, b2] = await Promise.all([
-    kvGet(env, 'global:storage:r2'),
-    kvGet(env, 'global:storage:b2'),
-  ]);
-  return parseInt(r2) + parseInt(b2);
+async function getR2Bytes(env) {
+  return parseInt(await kvGet(env, 'global:storage:r2'));
 }
 
 // delta can be negative (deletion) — floor at 0 to avoid underflow
@@ -126,18 +124,22 @@ export default {
         kvGet(env, 'global:storage:b2'),
         kvGet(env, monthKey()),
       ]);
-      const r2Bytes    = parseInt(r2Raw);
-      const b2Bytes    = parseInt(b2Raw);
-      const totalBytes = r2Bytes + b2Bytes;
-      const reqCount   = parseInt(reqRaw);
+      const r2Bytes  = parseInt(r2Raw);
+      const b2Bytes  = parseInt(b2Raw);
+      const reqCount = parseInt(reqRaw);
       return json({
-        storage: {
-          r2_bytes:   r2Bytes,
-          b2_bytes:   b2Bytes,
-          total_bytes: totalBytes,
-          limit_bytes: MAX_STORAGE_BYTES,
-          used_pct:   parseFloat((totalBytes / MAX_STORAGE_BYTES * 100).toFixed(2)),
-          remaining_bytes: Math.max(0, MAX_STORAGE_BYTES - totalBytes),
+        r2: {
+          used_bytes:      r2Bytes,
+          limit_bytes:     MAX_R2_BYTES,
+          used_pct:        parseFloat((r2Bytes / MAX_R2_BYTES * 100).toFixed(2)),
+          remaining_bytes: Math.max(0, MAX_R2_BYTES - r2Bytes),
+          note:            'Capped at 9 GB (90% of 10 GB free tier) — credit card on file',
+        },
+        b2: {
+          used_bytes: b2Bytes,
+          limit_bytes: 10 * 1024 * 1024 * 1024,
+          used_pct:    parseFloat((b2Bytes / (10 * 1024 * 1024 * 1024) * 100).toFixed(2)),
+          note:        'No hard cap — B2 10 GB free tier, no credit card risk',
         },
         requests: {
           this_month:      reqCount,
@@ -169,14 +171,14 @@ export default {
         return json({ error: `File too large (max ${maxFileSize(env) / 1_048_576} MB)` }, 413);
       }
 
-      // Global storage cap: check BEFORE writing
-      const currentBytes = await getTotalStorageBytes(env);
-      if (currentBytes + contentLength > MAX_STORAGE_BYTES) {
-        const remainingMB = ((MAX_STORAGE_BYTES - currentBytes) / 1_048_576).toFixed(1);
+      // R2 cap: reject if this upload would push R2 past 9 GB (90% of free 10 GB tier)
+      const r2Bytes = await getR2Bytes(env);
+      if (r2Bytes + contentLength > MAX_R2_BYTES) {
+        const remainingMB = ((MAX_R2_BYTES - r2Bytes) / 1_048_576).toFixed(1);
         return json({
-          error:        'Storage limit reached (9.5 GB). Cannot accept upload.',
-          used_bytes:   currentBytes,
-          limit_bytes:  MAX_STORAGE_BYTES,
+          error:        'R2 storage limit reached (9 GB cap). File moved to cold tier or try again later.',
+          r2_used_bytes:   r2Bytes,
+          r2_limit_bytes:  MAX_R2_BYTES,
           remaining_mb: parseFloat(remainingMB),
         }, 507);
       }
@@ -363,19 +365,18 @@ export default {
     const newB2Total = Math.max(0, parseInt(await kvGet(env, 'global:storage:b2')) + b2DeltaBytes);
     await kvSet(env, 'global:storage:b2', newB2Total);
 
-    const totalBytes = r2TotalBytes + newB2Total;
-    const usedPct    = (totalBytes / MAX_STORAGE_BYTES * 100).toFixed(1);
+    const r2UsedPct = (r2TotalBytes / MAX_R2_BYTES * 100).toFixed(1);
+    const b2UsedPct = (newB2Total / (10 * 1024 * 1024 * 1024) * 100).toFixed(1);
 
     console.log(
       `Tiering complete: moved=${moved} purged=${purged} | ` +
-      `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB ` +
-      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB ` +
-      `total=${(totalBytes / 1_048_576).toFixed(1)}MB (${usedPct}% of 9.5GB limit)`
+      `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB (${r2UsedPct}% of 9GB cap) ` +
+      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB (${b2UsedPct}% of 10GB free)`
     );
 
-    // Warn if approaching limits
-    if (totalBytes > MAX_STORAGE_BYTES * 0.9) {
-      console.warn(`⚠️ Storage at ${usedPct}% of 9.5 GB limit — approaching cap!`);
+    // Warn only on R2 — it has a credit card attached
+    if (r2TotalBytes > MAX_R2_BYTES * 0.9) {
+      console.warn(`⚠️ R2 at ${r2UsedPct}% of 9 GB cap — approaching limit! New uploads will be rejected.`);
     }
   },
 };
