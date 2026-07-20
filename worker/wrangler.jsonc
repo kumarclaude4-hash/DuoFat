@@ -6,6 +6,7 @@
   "name": "duoshield-storage",
   "main": "src/index.js",
   "compatibility_date": "2024-09-23",
+  "account_id": "c11773a4e3583fbd9ed1ba64cc46a36a",
 
   "r2_buckets": [
     {
@@ -17,8 +18,7 @@
   "kv_namespaces": [
     {
       "binding": "RATE_KV",
-      // Replace with the ID returned by: npx wrangler kv namespace create RATE_KV
-      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+          "id": "df8ea5d833394a85bf25bead8ec9f32a"
     }
   ],
 
