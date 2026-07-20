@@ -7,9 +7,8 @@ const MAX_R2_BYTES         = 9 * 1024 * 1024 * 1024; // 9 GB R2 cap (90% of free
 const MAX_MONTHLY_REQUESTS = 90_000;                  // 90K Worker invocations / month
 
 // ─── Tier thresholds ──────────────────────────────────────────────────────────
-function hotTierMs(env)  { return parseInt(env.HOT_TIER_DAYS  || '30')  * 86_400_000; }
-function coldTierMs(env) { return parseInt(env.COLD_TIER_DAYS || '180') * 86_400_000; }
-function maxFileSize(env){ return parseInt(env.MAX_FILE_SIZE   || '10485760'); }
+function hotTierMs(env)  { return parseInt(env.HOT_TIER_DAYS || '30') * 86_400_000; }
+function maxFileSize(env){ return parseInt(env.MAX_FILE_SIZE  || '10485760'); }
 function rateLimit(env)  { return parseInt(env.RATE_LIMIT_PER_MIN || '120'); }
 
 // ─── B2 (S3-compatible) client ────────────────────────────────────────────────
@@ -267,10 +266,9 @@ export default {
   async scheduled(event, env, ctx) {
     const b2  = getB2Client(env);
     const now = Date.now();
-    let moved  = 0;
-    let purged = 0;
-    let r2TotalBytes = 0; // will be the authoritative R2 figure after full scan
-    let b2DeltaBytes = 0; // net change to B2 during this run
+    let moved        = 0;
+    let r2TotalBytes = 0; // authoritative R2 figure after full scan
+    let b2DeltaBytes = 0; // bytes moved R2 → B2 this run
 
     // ── Step 1: Scan R2 — tier old objects to B2, count remaining bytes ───────
     let cursor;
@@ -319,85 +317,18 @@ export default {
       cursor = list.truncated ? list.cursor : null;
     } while (cursor);
 
-    // Reconcile R2 storage counter with the authoritative scan result
+    // Persist authoritative R2 count
     await kvSet(env, 'global:storage:r2', r2TotalBytes);
 
-    // ── Step 2: Purge very old B2 objects (age > COLD_TIER_DAYS) ─────────────
-    let b2TotalBytes = parseInt(await kvGet(env, 'global:storage:b2'));
-    let continuationToken;
-    do {
-      const listUrl = new URL(`${env.B2_ENDPOINT}/${env.B2_BUCKET}`);
-      listUrl.searchParams.set('list-type', '2');
-      listUrl.searchParams.set('fetch-owner', 'false');
-      if (continuationToken) listUrl.searchParams.set('continuation-token', continuationToken);
-
-      let listResp;
-      try {
-        listResp = await b2.fetch(listUrl.toString());
-      } catch (err) {
-        console.error('B2 list failed:', err.message);
-        break;
-      }
-      if (!listResp.ok) break;
-
-      const xmlText = await listResp.text();
-      const { keys, nextToken } = parseListXml(xmlText);
-      continuationToken = nextToken;
-
-      for (const { key, lastModified, uploadedAt, size } of keys) {
-        const refTime = uploadedAt
-          ? parseInt(uploadedAt)
-          : new Date(lastModified).getTime();
-
-        if (now - refTime > coldTierMs(env)) {
-          await b2.fetch(b2Url(env, key), { method: 'DELETE' }).catch(() => {});
-          b2DeltaBytes -= size ?? 0;
-          b2TotalBytes  = Math.max(0, b2TotalBytes - (size ?? 0));
-          purged++;
-        } else {
-          // Count B2 objects that are still within retention
-          // (b2TotalBytes accumulates from KV + deltas; we re-derive below)
-        }
-      }
-    } while (continuationToken);
-
-    // Apply net B2 delta (tiered in − purged out) and persist
+    // Accumulate B2 bytes (objects moved in this run — never deleted automatically)
     const newB2Total = Math.max(0, parseInt(await kvGet(env, 'global:storage:b2')) + b2DeltaBytes);
     await kvSet(env, 'global:storage:b2', newB2Total);
 
     console.log(
-      `Tiering complete: moved=${moved} purged=${purged} | ` +
+      `Tiering complete: moved=${moved} | ` +
       `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB / ${(MAX_R2_BYTES / 1_048_576).toFixed(0)}MB cap | ` +
-      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB (uncapped)`
+      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB (permanent, uncapped)`
     );
   },
 };
 
-// ─── Minimal XML parser for S3 ListObjectsV2 response ────────────────────────
-function parseListXml(xml) {
-  const keys      = [];
-  let   nextToken = null;
-
-  const tokenMatch = xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
-  if (tokenMatch) nextToken = tokenMatch[1];
-
-  const re = /<Contents>([\s\S]*?)<\/Contents>/g;
-  let match;
-  while ((match = re.exec(xml)) !== null) {
-    const block     = match[1];
-    const keyMatch  = block.match(/<Key>([^<]+)<\/Key>/);
-    const dateMatch = block.match(/<LastModified>([^<]+)<\/LastModified>/);
-    const sizeMatch = block.match(/<Size>(\d+)<\/Size>/);
-    const metaMatch = block.match(/<x-amz-meta-uploaded-at>([^<]+)<\/x-amz-meta-uploaded-at>/);
-    if (keyMatch && dateMatch) {
-      keys.push({
-        key:          keyMatch[1],
-        lastModified: dateMatch[1],
-        size:         sizeMatch ? parseInt(sizeMatch[1]) : 0,
-        uploadedAt:   metaMatch ? metaMatch[1] : null,
-      });
-    }
-  }
-
-  return { keys, nextToken };
-}

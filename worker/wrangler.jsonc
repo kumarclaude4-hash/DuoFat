@@ -29,10 +29,8 @@
     "B2_REGION":   "eu-central-003",
     // Maximum file size in bytes (10 MB matches the existing B2 upload limit)
     "MAX_FILE_SIZE":       "10485760",
-    // Objects move from R2 → B2 after this many days
+    // Objects move from R2 → B2 after this many days (B2 retention is permanent)
     "HOT_TIER_DAYS":       "30",
-    // Objects are purged from B2 after this many days total (from upload date)
-    "COLD_TIER_DAYS":      "180",
     // Max requests per minute per X-Client-ID header (Firebase UID)
     "RATE_LIMIT_PER_MIN":  "120"
   },
