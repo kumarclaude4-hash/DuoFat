@@ -82,7 +82,7 @@ jobs:
           echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                                >> local.properties
           echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                                    >> local.properties
           echo "b2.region=${B2_REGION:-eu-central-003}"                                                    >> local.properties
-          echo "push.server.url=${PUSH_SERVER_URL:-https://duoshield.onrender.com}"                        >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"                           >> local.properties
           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}"              >> local.properties
           echo "turn.url=${TURN_URL:-}"                                                                     >> local.properties
           echo "turn.username=${TURN_USERNAME:-}"                                                           >> local.properties
