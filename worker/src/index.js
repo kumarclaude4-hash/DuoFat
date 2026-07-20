@@ -1,7 +1,10 @@
 import { AwsClient } from 'aws4fetch';
 
+// ─── Hard limits ──────────────────────────────────────────────────────────────
+const MAX_STORAGE_BYTES    = 9.5 * 1024 * 1024 * 1024; // 9.5 GB (R2 + B2 combined)
+const MAX_MONTHLY_REQUESTS = 90_000;                    // 90K Worker invocations / month
+
 // ─── Tier thresholds ──────────────────────────────────────────────────────────
-// Parsed from env vars so wrangler.jsonc is the single source of truth.
 function hotTierMs(env)  { return parseInt(env.HOT_TIER_DAYS  || '30')  * 86_400_000; }
 function coldTierMs(env) { return parseInt(env.COLD_TIER_DAYS || '180') * 86_400_000; }
 function maxFileSize(env){ return parseInt(env.MAX_FILE_SIZE   || '10485760'); }
@@ -18,7 +21,6 @@ function getB2Client(env) {
 }
 
 function b2Url(env, key) {
-  // URL-encode each path segment but preserve slashes
   const encoded = key.split('/').map(encodeURIComponent).join('/');
   return `${env.B2_ENDPOINT}/${env.B2_BUCKET}/${encoded}`;
 }
@@ -39,78 +41,174 @@ function corsHeaders() {
   };
 }
 
-// ─── Rate limiter ─────────────────────────────────────────────────────────────
-async function checkRateLimit(request, env) {
-  if (!env.RATE_KV) return null; // KV not configured — skip rate limiting
+// ─── KV helpers ───────────────────────────────────────────────────────────────
+function monthKey() {
+  const d = new Date();
+  return `global:req:${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+async function kvGet(env, key, fallback = '0') {
+  if (!env.RATE_KV) return fallback;
+  return (await env.RATE_KV.get(key)) ?? fallback;
+}
+
+async function kvSet(env, key, value, opts = {}) {
+  if (!env.RATE_KV) return;
+  await env.RATE_KV.put(key, String(value), opts);
+}
+
+// ─── Monthly request limit ────────────────────────────────────────────────────
+async function checkMonthlyRequestLimit(env) {
+  if (!env.RATE_KV) return null;
+  const key   = monthKey();
+  const count = parseInt(await kvGet(env, key));
+  if (count >= MAX_MONTHLY_REQUESTS) {
+    return json({
+      error:  'Monthly request limit reached (90K). Resets on the 1st of next month.',
+      count,
+      limit:  MAX_MONTHLY_REQUESTS,
+    }, 429);
+  }
+  // TTL: 35 days — outlives the month so we can audit after rollover
+  await kvSet(env, key, count + 1, { expirationTtl: 35 * 86_400 });
+  return null;
+}
+
+// ─── Storage tracking ─────────────────────────────────────────────────────────
+async function getTotalStorageBytes(env) {
+  const [r2, b2] = await Promise.all([
+    kvGet(env, 'global:storage:r2'),
+    kvGet(env, 'global:storage:b2'),
+  ]);
+  return parseInt(r2) + parseInt(b2);
+}
+
+// delta can be negative (deletion) — floor at 0 to avoid underflow
+async function adjustStorage(env, tier, deltaBytes) {
+  if (!env.RATE_KV || deltaBytes === 0) return;
+  const key  = `global:storage:${tier}`; // 'r2' or 'b2'
+  const cur  = parseInt(await kvGet(env, key));
+  await kvSet(env, key, Math.max(0, cur + deltaBytes));
+}
+
+// ─── Per-user rate limiter ────────────────────────────────────────────────────
+async function checkPerUserRateLimit(request, env) {
+  if (!env.RATE_KV) return null;
   const clientId  = request.headers.get('X-Client-ID') || 'anon';
   const minuteKey = `rl:${clientId}:${Math.floor(Date.now() / 60_000)}`;
-  const count     = parseInt((await env.RATE_KV.get(minuteKey)) || '0');
+  const count     = parseInt(await kvGet(env, minuteKey));
   if (count >= rateLimit(env)) {
-    return json({ error: 'Rate limit exceeded' }, 429);
+    return json({ error: 'Per-user rate limit exceeded (120 req/min)' }, 429);
   }
-  await env.RATE_KV.put(minuteKey, String(count + 1), { expirationTtl: 120 });
+  await kvSet(env, minuteKey, count + 1, { expirationTtl: 120 });
   return null;
 }
 
 // ─── Main fetch handler ───────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
-    // CORS preflight
+    // CORS preflight — does not count against request quota
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders() });
     }
 
-    // Health check
     const url = new URL(request.url);
+
+    // ── Health check (does not count against quota) ───────────────────────────
     if (url.pathname === '/' || url.pathname === '/health') {
       return json({ status: 'ok', service: 'duoshield-storage' });
     }
 
-    // Rate limiting
-    const rateLimited = await checkRateLimit(request, env);
+    // ── Stats endpoint (admin) ────────────────────────────────────────────────
+    if (url.pathname === '/stats') {
+      const [r2Raw, b2Raw, reqRaw] = await Promise.all([
+        kvGet(env, 'global:storage:r2'),
+        kvGet(env, 'global:storage:b2'),
+        kvGet(env, monthKey()),
+      ]);
+      const r2Bytes    = parseInt(r2Raw);
+      const b2Bytes    = parseInt(b2Raw);
+      const totalBytes = r2Bytes + b2Bytes;
+      const reqCount   = parseInt(reqRaw);
+      return json({
+        storage: {
+          r2_bytes:   r2Bytes,
+          b2_bytes:   b2Bytes,
+          total_bytes: totalBytes,
+          limit_bytes: MAX_STORAGE_BYTES,
+          used_pct:   parseFloat((totalBytes / MAX_STORAGE_BYTES * 100).toFixed(2)),
+          remaining_bytes: Math.max(0, MAX_STORAGE_BYTES - totalBytes),
+        },
+        requests: {
+          this_month:      reqCount,
+          limit_per_month: MAX_MONTHLY_REQUESTS,
+          remaining:       Math.max(0, MAX_MONTHLY_REQUESTS - reqCount),
+        },
+      });
+    }
+
+    // ── Global monthly request gate ───────────────────────────────────────────
+    const monthlyLimited = await checkMonthlyRequestLimit(env);
+    if (monthlyLimited) return monthlyLimited;
+
+    // ── Per-user rate limit ───────────────────────────────────────────────────
+    const rateLimited = await checkPerUserRateLimit(request, env);
     if (rateLimited) return rateLimited;
 
     // Object key is everything after the leading slash.
-    // DuoShield paths look like: media/<chatId>/<uuid>.jpg
-    //                             voice/<chatId>/<uuid>.m4a
-    //                             avatars/<uid>/profile.jpg
+    // DuoShield paths: media/<chatId>/<uuid>.jpg  |  voice/<chatId>/<uuid>.m4a
     const key = decodeURIComponent(url.pathname.slice(1));
     if (!key) return json({ error: 'Missing file key' }, 400);
 
     // ── UPLOAD ────────────────────────────────────────────────────────────────
     if (request.method === 'PUT') {
       const contentLength = parseInt(request.headers.get('Content-Length') || '0');
+
+      // Per-file size check
       if (contentLength > maxFileSize(env)) {
         return json({ error: `File too large (max ${maxFileSize(env) / 1_048_576} MB)` }, 413);
       }
+
+      // Global storage cap: check BEFORE writing
+      const currentBytes = await getTotalStorageBytes(env);
+      if (currentBytes + contentLength > MAX_STORAGE_BYTES) {
+        const remainingMB = ((MAX_STORAGE_BYTES - currentBytes) / 1_048_576).toFixed(1);
+        return json({
+          error:        'Storage limit reached (9.5 GB). Cannot accept upload.',
+          used_bytes:   currentBytes,
+          limit_bytes:  MAX_STORAGE_BYTES,
+          remaining_mb: parseFloat(remainingMB),
+        }, 507);
+      }
+
       const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
 
       await env.HOT_BUCKET.put(key, request.body, {
-        httpMetadata:    { contentType },
-        // Store original upload time so the cron can compute age accurately.
-        // R2 also exposes uploaded timestamp via object.uploaded, but custom
-        // metadata is more portable if we ever need it on the B2 side too.
-        customMetadata:  { uploadedAt: Date.now().toString() },
+        httpMetadata:   { contentType },
+        customMetadata: { uploadedAt: Date.now().toString() },
       });
+
+      // Track storage: increment R2 counter
+      ctx.waitUntil(adjustStorage(env, 'r2', contentLength));
 
       return json({ status: 'stored', key, tier: 'hot' });
     }
 
     // ── DOWNLOAD ──────────────────────────────────────────────────────────────
     if (request.method === 'GET') {
-      // 1. Try R2 (hot tier) first
+      // 1. Try R2 hot tier first
       const r2Object = await env.HOT_BUCKET.get(key);
       if (r2Object) {
         const headers = new Headers({
-          'Content-Type':     r2Object.httpMetadata?.contentType || 'application/octet-stream',
-          'Cache-Control':    'private, max-age=3600',
-          'X-Storage-Tier':  'hot',
+          'Content-Type':    r2Object.httpMetadata?.contentType || 'application/octet-stream',
+          'Cache-Control':   'private, max-age=3600',
+          'X-Storage-Tier': 'hot',
           ...corsHeaders(),
         });
         return new Response(r2Object.body, { headers });
       }
 
-      // 2. Fall back to B2 (cold tier)
+      // 2. Fall back to B2 cold tier
       const b2 = getB2Client(env);
       let b2Response;
       try {
@@ -127,26 +225,33 @@ export default {
         return new Response(b2Response.body, { status: 200, headers });
       }
 
-      if (b2Response.status === 404) {
-        return json({ error: 'File not found', key }, 404);
-      }
+      if (b2Response.status === 404) return json({ error: 'File not found', key }, 404);
       return json({ error: 'B2 error', status: b2Response.status }, 502);
     }
 
     // ── DELETE ────────────────────────────────────────────────────────────────
     if (request.method === 'DELETE') {
-      // Delete from R2 (fire-and-forget errors — object may already be in B2)
-      await env.HOT_BUCKET.delete(key).catch(() => {});
+      // Read R2 object size BEFORE deleting so we can decrement storage counter
+      const r2Head = await env.HOT_BUCKET.head(key).catch(() => null);
+      const r2Size = r2Head?.size ?? 0;
 
-      // Delete from B2 (404 = already gone = success)
+      await env.HOT_BUCKET.delete(key).catch(() => {});
+      if (r2Size > 0) ctx.waitUntil(adjustStorage(env, 'r2', -r2Size));
+
+      // Delete from B2 (404 = already gone = fine)
       const b2 = getB2Client(env);
       try {
+        // HEAD B2 to get size before deleting
+        const b2HeadResp = await b2.fetch(b2Url(env, key), { method: 'HEAD' });
+        const b2Size = parseInt(b2HeadResp.headers.get('Content-Length') || '0');
+
         const delResp = await b2.fetch(b2Url(env, key), { method: 'DELETE' });
         if (!delResp.ok && delResp.status !== 404) {
           console.warn(`B2 delete non-OK for ${key}: ${delResp.status}`);
+        } else if (b2Size > 0) {
+          ctx.waitUntil(adjustStorage(env, 'b2', -b2Size));
         }
       } catch (err) {
-        // Log but don't fail — R2 delete already succeeded
         console.error(`B2 delete error for ${key}: ${err.message}`);
       }
 
@@ -156,50 +261,55 @@ export default {
     return json({ error: 'Method not allowed' }, 405);
   },
 
-  // ─── Scheduled: daily hot→cold tiering + cold purge ───────────────────────
-  // Runs at 02:00 UTC every day (see wrangler.jsonc triggers.crons).
+  // ─── Scheduled: daily hot→cold tiering + cold purge + storage reconcile ───
   async scheduled(event, env, ctx) {
     const b2  = getB2Client(env);
     const now = Date.now();
-    let moved = 0;
+    let moved  = 0;
     let purged = 0;
+    let r2TotalBytes = 0; // will be the authoritative R2 figure after full scan
+    let b2DeltaBytes = 0; // net change to B2 during this run
 
-    // ── Step 1: Move old R2 objects → B2 ─────────────────────────────────────
+    // ── Step 1: Scan R2 — tier old objects to B2, count remaining bytes ───────
     let cursor;
     do {
       const list = await env.HOT_BUCKET.list({ cursor, include: ['httpMetadata', 'customMetadata'] });
 
       for (const obj of list.objects) {
-        // Prefer our stored uploadedAt for accuracy; fall back to R2 uploaded timestamp.
         const uploadedAt = obj.customMetadata?.uploadedAt
           ? parseInt(obj.customMetadata.uploadedAt)
           : new Date(obj.uploaded).getTime();
         const ageMs = now - uploadedAt;
 
-        if (ageMs < hotTierMs(env)) continue; // still hot
+        if (ageMs < hotTierMs(env)) {
+          // Still hot — count toward R2 total
+          r2TotalBytes += obj.size ?? 0;
+          continue;
+        }
 
-        // Read encrypted blob from R2
+        // Past hot-tier threshold — move to B2
         const r2Obj = await env.HOT_BUCKET.get(obj.key);
-        if (!r2Obj) continue; // already gone
+        if (!r2Obj) continue;
 
         const contentType = obj.httpMetadata?.contentType || 'application/octet-stream';
 
-        // Upload to B2 cold bucket (idempotent — overwrite is fine)
         const putResp = await b2.fetch(b2Url(env, obj.key), {
           method:  'PUT',
           body:    r2Obj.body,
           headers: {
-            'Content-Type':   contentType,
-            // Pass age metadata so the purge step can compute from original upload date
+            'Content-Type':           contentType,
             'x-amz-meta-uploaded-at': uploadedAt.toString(),
           },
         });
 
         if (putResp.ok) {
-          // Remove from R2 to free hot-tier storage quota
           await env.HOT_BUCKET.delete(obj.key);
+          // obj.size moved from R2 → B2
+          b2DeltaBytes += obj.size ?? 0;
           moved++;
         } else {
+          // Failed to tier — object stays in R2
+          r2TotalBytes += obj.size ?? 0;
           console.error(`Failed to tier ${obj.key} to B2: ${putResp.status}`);
         }
       }
@@ -207,15 +317,17 @@ export default {
       cursor = list.truncated ? list.cursor : null;
     } while (cursor);
 
+    // Reconcile R2 storage counter with the authoritative scan result
+    await kvSet(env, 'global:storage:r2', r2TotalBytes);
+
     // ── Step 2: Purge very old B2 objects (age > COLD_TIER_DAYS) ─────────────
+    let b2TotalBytes = parseInt(await kvGet(env, 'global:storage:b2'));
     let continuationToken;
     do {
       const listUrl = new URL(`${env.B2_ENDPOINT}/${env.B2_BUCKET}`);
       listUrl.searchParams.set('list-type', '2');
       listUrl.searchParams.set('fetch-owner', 'false');
-      if (continuationToken) {
-        listUrl.searchParams.set('continuation-token', continuationToken);
-      }
+      if (continuationToken) listUrl.searchParams.set('continuation-token', continuationToken);
 
       let listResp;
       try {
@@ -230,19 +342,41 @@ export default {
       const { keys, nextToken } = parseListXml(xmlText);
       continuationToken = nextToken;
 
-      for (const { key, lastModified, uploadedAt } of keys) {
-        // Use our stored metadata if present, else fall back to LastModified
+      for (const { key, lastModified, uploadedAt, size } of keys) {
         const refTime = uploadedAt
           ? parseInt(uploadedAt)
           : new Date(lastModified).getTime();
+
         if (now - refTime > coldTierMs(env)) {
           await b2.fetch(b2Url(env, key), { method: 'DELETE' }).catch(() => {});
+          b2DeltaBytes -= size ?? 0;
+          b2TotalBytes  = Math.max(0, b2TotalBytes - (size ?? 0));
           purged++;
+        } else {
+          // Count B2 objects that are still within retention
+          // (b2TotalBytes accumulates from KV + deltas; we re-derive below)
         }
       }
     } while (continuationToken);
 
-    console.log(`Tiering complete: moved ${moved} objects to B2, purged ${purged} from B2.`);
+    // Apply net B2 delta (tiered in − purged out) and persist
+    const newB2Total = Math.max(0, parseInt(await kvGet(env, 'global:storage:b2')) + b2DeltaBytes);
+    await kvSet(env, 'global:storage:b2', newB2Total);
+
+    const totalBytes = r2TotalBytes + newB2Total;
+    const usedPct    = (totalBytes / MAX_STORAGE_BYTES * 100).toFixed(1);
+
+    console.log(
+      `Tiering complete: moved=${moved} purged=${purged} | ` +
+      `R2=${(r2TotalBytes / 1_048_576).toFixed(1)}MB ` +
+      `B2=${(newB2Total / 1_048_576).toFixed(1)}MB ` +
+      `total=${(totalBytes / 1_048_576).toFixed(1)}MB (${usedPct}% of 9.5GB limit)`
+    );
+
+    // Warn if approaching limits
+    if (totalBytes > MAX_STORAGE_BYTES * 0.9) {
+      console.warn(`⚠️ Storage at ${usedPct}% of 9.5 GB limit — approaching cap!`);
+    }
   },
 };
 
@@ -257,15 +391,16 @@ function parseListXml(xml) {
   const re = /<Contents>([\s\S]*?)<\/Contents>/g;
   let match;
   while ((match = re.exec(xml)) !== null) {
-    const block       = match[1];
-    const keyMatch    = block.match(/<Key>([^<]+)<\/Key>/);
-    const dateMatch   = block.match(/<LastModified>([^<]+)<\/LastModified>/);
-    // Our custom metadata comes back as x-amz-meta-uploaded-at in ListObjects
-    const metaMatch   = block.match(/<x-amz-meta-uploaded-at>([^<]+)<\/x-amz-meta-uploaded-at>/);
+    const block     = match[1];
+    const keyMatch  = block.match(/<Key>([^<]+)<\/Key>/);
+    const dateMatch = block.match(/<LastModified>([^<]+)<\/LastModified>/);
+    const sizeMatch = block.match(/<Size>(\d+)<\/Size>/);
+    const metaMatch = block.match(/<x-amz-meta-uploaded-at>([^<]+)<\/x-amz-meta-uploaded-at>/);
     if (keyMatch && dateMatch) {
       keys.push({
         key:          keyMatch[1],
         lastModified: dateMatch[1],
+        size:         sizeMatch ? parseInt(sizeMatch[1]) : 0,
         uploadedAt:   metaMatch ? metaMatch[1] : null,
       });
     }
