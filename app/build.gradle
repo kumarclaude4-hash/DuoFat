@@ -56,6 +56,15 @@ android {
         if (pushServerUrl.isEmpty()) pushServerUrl = 'https://duofat.onrender.com'
         buildConfigField "String", "PUSH_SERVER_URL", "\"${pushServerUrl}\""
 
+        // Cloudflare Worker URL for tiered storage (R2 hot → B2 cold).
+        // When non-empty, ALL media PUT/GET/DELETE calls route through this Worker
+        // instead of going directly to B2 — no SigV4 signing needed on the device.
+        // Set in local.properties as `worker.url=https://…workers.dev`
+        // or via the WORKER_URL environment variable.
+        def workerUrl = (localProps.getProperty('worker.url', '') ?: '').trim()
+        if (workerUrl.isEmpty()) workerUrl = (System.getenv('WORKER_URL') ?: '').trim()
+        buildConfigField "String", "WORKER_URL", "\"${workerUrl}\""
+
         // TURN credentials are now fetched at runtime from the push server
         // (/turnCredentials endpoint) using TURN_TOKEN_ID + TURN_API_TOKEN
         // server-side env vars. Nothing is baked into the APK.

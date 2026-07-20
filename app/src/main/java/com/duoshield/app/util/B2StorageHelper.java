@@ -83,6 +83,21 @@ public final class B2StorageHelper {
     private static String getAppKey() {
         return BuildConfig.B2_APPLICATION_KEY == null ? "" : BuildConfig.B2_APPLICATION_KEY.trim();
     }
+    /**
+     * Returns the Cloudflare Worker URL for tiered storage, or empty string if not configured.
+     * When non-empty, all PUT/GET/DELETE calls route through this Worker — no SigV4 needed.
+     */
+    public static String getWorkerUrl() {
+        String w = BuildConfig.WORKER_URL == null ? "" : BuildConfig.WORKER_URL.trim();
+        // Strip trailing slash so we can always append "/{key}" cleanly
+        return w.endsWith("/") ? w.substring(0, w.length() - 1) : w;
+    }
+    /** Returns the Firebase UID for the X-Client-ID rate-limit header, or "anon". */
+    private static String getClientId() {
+        com.google.firebase.auth.FirebaseUser user =
+                com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
+        return (user != null && user.getUid() != null) ? user.getUid() : "anon";
+    }
     /** @deprecated Use {@link #getEndpoint()} */
     public static final String ENDPOINT       = "https://s3.ca-east-006.backblazeb2.com";
     /** @deprecated Use {@link #getRegion()} */
@@ -220,15 +235,15 @@ public final class B2StorageHelper {
     public static void warmConnection() {
         new Thread(() -> {
             try {
-                Request r = new Request.Builder()
-                        .url(getEndpoint() + "/" + getBucket() + "/")
-                        .head()
-                        .build();
+                String warmUrl = !getWorkerUrl().isEmpty()
+                        ? getWorkerUrl() + "/health"
+                        : getEndpoint() + "/" + getBucket() + "/";
+                Request r = new Request.Builder().url(warmUrl).head().build();
                 try (Response resp = HTTP_CLIENT.newCall(r).execute()) {
-                    Log.d(TAG, "B2 connection pre-warmed (HTTP " + resp.code() + ").");
+                    Log.d(TAG, "Storage connection pre-warmed (HTTP " + resp.code() + ").");
                 }
             } catch (Exception e) {
-                Log.d(TAG, "B2 pre-warm (non-fatal): " + e.getMessage());
+                Log.d(TAG, "Storage pre-warm (non-fatal): " + e.getMessage());
             }
         }, "b2-warmup").start();
     }
@@ -271,9 +286,14 @@ public final class B2StorageHelper {
                 ? b2Path.substring(B2_PATH_PREFIX.length()) : b2Path;
     }
 
-    /** Constructs the public download URL for a B2 path. */
+    /** Constructs the download URL for a B2 path (Worker or direct B2 endpoint). */
     public static String toPublicUrl(String b2Path) {
-        return getEndpoint() + "/" + getBucket() + "/" + toObjectKey(b2Path);
+        String objectKey = toObjectKey(b2Path);
+        String worker = getWorkerUrl();
+        if (!worker.isEmpty()) {
+            return worker + "/" + objectKey;
+        }
+        return getEndpoint() + "/" + getBucket() + "/" + objectKey;
     }
 
     public static String getBucket() {
@@ -283,15 +303,20 @@ public final class B2StorageHelper {
 
     /** Returns the first 4 and last 4 chars of the key ID, masked in the middle. */
     public static String getMaskedKeyId() {
+        if (!getWorkerUrl().isEmpty()) return "(via Cloudflare Worker)";
         String k = BuildConfig.B2_KEY_ID == null ? "" : BuildConfig.B2_KEY_ID.trim();
-        if (k.isEmpty()) return "(not set)";
+        if (k.isEmpty()) return "(not set — using push-server presign)";
         if (k.length() <= 8) return k.substring(0, 2) + "****";
         return k.substring(0, 4) + "…" + k.substring(k.length() - 4);
     }
 
-    /** Returns true if both key ID and application key are non-empty. */
+    /**
+     * Returns true when storage credentials are available via any path:
+     * Cloudflare Worker URL, direct B2 key pair, or push-server presign.
+     */
     public static boolean areCredentialsConfigured() {
-        return !getKeyId().isEmpty() && !getAppKey().isEmpty();
+        return !getWorkerUrl().isEmpty()
+                || (!getKeyId().isEmpty() && !getAppKey().isEmpty());
     }
 
     /**
@@ -459,6 +484,10 @@ public final class B2StorageHelper {
      */
     public static String uploadFile(byte[] data, String objectKey,
                                     String contentType, ProgressCallback cb) throws Exception {
+        // Tiered-storage Worker path (highest priority)
+        if (!getWorkerUrl().isEmpty()) {
+            return uploadViaWorker(data, objectKey, contentType, cb);
+        }
         // F9 fix: when B2 credentials are not baked into the APK, obtain a
         // server-generated presigned PUT URL and upload directly — the B2 key
         // never touches the device in new builds.
@@ -532,6 +561,10 @@ public final class B2StorageHelper {
      * Automatically retries on transient failures; HTTP 4xx is not retried.
      */
     public static byte[] downloadFile(String b2Path) throws Exception {
+        // Tiered-storage Worker path (highest priority)
+        if (!getWorkerUrl().isEmpty()) {
+            return downloadViaWorker(b2Path);
+        }
         // F9 fix: bucket is public-read (content is E2EE — no plaintext stored
         // at rest). Skip SigV4 when credentials are absent; use a simple GET.
         if (getKeyId().isEmpty()) {
@@ -907,6 +940,11 @@ public final class B2StorageHelper {
      */
     public static void deleteFile(String b2Path) throws Exception {
         if (b2Path == null || b2Path.isEmpty()) return;
+        // Tiered-storage Worker path (highest priority)
+        if (!getWorkerUrl().isEmpty()) {
+            deleteViaWorker(b2Path);
+            return;
+        }
         // F9 fix: route deletion through server endpoint when credentials are absent.
         if (getKeyId().isEmpty()) {
             deleteViaServer(b2Path);
@@ -986,6 +1024,25 @@ public final class B2StorageHelper {
      */
     public static String testConnection() {
         try {
+            // Worker path: plain GET to /health endpoint
+            if (!getWorkerUrl().isEmpty()) {
+                Request request = new Request.Builder()
+                        .url(getWorkerUrl() + "/health")
+                        .get()
+                        .addHeader("X-Client-ID", getClientId())
+                        .build();
+                long start = System.currentTimeMillis();
+                try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                    int code = response.code();
+                    if (code == 200) {
+                        Log.d(TAG, "Worker health OK in " + (System.currentTimeMillis() - start) + " ms");
+                        return null; // success
+                    }
+                    ResponseBody errBody = response.body();
+                    String body = errBody != null ? errBody.string() : "";
+                    return "Worker returned HTTP " + code + ": " + body;
+                }
+            }
             if (!getKeyId().isEmpty() && !getAppKey().isEmpty()) {
                 // Direct SigV4 test — credentials baked into APK
                 String bucket  = getBucket();
@@ -1076,6 +1133,115 @@ public final class B2StorageHelper {
         } catch (Exception e) {
             return e.getMessage();
         }
+    }
+
+    // ── Cloudflare Worker helpers (tiered storage: R2 hot → B2 cold) ─────────
+
+    /**
+     * Uploads {@code data} through the Cloudflare Worker via a plain HTTP PUT.
+     * The Worker stores the encrypted blob in R2; the daily cron tiers it to B2
+     * after HOT_TIER_DAYS and purges it after COLD_TIER_DAYS.
+     *
+     * @return "b2:<objectKey>" so the path is compatible with all existing Room/Firestore records.
+     */
+    private static String uploadViaWorker(byte[] data, String objectKey,
+                                          String contentType, ProgressCallback cb)
+            throws Exception {
+        String url = getWorkerUrl() + "/" + objectKey;
+        MediaType   mt   = MediaType.parse(contentType);
+        RequestBody rb   = new ProgressRequestBody(data, mt, cb);
+        Request request  = new Request.Builder()
+                .url(url)
+                .put(rb)
+                .header("Content-Type",   contentType)
+                .header("Content-Length", String.valueOf(data.length))
+                .header("X-Client-ID",    getClientId())
+                .build();
+        return withRetry("worker-upload:" + objectKey, () -> {
+            try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200 || code == 201) {
+                    Log.d(TAG, "Worker uploaded: " + objectKey);
+                    return B2_PATH_PREFIX + objectKey;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code >= 400 && code < 500) {
+                    throw new NonRetryableException(code,
+                            "Worker PUT failed [" + code + "]: " + err);
+                }
+                throw new IOException("Worker PUT failed [" + code + "]: " + err);
+            }
+        });
+    }
+
+    /**
+     * Downloads raw encrypted bytes via the Cloudflare Worker.
+     * The Worker transparently serves from R2 (hot) or B2 (cold) based on object age.
+     */
+    private static byte[] downloadViaWorker(String b2Path) throws Exception {
+        String objectKey = toObjectKey(b2Path);
+        String url       = getWorkerUrl() + "/" + objectKey;
+        return withRetry("worker-download:" + objectKey, () -> {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .header("X-Client-ID", getClientId())
+                    .build();
+            try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200) {
+                    ResponseBody body = response.body();
+                    if (body == null)
+                        throw new IOException("Worker GET: empty body for " + objectKey);
+                    byte[] bytes = body.bytes();
+                    Log.d(TAG, "Worker downloaded: " + objectKey
+                            + " (" + bytes.length + " B, tier="
+                            + response.header("X-Storage-Tier", "?") + ")");
+                    return bytes;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code == 404) {
+                    throw new NonRetryableException(404, "File not found: " + objectKey);
+                }
+                if (code >= 400 && code < 500) {
+                    throw new NonRetryableException(code,
+                            "Worker GET failed [" + code + "]: " + err);
+                }
+                throw new IOException("Worker GET failed [" + code + "]: " + err);
+            }
+        });
+    }
+
+    /**
+     * Deletes an object via the Cloudflare Worker (removes from both R2 and B2).
+     * 404 is treated as success. Call from a background thread.
+     */
+    private static void deleteViaWorker(String b2Path) throws Exception {
+        String objectKey = toObjectKey(b2Path);
+        String url       = getWorkerUrl() + "/" + objectKey;
+        withRetry("worker-delete:" + objectKey, () -> {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .delete()
+                    .header("X-Client-ID", getClientId())
+                    .build();
+            try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200 || code == 204 || code == 404) {
+                    Log.d(TAG, "Worker deleted: " + objectKey + " (" + code + ")");
+                    return null;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code >= 400 && code < 500) {
+                    throw new NonRetryableException(code,
+                            "Worker DELETE failed [" + code + "]: " + err);
+                }
+                throw new IOException("Worker DELETE failed [" + code + "]: " + err);
+            }
+        });
     }
 
     // ── F9: Presigned URL / server-proxy helpers ──────────────────────────────

@@ -1,0 +1,17 @@
+{
+  "name": "duoshield-storage-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for DuoShield tiered storage (R2 hot → B2 cold → purge at 180 days)",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

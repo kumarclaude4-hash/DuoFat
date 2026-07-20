@@ -1,0 +1,53 @@
+{
+  // DuoShield tiered storage Worker
+  // Hot tier: Cloudflare R2 (days 0–30, fast, free egress)
+  // Cold tier: Backblaze B2 (days 31–180, still accessible)
+  // Auto-purge: objects deleted after 180 days by scheduled cron
+  "name": "duoshield-storage",
+  "main": "src/index.js",
+  "compatibility_date": "2024-09-23",
+
+  "r2_buckets": [
+    {
+      "binding": "HOT_BUCKET",
+      "bucket_name": "duoshield-hot"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "RATE_KV",
+      // Replace with the ID returned by: npx wrangler kv namespace create RATE_KV
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+
+  "vars": {
+    // Replace these with your actual B2 values
+    "B2_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
+    "B2_BUCKET":   "duoshield-cold",
+    "B2_REGION":   "eu-central-003",
+    // Maximum file size in bytes (10 MB matches the existing B2 upload limit)
+    "MAX_FILE_SIZE":       "10485760",
+    // Objects move from R2 → B2 after this many days
+    "HOT_TIER_DAYS":       "30",
+    // Objects are purged from B2 after this many days total (from upload date)
+    "COLD_TIER_DAYS":      "180",
+    // Max requests per minute per X-Client-ID header (Firebase UID)
+    "RATE_LIMIT_PER_MIN":  "120"
+  },
+
+  // Set these with: npx wrangler secret put B2_ACCESS_KEY_ID
+  //                 npx wrangler secret put B2_SECRET_ACCESS_KEY
+  // DO NOT put credentials in this file.
+
+  // Daily tiering + purge cron (runs at 02:00 UTC every day)
+  "triggers": {
+    "crons": ["0 2 * * *"]
+  },
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.05
+  }
+}

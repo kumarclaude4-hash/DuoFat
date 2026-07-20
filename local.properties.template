@@ -11,6 +11,13 @@ b2.application.key=
 b2.bucket=yyush-duoshield
 b2.region=eu-central-003
 
+# ── Cloudflare Worker (tiered storage: R2 hot → B2 cold) ─────────────────────
+# Deploy the Worker in the /worker directory (see worker/README.md), then paste
+# the Workers.dev URL here.  When set, ALL media uploads/downloads/deletes go
+# through the Worker — no B2 credentials are needed on the device.
+# Leave blank to fall back to the existing push-server presign path.
+worker.url=
+
 # ── Push relay server ─────────────────────────────────────────────────────────
 push.server.url=https://duofat.onrender.com
 

@@ -75,16 +75,28 @@ public class StorageDiagnosticsActivity extends BaseActivity {
     }
 
     private void populateStaticConfig() {
-        tvBucket.setText(B2StorageHelper.getBucket());
-        tvRegion.setText(B2StorageHelper.getRegion());
-        tvEndpoint.setText(B2StorageHelper.getEndpoint());
+        String workerUrl = B2StorageHelper.getWorkerUrl();
+        boolean usingWorker = !workerUrl.isEmpty();
+
+        if (usingWorker) {
+            tvBucket.setText("(managed by Cloudflare R2 + B2 Worker)");
+            tvRegion.setText("(managed by Worker cron)");
+            tvEndpoint.setText(workerUrl);
+        } else {
+            tvBucket.setText(B2StorageHelper.getBucket());
+            tvRegion.setText(B2StorageHelper.getRegion());
+            tvEndpoint.setText(B2StorageHelper.getEndpoint());
+        }
         tvKeyId.setText(B2StorageHelper.getMaskedKeyId());
 
-        if (B2StorageHelper.areCredentialsConfigured()) {
+        if (usingWorker) {
+            tvCredentials.setText("Cloudflare Worker configured ✓ (R2 hot → B2 cold, 180-day purge)");
+            tvCredentials.setTextColor(COLOR_OK);
+        } else if (B2StorageHelper.areCredentialsConfigured()) {
             tvCredentials.setText("Configured ✓");
             tvCredentials.setTextColor(COLOR_OK);
         } else {
-            tvCredentials.setText("Missing — add B2_KEY_ID + B2_APPLICATION_KEY");
+            tvCredentials.setText("Missing — set WORKER_URL or B2_KEY_ID + B2_APPLICATION_KEY");
             tvCredentials.setTextColor(COLOR_ERROR);
         }
     }
