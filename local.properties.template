@@ -17,6 +17,8 @@ b2.region=eu-central-003
 # through the Worker — no B2 credentials are needed on the device.
 # Leave blank to fall back to the existing push-server presign path.
 worker.url=https://duoshield-storage.kumarclaude4.workers.dev
+# Shared auth token — must match the WORKER_SECRET set via `wrangler secret put WORKER_SECRET`
+worker.secret=
 
 # ── Push relay server ─────────────────────────────────────────────────────────
 push.server.url=https://duofat.onrender.com

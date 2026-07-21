@@ -1,16 +1,17 @@
 {
   // DuoShield tiered storage Worker
-  // Hot tier: Cloudflare R2 (days 0–30, fast, free egress)
-  // Cold tier: Backblaze B2 (days 31–180, still accessible)
-  // Auto-purge: objects deleted after 180 days by scheduled cron
+  // Hot tier:  Cloudflare R2 (days 0–30, fast, free egress)
+  // Cold tier: Backblaze B2 (permanent — no automatic expiry; deleted only by explicit app DELETE)
+  // Daily cron: migrates objects older than HOT_TIER_DAYS from R2 → B2, then reconciles storage counters.
   "name": "duoshield-storage",
   "main": "src/index.js",
   "compatibility_date": "2024-09-23",
-  "account_id": "c11773a4e3583fbd9ed1ba64cc46a36a",
+  // account_id is intentionally omitted — wrangler reads it from your authenticated session.
+  // Never commit your account ID to a public repository.
 
   "r2_buckets": [
     {
-      "binding": "HOT_BUCKET",
+      "binding":     "HOT_BUCKET",
       "bucket_name": "duoshield-hot"
     }
   ],
@@ -18,28 +19,33 @@
   "kv_namespaces": [
     {
       "binding": "RATE_KV",
-          "id": "df8ea5d833394a85bf25bead8ec9f32a"
+      "id":      "df8ea5d833394a85bf25bead8ec9f32a"
     }
   ],
 
   "vars": {
-    // Replace these with your actual B2 values
+    // Your Backblaze B2 S3-compatible endpoint, bucket name, and region.
     "B2_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
     "B2_BUCKET":   "duoshield-cold",
     "B2_REGION":   "eu-central-003",
-    // Maximum file size in bytes (10 MB matches the existing B2 upload limit)
-    "MAX_FILE_SIZE":       "10485760",
-    // Objects move from R2 → B2 after this many days (B2 retention is permanent)
-    "HOT_TIER_DAYS":       "30",
-    // Max requests per minute per X-Client-ID header (Firebase UID)
-    "RATE_LIMIT_PER_MIN":  "120"
+
+    // Maximum file size in bytes (10 MB default).
+    "MAX_FILE_SIZE": "10485760",
+
+    // Objects move from R2 → B2 after this many days.
+    "HOT_TIER_DAYS": "30",
+
+    // Per-isolate rate limit: max requests per minute per X-Client-ID header.
+    // Advisory only on the free tier (not globally consistent across edge PoPs).
+    "RATE_LIMIT_PER_MIN": "120"
   },
 
-  // Set these with: npx wrangler secret put B2_ACCESS_KEY_ID
-  //                 npx wrangler secret put B2_SECRET_ACCESS_KEY
-  // DO NOT put credentials in this file.
+  // ── Secrets — set with wrangler, never put credentials in this file ─────────
+  // npx wrangler secret put B2_ACCESS_KEY_ID       ← Backblaze application key ID
+  // npx wrangler secret put B2_SECRET_ACCESS_KEY   ← Backblaze application key
+  // npx wrangler secret put WORKER_SECRET           ← shared auth token for the Android app
 
-  // Daily tiering + purge cron (runs at 02:00 UTC every day)
+  // Daily tiering cron (02:00 UTC every day)
   "triggers": {
     "crons": ["0 2 * * *"]
   },

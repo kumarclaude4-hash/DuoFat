@@ -92,6 +92,13 @@ public final class B2StorageHelper {
         // Strip trailing slash so we can always append "/{key}" cleanly
         return w.endsWith("/") ? w.substring(0, w.length() - 1) : w;
     }
+    /**
+     * Returns the shared auth token for the Cloudflare Worker, or empty string if not set.
+     * Every Worker request includes {@code Authorization: Bearer <token>}.
+     */
+    private static String getWorkerSecret() {
+        return BuildConfig.WORKER_SECRET == null ? "" : BuildConfig.WORKER_SECRET.trim();
+    }
     /** Returns the Firebase UID for the X-Client-ID rate-limit header, or "anon". */
     private static String getClientId() {
         com.google.firebase.auth.FirebaseUser user =
@@ -1150,13 +1157,15 @@ public final class B2StorageHelper {
         String url = getWorkerUrl() + "/" + objectKey;
         MediaType   mt   = MediaType.parse(contentType);
         RequestBody rb   = new ProgressRequestBody(data, mt, cb);
-        Request request  = new Request.Builder()
+        Request.Builder reqBuilder = new Request.Builder()
                 .url(url)
                 .put(rb)
                 .header("Content-Type",   contentType)
                 .header("Content-Length", String.valueOf(data.length))
-                .header("X-Client-ID",    getClientId())
-                .build();
+                .header("X-Client-ID",    getClientId());
+        String secret = getWorkerSecret();
+        if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
+        Request request = reqBuilder.build();
         return withRetry("worker-upload:" + objectKey, () -> {
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
@@ -1183,11 +1192,13 @@ public final class B2StorageHelper {
         String objectKey = toObjectKey(b2Path);
         String url       = getWorkerUrl() + "/" + objectKey;
         return withRetry("worker-download:" + objectKey, () -> {
-            Request request = new Request.Builder()
+            Request.Builder reqBuilder = new Request.Builder()
                     .url(url)
                     .get()
-                    .header("X-Client-ID", getClientId())
-                    .build();
+                    .header("X-Client-ID", getClientId());
+            String secret = getWorkerSecret();
+            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
+            Request request = reqBuilder.build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200) {
@@ -1222,11 +1233,13 @@ public final class B2StorageHelper {
         String objectKey = toObjectKey(b2Path);
         String url       = getWorkerUrl() + "/" + objectKey;
         withRetry("worker-delete:" + objectKey, () -> {
-            Request request = new Request.Builder()
+            Request.Builder reqBuilder = new Request.Builder()
                     .url(url)
                     .delete()
-                    .header("X-Client-ID", getClientId())
-                    .build();
+                    .header("X-Client-ID", getClientId());
+            String secret = getWorkerSecret();
+            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
+            Request request = reqBuilder.build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200 || code == 204 || code == 404) {
