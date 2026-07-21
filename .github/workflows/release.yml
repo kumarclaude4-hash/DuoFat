@@ -73,6 +73,7 @@ jobs:
           B2_REGION:          ${{ secrets.B2_REGION }}
           PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
           WORKER_URL:         ${{ secrets.WORKER_URL }}
+          WORKER_SECRET:      ${{ secrets.WORKER_SECRET }}
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
           echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
@@ -81,6 +82,7 @@ jobs:
           echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
+          echo "worker.secret=${WORKER_SECRET:-}"                                             >> local.properties
 
       - name: Decode keystore
         env:
