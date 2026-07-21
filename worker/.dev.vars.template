@@ -1,0 +1,14 @@
+# Local development secrets for `wrangler dev`.
+# Copy this file to `.dev.vars` and fill in real values.
+# `.dev.vars` is gitignored — never commit real credentials.
+#
+# These mirror the secrets set in the Cloudflare dashboard via:
+#   npx wrangler secret put <NAME>
+
+# Backblaze B2 credentials (S3-compatible)
+B2_ACCESS_KEY_ID=
+B2_SECRET_ACCESS_KEY=
+
+# Shared auth token — must match the WORKER_SECRET GitHub / Replit secret
+# and the value set via `npx wrangler secret put WORKER_SECRET` in the dashboard.
+WORKER_SECRET=

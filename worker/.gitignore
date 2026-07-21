@@ -1,0 +1,5 @@
+# Wrangler local dev secrets — never commit real credentials
+.dev.vars
+
+# Wrangler build output
+.wrangler/
