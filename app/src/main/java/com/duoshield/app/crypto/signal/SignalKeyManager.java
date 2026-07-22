@@ -18,6 +18,9 @@ import org.signal.libsignal.protocol.IdentityKeyPair;
 import org.signal.libsignal.protocol.InvalidKeyException;
 import org.signal.libsignal.protocol.ecc.Curve;
 import org.signal.libsignal.protocol.ecc.ECKeyPair;
+import org.signal.libsignal.protocol.kem.KEMKeyPair;
+import org.signal.libsignal.protocol.kem.KEMKeyType;
+import org.signal.libsignal.protocol.state.KyberPreKeyRecord;
 import org.signal.libsignal.protocol.state.PreKeyRecord;
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord;
 
@@ -90,11 +93,26 @@ public final class SignalKeyManager {
      */
     public static final String KEY_PREKEY_NEXT_ID      = "signal_prekey_next_id";
 
+    // ── Kyber (PQXDH) last-resort pre-key storage ────────────────────────────
+    /**
+     * Prefix for Kyber pre-key storage: {@code signal_kyber_prekey_<id>}.
+     * Currently DuoShield keeps exactly one last-resort Kyber key at a time,
+     * but the indexed structure mirrors the OTP key design for future extension.
+     */
+    public static final String KEY_KYBER_PREKEY_PREFIX     = "signal_kyber_prekey_";
+    /**
+     * The ID of the currently active Kyber last-resort pre-key (decimal string).
+     * Rotated on the same schedule as the signed pre-key.
+     */
+    public static final String KEY_KYBER_PREKEY_CURRENT_ID = "signal_kyber_prekey_current_id";
+
     private static final int SIGNED_PREKEY_ID          = 1;
     private static final int ONE_TIME_PREKEY_COUNT     = 50;
     private static final int ONE_TIME_PREKEY_ID_START  = 1;
     /** 24-bit maximum pre-key ID per the Signal specification. */
     private static final int MAX_PREKEY_ID             = 0xFFFFFF;
+    /** Initial Kyber pre-key ID; incremented on each rotation. */
+    private static final int KYBER_PREKEY_ID_START     = 1;
 
     private SignalKeyManager() {}
 
@@ -181,6 +199,10 @@ public final class SignalKeyManager {
                     oneTimePreKeys.add(new PreKeyRecord(id, Curve.generateKeyPair()));
                 }
 
+                // Kyber last-resort pre-key (PQXDH)
+                KyberPreKeyRecord kyberPreKey =
+                        buildKyberPreKeyRecord(identityKeyPair, KYBER_PREKEY_ID_START);
+
                 // Persist (identity key pair already stored — only write the new keys)
                 SharedPreferences.Editor editor = SecurePrefs.get(ctx).edit();
                 editor.putString(KEY_REGISTRATION_ID, String.valueOf(registrationId));
@@ -198,10 +220,15 @@ public final class SignalKeyManager {
                         String.valueOf(ONE_TIME_PREKEY_ID_START + ONE_TIME_PREKEY_COUNT));
                 editor.putString(KEY_SIGNED_PREKEY_NEXT_ID,
                         String.valueOf(SIGNED_PREKEY_ID + 1));
+                editor.putString(KEY_KYBER_PREKEY_PREFIX + KYBER_PREKEY_ID_START,
+                        Base64.encodeToString(kyberPreKey.serialize(), Base64.NO_WRAP));
+                editor.putString(KEY_KYBER_PREKEY_CURRENT_ID,
+                        String.valueOf(KYBER_PREKEY_ID_START));
                 editor.apply();
 
                 Log.d(TAG, "Seed-derived keys generated — registrationId=" + registrationId
-                        + "  prekeys=" + oneTimePreKeys.size());
+                        + "  prekeys=" + oneTimePreKeys.size()
+                        + "  kyberPreKeyId=" + KYBER_PREKEY_ID_START);
 
                 // Signal upload start on main thread
                 if (onUploadStarted != null)
@@ -359,6 +386,138 @@ public final class SignalKeyManager {
 
         // Upload public half to Firestore (non-blocking — local rotation is already committed).
         uploadRotatedSignedPreKey(ctx, newSpk);
+    }
+
+    // ── Public: Kyber pre-key access ──────────────────────────────────────────
+
+    /**
+     * Returns the Kyber last-resort pre-key for the given ID, or {@code null} if absent.
+     */
+    public static KyberPreKeyRecord getKyberPreKey(Context ctx, int id) {
+        String b64 = SecurePrefs.get(ctx)
+                .getString(KEY_KYBER_PREKEY_PREFIX + id, null);
+        if (b64 == null) return null;
+        try {
+            return new KyberPreKeyRecord(Base64.decode(b64, Base64.NO_WRAP));
+        } catch (Exception e) {
+            Log.e(TAG, "KyberPreKeyRecord #" + id + " deserialisation failed", e);
+            return null;
+        }
+    }
+
+    /**
+     * Returns the current active Kyber last-resort pre-key, or {@code null} if not yet
+     * generated (e.g. legacy account pre-dating PQXDH support).
+     */
+    public static KyberPreKeyRecord getCurrentKyberPreKey(Context ctx) {
+        String idStr = SecurePrefs.get(ctx)
+                .getString(KEY_KYBER_PREKEY_CURRENT_ID, null);
+        if (idStr == null) return null;
+        try {
+            return getKyberPreKey(ctx, Integer.parseInt(idStr));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns the ID of the current Kyber last-resort pre-key, or {@code -1} if absent.
+     */
+    public static int getCurrentKyberPreKeyId(Context ctx) {
+        String idStr = SecurePrefs.get(ctx)
+                .getString(KEY_KYBER_PREKEY_CURRENT_ID, null);
+        if (idStr == null) return -1;
+        try { return Integer.parseInt(idStr); }
+        catch (NumberFormatException e) { return -1; }
+    }
+
+    /**
+     * Rotates the Kyber last-resort pre-key:
+     * <ol>
+     *   <li>Generates a new Kyber-1024 key pair signed by the identity key.</li>
+     *   <li>Stores the private half in {@link SecurePrefs}.</li>
+     *   <li>Uploads the public half + signature to Firestore (fire-and-forget).</li>
+     * </ol>
+     *
+     * <p>The old Kyber key is NOT kept as a grace-period copy — Kyber last-resort
+     * keys can be reused until replaced, so there is no decryption gap.</p>
+     *
+     * @throws InvalidKeyException if signature generation fails.
+     */
+    public static void rotateKyberPreKey(Context ctx) throws InvalidKeyException {
+        IdentityKeyPair idPair = getIdentityKeyPair(ctx);
+        if (idPair == null)
+            throw new IllegalStateException("Identity key pair not initialised.");
+
+        // Derive next ID (wrap at 24-bit limit).
+        int currentId = getCurrentKyberPreKeyId(ctx);
+        int newId = (currentId < 0 || currentId >= MAX_PREKEY_ID)
+                ? KYBER_PREKEY_ID_START
+                : currentId + 1;
+
+        KyberPreKeyRecord newKpk = buildKyberPreKeyRecord(idPair, newId);
+
+        SecurePrefs.get(ctx).edit()
+                .putString(KEY_KYBER_PREKEY_PREFIX + newId,
+                        Base64.encodeToString(newKpk.serialize(), Base64.NO_WRAP))
+                .putString(KEY_KYBER_PREKEY_CURRENT_ID, String.valueOf(newId))
+                .apply();
+
+        // Remove old key from SecurePrefs to avoid unbounded growth.
+        if (currentId >= 0 && currentId != newId) {
+            SecurePrefs.get(ctx).edit()
+                    .remove(KEY_KYBER_PREKEY_PREFIX + currentId)
+                    .apply();
+        }
+
+        Log.d(TAG, "Kyber pre-key rotated — new id=" + newId);
+        uploadRotatedKyberPreKey(ctx, newKpk);
+    }
+
+    // ── Private: Kyber helpers ─────────────────────────────────────────────────
+
+    /**
+     * Generates and persists the initial Kyber last-resort pre-key.
+     * Called once during initial key generation.
+     */
+    private static KyberPreKeyRecord buildKyberPreKeyRecord(IdentityKeyPair idPair, int id)
+            throws InvalidKeyException {
+        KEMKeyPair kyberPair = KEMKeyPair.generate(KEMKeyType.KYBER_1024);
+        byte[] kyberSig = Curve.calculateSignature(
+                idPair.getPrivateKey(),
+                kyberPair.getPublicKey().serialize());
+        return new KyberPreKeyRecord(id, System.currentTimeMillis(), kyberPair, kyberSig);
+    }
+
+    private static void uploadRotatedKyberPreKey(Context ctx, KyberPreKeyRecord kpk) {
+        com.google.firebase.auth.FirebaseUser user =
+                FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) {
+            Log.w(TAG, "Cannot upload rotated Kyber pre-key — no signed-in user.");
+            return;
+        }
+
+        Map<String, Object> kpkMap = buildKyberPreKeyMap(kpk);
+        FirebaseFirestore.getInstance()
+                .collection("users").document(user.getUid())
+                .collection("public_keys").document("bundle")
+                .update("kyberPreKey", kpkMap,
+                        "updatedAt",   FieldValue.serverTimestamp())
+                .addOnSuccessListener(v ->
+                        Log.d(TAG, "Rotated Kyber pre-key uploaded (id=" + kpk.getId() + ")."))
+                .addOnFailureListener(e ->
+                        Log.e(TAG, "Kyber pre-key Firestore upload failed — will retry on "
+                                + "next rotation.", e));
+    }
+
+    private static Map<String, Object> buildKyberPreKeyMap(KyberPreKeyRecord kpk) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("id",        kpk.getId());
+        m.put("publicKey", Base64.encodeToString(
+                kpk.getKeyPair().getPublicKey().serialize(), Base64.NO_WRAP));
+        m.put("signature", Base64.encodeToString(kpk.getSignature(), Base64.NO_WRAP));
+        m.put("timestamp", kpk.getTimestamp());
+        return m;
     }
 
     // ── Private: signed pre-key rotation helpers ───────────────────────────────
@@ -566,6 +725,10 @@ public final class SignalKeyManager {
             oneTimePreKeys.add(new PreKeyRecord(id, kp));
         }
 
+        // 5. Kyber last-resort pre-key (PQXDH) — Kyber-1024 key pair signed by the
+        //    identity key.  Provides post-quantum forward secrecy on top of X3DH.
+        KyberPreKeyRecord kyberPreKey = buildKyberPreKeyRecord(identityKeyPair, KYBER_PREKEY_ID_START);
+
         // Persist everything to EncryptedSharedPreferences.
         // Private key bytes NEVER leave the device from this point onward.
         SharedPreferences.Editor editor = SecurePrefs.get(ctx).edit();
@@ -594,10 +757,16 @@ public final class SignalKeyManager {
         editor.putString(KEY_SIGNED_PREKEY_NEXT_ID,
                 String.valueOf(SIGNED_PREKEY_ID + 1));
 
+        // Kyber last-resort pre-key.
+        editor.putString(KEY_KYBER_PREKEY_PREFIX + KYBER_PREKEY_ID_START,
+                Base64.encodeToString(kyberPreKey.serialize(), Base64.NO_WRAP));
+        editor.putString(KEY_KYBER_PREKEY_CURRENT_ID,
+                String.valueOf(KYBER_PREKEY_ID_START));
+
         editor.apply(); // async write — EncryptedSharedPrefs encrypts before disk flush
 
         Log.d(TAG, "Keys generated and stored locally. registrationId=" + registrationId
-                + "  oneTimePreKeys=" + oneTimePreKeys.size());
+                + "  oneTimePreKeys=" + oneTimePreKeys.size() + "  kyberPreKeyId=" + KYBER_PREKEY_ID_START);
     }
 
     // ── Private: Firestore upload (public keys only) ───────────────────────────
@@ -671,12 +840,20 @@ public final class SignalKeyManager {
             }
         }
 
+        // ── Kyber last-resort pre-key (PQXDH) ───────────────────────────────
+        Map<String, Object> kyberMap = null;
+        KyberPreKeyRecord kpk = getCurrentKyberPreKey(ctx);
+        if (kpk != null) {
+            kyberMap = buildKyberPreKeyMap(kpk);
+        }
+
         // ── Firestore document ────────────────────────────────────────────────
         Map<String, Object> bundle = new HashMap<>();
         bundle.put("identityKey",    identityKeyB64);
         bundle.put("registrationId", regId);
         bundle.put("signedPreKey",   spkMap);
         bundle.put("oneTimePreKeys", otpkList);
+        if (kyberMap != null) bundle.put("kyberPreKey", kyberMap);
         bundle.put("updatedAt",      FieldValue.serverTimestamp());
 
         FirebaseFirestore.getInstance()

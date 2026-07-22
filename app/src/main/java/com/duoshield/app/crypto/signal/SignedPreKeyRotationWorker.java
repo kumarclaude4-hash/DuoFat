@@ -71,9 +71,15 @@ public final class SignedPreKeyRotationWorker extends Worker {
 
         try {
             SignalKeyManager.rotateSignedPreKey(ctx);
+
+            // Co-rotate the Kyber last-resort pre-key on the same schedule.
+            // This limits how long a compromised Kyber private key could be
+            // exploited to break PQXDH forward secrecy.
+            SignalKeyManager.rotateKyberPreKey(ctx);
+
             return Result.success();
         } catch (Exception e) {
-            Log.e(TAG, "SPK rotation failed — will retry", e);
+            Log.e(TAG, "SPK / Kyber rotation failed — will retry", e);
             return Result.retry();
         }
     }

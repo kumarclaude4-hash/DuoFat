@@ -382,31 +382,61 @@ public final class DuoShieldSignalStore
         }
     }
 
-    // ── KyberPreKeyStore stubs (required by SignalProtocolStore interface) ──────
+    // ══════════════════════════════════════════════════════════════════════════
+    // KyberPreKeyStore  (PQXDH last-resort Kyber-1024 pre-keys)
+    //
+    // DuoShield uses a single "last-resort" Kyber pre-key per device, mirroring
+    // Signal's own PQXDH design.  Last-resort keys are never deleted after use —
+    // markKyberPreKeyUsed() is intentionally a no-op.  The key is rotated on the
+    // same 7-day schedule as the signed pre-key (see SignedPreKeyRotationWorker).
+    // ══════════════════════════════════════════════════════════════════════════
 
     @Override
     public KyberPreKeyRecord loadKyberPreKey(int kyberPreKeyId)
             throws InvalidKeyIdException {
-        throw new InvalidKeyIdException("Kyber pre-keys not used in 1-to-1 mode");
+        KyberPreKeyRecord kpk = SignalKeyManager.getKyberPreKey(ctx, kyberPreKeyId);
+        if (kpk == null) {
+            throw new InvalidKeyIdException("No Kyber pre-key found for id=" + kyberPreKeyId);
+        }
+        return kpk;
     }
 
     @Override
     public List<KyberPreKeyRecord> loadKyberPreKeys() {
-        return new ArrayList<>();
+        List<KyberPreKeyRecord> result = new ArrayList<>();
+        KyberPreKeyRecord current = SignalKeyManager.getCurrentKyberPreKey(ctx);
+        if (current != null) result.add(current);
+        return result;
     }
 
     @Override
     public void storeKyberPreKey(int kyberPreKeyId, KyberPreKeyRecord record) {
-        // No-op: Kyber pre-keys not used in 1-to-1 mode
+        try {
+            SecurePrefs.get(ctx).edit()
+                    .putString(SignalKeyManager.KEY_KYBER_PREKEY_PREFIX + kyberPreKeyId,
+                            android.util.Base64.encodeToString(
+                                    record.serialize(), android.util.Base64.NO_WRAP))
+                    .putString(SignalKeyManager.KEY_KYBER_PREKEY_CURRENT_ID,
+                            String.valueOf(kyberPreKeyId))
+                    .apply();
+        } catch (Exception e) {
+            Log.e(TAG, "storeKyberPreKey failed for id=" + kyberPreKeyId, e);
+        }
     }
 
     @Override
     public boolean containsKyberPreKey(int kyberPreKeyId) {
-        return false;
+        return SignalKeyManager.getKyberPreKey(ctx, kyberPreKeyId) != null;
     }
 
+    /**
+     * Last-resort Kyber pre-keys are never deleted — they persist until the next
+     * scheduled rotation.  This matches Signal's own PQXDH behaviour: the key is
+     * reused across multiple sessions rather than being consumed like a one-time key.
+     */
     @Override
     public void markKyberPreKeyUsed(int kyberPreKeyId) {
-        // No-op: Kyber pre-keys not used in 1-to-1 mode
+        Log.d(TAG, "markKyberPreKeyUsed(" + kyberPreKeyId
+                + ") — last-resort key; no action taken.");
     }
 }

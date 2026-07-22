@@ -17,6 +17,7 @@ import org.signal.libsignal.protocol.SignalProtocolAddress;
 import org.signal.libsignal.protocol.UntrustedIdentityException;
 import org.signal.libsignal.protocol.ecc.Curve;
 import org.signal.libsignal.protocol.ecc.ECPublicKey;
+import org.signal.libsignal.protocol.kem.KEMPublicKey;
 import org.signal.libsignal.protocol.state.PreKeyBundle;
 import org.signal.libsignal.protocol.SessionBuilder;
 
@@ -197,12 +198,38 @@ public final class SignalSessionManager {
                 }
             }
 
-            // ── 4. Build PreKeyBundle and run X3DH via SessionBuilder ─────────
+            // ── 4. Parse Kyber last-resort pre-key (PQXDH), if present ──────────
             //
-            // PreKeyBundle(registrationId, deviceId,
-            //              preKeyId, preKey,           ← one-time pre-key (may be null)
-            //              signedPreKeyId, signedPreKey, signedPreKeySignature,
-            //              identityKey)
+            // Added when both parties run DuoShield ≥ 1.5 (PQXDH support).
+            // If absent (old bundle), fall back to classic X3DH — backward compatible.
+            int         kyberPreKeyId  = -1;
+            KEMPublicKey kyberPreKey   = null;
+            byte[]       kyberPreKeySig = null;
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> kpkMap = (Map<String, Object>) doc.get("kyberPreKey");
+            if (kpkMap != null) {
+                try {
+                    kyberPreKeyId   = toInt(kpkMap.get("id"), -1);
+                    String kpkPubB64 = (String) kpkMap.get("publicKey");
+                    String kpkSigB64 = (String) kpkMap.get("signature");
+                    if (kyberPreKeyId >= 0 && kpkPubB64 != null && kpkSigB64 != null) {
+                        kyberPreKey    = new KEMPublicKey(Base64.decode(kpkPubB64, Base64.NO_WRAP));
+                        kyberPreKeySig = Base64.decode(kpkSigB64, Base64.NO_WRAP);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Kyber pre-key parse failed for " + recipientUid
+                            + " — falling back to X3DH only.", e);
+                    kyberPreKeyId = -1;
+                    kyberPreKey   = null;
+                    kyberPreKeySig = null;
+                }
+            }
+
+            // ── 5. Build PreKeyBundle and run X3DH (or PQXDH) ───────────────
+            //
+            // PQXDH (with Kyber): adds post-quantum forward secrecy on top of X3DH.
+            // Classic X3DH (no Kyber): used when partner has an older bundle.
             //
             // Pass preKeyId=0 / preKey=null when no one-time pre-key is available
             // (X3DH still works but forward secrecy is slightly reduced for this session).
@@ -212,12 +239,29 @@ public final class SignalSessionManager {
                         + " Partner should re-open the app to replenish their pre-key pool.");
             }
 
-            PreKeyBundle bundle = new PreKeyBundle(
-                    recipientRegId,
-                    DEVICE_ID,
-                    otpkId,  otpkPub,
-                    spkId,   spkPub, spkSig,
-                    identityKey);
+            PreKeyBundle bundle;
+            if (kyberPreKey != null) {
+                // PQXDH: X3DH + Kyber-1024 last-resort pre-key.
+                bundle = new PreKeyBundle(
+                        recipientRegId,
+                        DEVICE_ID,
+                        otpkId,  otpkPub,
+                        spkId,   spkPub, spkSig,
+                        identityKey,
+                        kyberPreKeyId, kyberPreKey, kyberPreKeySig);
+                Log.d(TAG, "PQXDH session initiated for " + recipientUid
+                        + " (Kyber pre-key id=" + kyberPreKeyId + ")");
+            } else {
+                // Classic X3DH — partner pre-dates PQXDH support.
+                bundle = new PreKeyBundle(
+                        recipientRegId,
+                        DEVICE_ID,
+                        otpkId,  otpkPub,
+                        spkId,   spkPub, spkSig,
+                        identityKey);
+                Log.d(TAG, "X3DH session initiated for " + recipientUid
+                        + " (no Kyber pre-key — PQXDH unavailable for this peer)");
+            }
 
             new SessionBuilder(store, address).process(bundle);
             // SessionBuilder.process() calls store.storeSession() internally,
