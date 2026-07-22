@@ -70,3 +70,4 @@
 - [DuoShield video call render order](duoshield-video-render-order.md) — prepareEgl()+initVideoRenderers() MUST run BEFORE startCall/acceptCall; addSink on uninit renderer = blank PiP; callId for caller synced via getCallId() after startCall
 - [DuoShield incall-chat firestore rule](duoshield-incall-chat-rule.md) — calls/{callId}/chat subcollection had NO rule → PERMISSION_DENIED; rule added gating on callerId/calleeId from parent call doc
 - [DuoShield PQXDH hardening](duoshield-pqxdh-hardening.md) — corrupt-Kyber guard in SessionBuilder.process(); ensureKyberKeyExists() for legacy accounts; camera TakePicture fix; 500 MB multi-select media
+- [DuoShield large-video streaming upload](duoshield-large-video-streaming.md) — videos >50 MB must stream-encrypt to disk; readUriBytes() for all sizes = OOM on large videos
