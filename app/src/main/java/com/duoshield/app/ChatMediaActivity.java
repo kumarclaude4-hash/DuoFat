@@ -29,6 +29,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -93,10 +94,13 @@ public class ChatMediaActivity extends BaseActivity {
 
     private static final String TAG                  = "ChatMediaActivity";
     private static final int    MAX_PINS             = 3;
-    private static final int    REQUEST_RECORD_AUDIO = 201;
-    private static final int    REQUEST_CALL_VOICE   = 202;
-    private static final int    REQUEST_CALL_VIDEO   = 203;
-    private boolean             pendingCallIsVideo   = false;
+    private static final int    REQUEST_RECORD_AUDIO    = 201;
+    private static final int    REQUEST_CALL_VOICE      = 202;
+    private static final int    REQUEST_CALL_VIDEO      = 203;
+    private static final int    REQUEST_CAMERA_PHOTO    = 204;
+    private boolean             pendingCallIsVideo      = false;
+    /** URI of the temp file created for a camera capture — consumed after TakePicture returns. */
+    private Uri                 cameraPhotoUri          = null;
 
     // Typing debounce
     private PresenceThrottle typingThrottle;
@@ -240,18 +244,41 @@ public class ChatMediaActivity extends BaseActivity {
             }
         });
 
+    /** Multi-select image picker — shows preview for single picks; bulk-uploads multiples. */
     private final ActivityResultLauncher<String> pickImageLauncher =
-        registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
-            if (uri != null) {
+        registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
+            if (uris == null || uris.isEmpty()) return;
+            if (uris.size() == 1) {
+                // Single pick: show caption/crop preview before uploading.
                 Intent preview = new Intent(ChatMediaActivity.this, MediaSendPreviewActivity.class);
-                preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, uri.toString());
+                preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, uris.get(0).toString());
                 mediaSendPreviewLauncher.launch(preview);
+            } else {
+                // Multiple picks: upload all immediately, each as a separate message.
+                for (Uri uri : uris) {
+                    uploadMedia(uri, "image");
+                }
             }
         });
 
+    /** Multi-select video picker — uploads each selected video as a separate message. */
     private final ActivityResultLauncher<String> pickVideoLauncher =
-        registerForActivityResult(new ActivityResultContracts.GetContent(),
-            uri -> { if (uri != null) uploadMedia(uri, "video"); });
+        registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
+            if (uris == null || uris.isEmpty()) return;
+            for (Uri uri : uris) {
+                uploadMedia(uri, "video");
+            }
+        });
+
+    /** Camera still-capture — photo saved to a FileProvider URI, then sent through preview. */
+    private final ActivityResultLauncher<Uri> takePictureLauncher =
+        registerForActivityResult(new ActivityResultContracts.TakePicture(), success -> {
+            if (success != null && success && cameraPhotoUri != null) {
+                Intent preview = new Intent(ChatMediaActivity.this, MediaSendPreviewActivity.class);
+                preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, cameraPhotoUri.toString());
+                mediaSendPreviewLauncher.launch(preview);
+            }
+        });
 
     private final ActivityResultLauncher<Intent> searchLauncher =
         registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
@@ -1213,6 +1240,25 @@ public class ChatMediaActivity extends BaseActivity {
                     .show();
             } else {
                 Toast.makeText(this, R.string.perm_mic_denied, Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == REQUEST_CAMERA_PHOTO) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                launchCameraCapture();
+            } else if (!ActivityCompat.shouldShowRequestPermissionRationale(
+                    this, Manifest.permission.CAMERA)) {
+                new MaterialAlertDialogBuilder(this)
+                    .setTitle("Camera permission required")
+                    .setMessage("Grant camera access in Settings to take photos.")
+                    .setPositiveButton("Open Settings", (d, w) -> {
+                        Intent intent = new Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", getPackageName(), null));
+                        startActivity(intent);
+                    })
+                    .setNegativeButton("Not now", null)
+                    .show();
+            } else {
+                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_LONG).show();
             }
         } else if (requestCode == REQUEST_CALL_VOICE || requestCode == REQUEST_CALL_VIDEO) {
             boolean isVideo = (requestCode == REQUEST_CALL_VIDEO);
@@ -2287,12 +2333,7 @@ public class ChatMediaActivity extends BaseActivity {
         });
         view.findViewById(R.id.mediaPickerCamera).setOnClickListener(v -> {
             sheet.dismiss();
-            Intent cam = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
-            if (cam.resolveActivity(getPackageManager()) != null) {
-                startActivity(cam);
-            } else {
-                Toast.makeText(this, "No camera app found", Toast.LENGTH_SHORT).show();
-            }
+            launchCameraCapture();
         });
         view.findViewById(R.id.mediaPickerContact).setOnClickListener(v -> {
             sheet.dismiss();
@@ -2300,6 +2341,31 @@ public class ChatMediaActivity extends BaseActivity {
         });
 
         sheet.show();
+    }
+
+    /**
+     * Requests CAMERA permission if needed, creates a FileProvider-backed temp file,
+     * and launches the system camera via {@link #takePictureLauncher}.
+     * The photo is captured into the temp URI so the result is received by the app
+     * (unlike a plain startActivity which discards the result).
+     */
+    private void launchCameraCapture() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PHOTO);
+            return;
+        }
+        try {
+            File photoFile = File.createTempFile("cam_", ".jpg", getCacheDir());
+            cameraPhotoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".provider", photoFile);
+            takePictureLauncher.launch(cameraPhotoUri);
+        } catch (java.io.IOException e) {
+            Log.e(TAG, "Failed to create camera temp file", e);
+            Toast.makeText(this, "Camera error — could not create photo file",
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void uploadMedia(Uri fileUri, String mediaType) {
@@ -2318,12 +2384,13 @@ public class ChatMediaActivity extends BaseActivity {
             return;
         }
 
-        // Reject videos over 20 MB before any upload work starts
-        if ("video".equals(mediaType) && retryCount == 0) {
+        // Reject files over 500 MB before any upload work starts.
+        // Applies to both images and videos — limit raised from 20 MB.
+        if (retryCount == 0) {
             long size = getFileSize(fileUri);
-            if (size > 20 * 1024 * 1024L) {
+            if (size > 500 * 1024 * 1024L) {
                 Toast.makeText(this,
-                        "Video is too large (max 20 MB). Please trim or pick a shorter clip.",
+                        "File is too large (max 500 MB). Please choose a smaller file.",
                         Toast.LENGTH_LONG).show();
                 return;
             }

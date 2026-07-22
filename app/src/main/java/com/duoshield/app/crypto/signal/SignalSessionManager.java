@@ -263,7 +263,38 @@ public final class SignalSessionManager {
                         + " (no Kyber pre-key — PQXDH unavailable for this peer)");
             }
 
-            new SessionBuilder(store, address).process(bundle);
+            // ── Corrupt-Kyber guard ────────────────────────────────────────────
+            //
+            // If PQXDH bundle construction succeeded but SessionBuilder.process()
+            // throws (e.g. malformed Kyber ciphertext, wrong key length after a
+            // partial Firestore write), fall back to classic X3DH automatically
+            // so a corrupt Kyber key never silently kills a new chat session.
+            //
+            // The fallback is logged as a warning; both sides will still negotiate
+            // a fully-authenticated Double Ratchet session — just without the
+            // post-quantum layer until the partner's Kyber key is rotated/repaired.
+            try {
+                new SessionBuilder(store, address).process(bundle);
+            } catch (Exception pqxdhEx) {
+                if (kyberPreKey != null) {
+                    Log.w(TAG, "PQXDH SessionBuilder.process() failed for " + recipientUid
+                            + " — partner's Kyber key may be corrupt; retrying with classic X3DH.",
+                            pqxdhEx);
+                    PreKeyBundle x3dhFallback = new PreKeyBundle(
+                            recipientRegId,
+                            DEVICE_ID,
+                            otpkId,  otpkPub,
+                            spkId,   spkPub, spkSig,
+                            identityKey);
+                    // Let this throw if the classic X3DH bundle also fails — that
+                    // is a real key problem unrelated to Kyber (caught below).
+                    new SessionBuilder(store, address).process(x3dhFallback);
+                    Log.d(TAG, "X3DH fallback succeeded for " + recipientUid
+                            + " (PQXDH disabled until partner rotates Kyber key)");
+                } else {
+                    throw pqxdhEx; // non-Kyber failure — re-throw for the outer catch
+                }
+            }
             // SessionBuilder.process() calls store.storeSession() internally,
             // persisting the Double Ratchet state to Room DB.
 

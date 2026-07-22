@@ -132,6 +132,9 @@ public final class SignalKeyManager {
     public static void ensureKeysInitialized(Context ctx, Runnable onSuccess, Runnable onFailure) {
         if (isInitialized(ctx)) {
             Log.d(TAG, "Signal keys already present — skipping generation.");
+            // Upgrade legacy accounts that were created before PQXDH support:
+            // generate + upload a Kyber last-resort key if one doesn't exist yet.
+            ensureKyberKeyExists(ctx, null);
             if (onSuccess != null) new Handler(Looper.getMainLooper()).post(onSuccess);
             return;
         }
@@ -429,6 +432,50 @@ public final class SignalKeyManager {
         if (idStr == null) return -1;
         try { return Integer.parseInt(idStr); }
         catch (NumberFormatException e) { return -1; }
+    }
+
+    /**
+     * Ensures this device has a Kyber-1024 last-resort pre-key for PQXDH.
+     *
+     * <p>Accounts created before PQXDH support was added will not have a Kyber key
+     * in SecurePrefs. This method generates one and uploads the public half to
+     * Firestore so new contacts receive a PQXDH session instead of falling back to
+     * classic X3DH. Safe to call on every launch — exits immediately if a key exists.
+     *
+     * @param ctx    Application or Activity context.
+     * @param onDone Called on the main thread when complete (succeeds silently on error
+     *               so callers never block on this upgrade path).
+     */
+    public static void ensureKyberKeyExists(Context ctx, Runnable onDone) {
+        if (getCurrentKyberPreKeyId(ctx) >= 0) {
+            // Kyber key already present — nothing to do.
+            if (onDone != null) new Handler(Looper.getMainLooper()).post(onDone);
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                IdentityKeyPair idPair = getIdentityKeyPair(ctx);
+                if (idPair == null) {
+                    Log.w(TAG, "ensureKyberKeyExists: no identity key pair — skipping.");
+                    return;
+                }
+                KyberPreKeyRecord kpk = buildKyberPreKeyRecord(idPair, KYBER_PREKEY_ID_START);
+                SecurePrefs.get(ctx).edit()
+                        .putString(KEY_KYBER_PREKEY_PREFIX + KYBER_PREKEY_ID_START,
+                                Base64.encodeToString(kpk.serialize(), Base64.NO_WRAP))
+                        .putString(KEY_KYBER_PREKEY_CURRENT_ID,
+                                String.valueOf(KYBER_PREKEY_ID_START))
+                        .apply();
+                Log.d(TAG, "ensureKyberKeyExists: Kyber key generated for legacy account — id="
+                        + KYBER_PREKEY_ID_START);
+                uploadRotatedKyberPreKey(ctx, kpk);
+            } catch (Exception e) {
+                Log.e(TAG, "ensureKyberKeyExists: failed — PQXDH unavailable until next rotation", e);
+            } finally {
+                if (onDone != null) new Handler(Looper.getMainLooper()).post(onDone);
+            }
+        }, "kyber-key-ensure").start();
     }
 
     /**
