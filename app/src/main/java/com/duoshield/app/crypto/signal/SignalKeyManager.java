@@ -447,10 +447,18 @@ public final class SignalKeyManager {
      *               so callers never block on this upgrade path).
      */
     public static void ensureKyberKeyExists(Context ctx, Runnable onDone) {
-        if (getCurrentKyberPreKeyId(ctx) >= 0) {
-            // Kyber key already present — nothing to do.
-            if (onDone != null) new Handler(Looper.getMainLooper()).post(onDone);
-            return;
+        int existingId = getCurrentKyberPreKeyId(ctx);
+        if (existingId >= 0) {
+            // ID pointer exists — also verify the key record blob is actually present
+            // and loadable. If it is missing or corrupt (e.g. partial SecurePrefs write),
+            // fall through to regenerate rather than silently leaving PQXDH unavailable.
+            if (getKyberPreKey(ctx, existingId) != null) {
+                // Both pointer and record are healthy — nothing to do.
+                if (onDone != null) new Handler(Looper.getMainLooper()).post(onDone);
+                return;
+            }
+            Log.w(TAG, "ensureKyberKeyExists: Kyber key ID=" + existingId
+                    + " is recorded but the key record is missing or corrupt — regenerating.");
         }
 
         new Thread(() -> {

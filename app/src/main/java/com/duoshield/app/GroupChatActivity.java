@@ -1,6 +1,10 @@
 package com.duoshield.app;
 
+import android.Manifest;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -11,6 +15,11 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -21,6 +30,7 @@ import com.duoshield.app.models.Group;
 import com.duoshield.app.models.GroupMember;
 import com.duoshield.app.models.Message;
 import com.duoshield.app.ui.MessageAdapter;
+import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.FieldValue;
@@ -96,6 +106,38 @@ public class GroupChatActivity extends BaseActivity {
     // ── Dedup guard ───────────────────────────────────────────────────────────
     private final Set<String> knownIds = new HashSet<>();
 
+    // ── Media / camera ────────────────────────────────────────────────────────
+    private static final int  REQUEST_CAMERA_GROUP   = 205;
+    private static final long LARGE_FILE_THRESHOLD   = 50 * 1024 * 1024L;
+    /** Temp URI for camera capture; consumed once TakePicture returns. */
+    private Uri               cameraGroupPhotoUri    = null;
+    private View              uploadGroupProgressContainer;
+    private TextView          tvGroupUploadPct;
+    private ImageView         btnGroupAttach;
+
+    /** Multi-select image picker — uploads each image as a separate group message. */
+    private final ActivityResultLauncher<String> pickGroupImageLauncher =
+        registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
+            if (uris == null || uris.isEmpty()) return;
+            for (Uri uri : uris) uploadGroupMedia(uri, "image");
+        });
+
+    /** Multi-select video picker — uploads each video as a separate group message. */
+    private final ActivityResultLauncher<String> pickGroupVideoLauncher =
+        registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
+            if (uris == null || uris.isEmpty()) return;
+            for (Uri uri : uris) uploadGroupMedia(uri, "video");
+        });
+
+    /** Camera still-capture for group chat. */
+    private final ActivityResultLauncher<Uri> takeGroupPictureLauncher =
+        registerForActivityResult(new ActivityResultContracts.TakePicture(), success -> {
+            if (success != null && success && cameraGroupPhotoUri != null) {
+                uploadGroupMedia(cameraGroupPhotoUri, "image");
+            }
+            cameraGroupPhotoUri = null;
+        });
+
     // ═════════════════════════════════════════════════════════════════════════
     // Lifecycle
     // ═════════════════════════════════════════════════════════════════════════
@@ -127,10 +169,17 @@ public class GroupChatActivity extends BaseActivity {
         ImageView btnBack      = findViewById(R.id.btn_back);
         ImageView btnSend      = findViewById(R.id.btn_send);
 
+        btnGroupAttach                = findViewById(R.id.btn_group_attach);
+        uploadGroupProgressContainer  = findViewById(R.id.groupUploadProgressContainer);
+        tvGroupUploadPct              = findViewById(R.id.tvGroupUploadPct);
+
         btnBack.setOnClickListener(v -> finish());
         // Tap the group header to view/manage members (admin can remove)
         tvGroupName.setOnClickListener(v -> showGroupInfoSheet());
         tvMemberCount.setOnClickListener(v -> showGroupInfoSheet());
+        if (btnGroupAttach != null) {
+            btnGroupAttach.setOnClickListener(v -> showGroupMediaPickerSheet());
+        }
         btnSend.setOnClickListener(v -> {
             v.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_PRESS);
             trySend();
@@ -313,8 +362,16 @@ public class GroupChatActivity extends BaseActivity {
                 String sender = doc.getString("sender");
                 String cipher = doc.getString("text");
                 Object ts     = doc.get("timestamp");
+                // Media fields (present only on image/video messages)
+                String mediaPath = doc.getString("path");
+                String mediaKey  = doc.getString("mediaKey");
+                String docType   = doc.getString("type");
+                // mediaType: "image" | "video" | null (text message)
+                String mType = (mediaPath != null && !mediaPath.isEmpty())
+                        ? (docType != null ? docType : "image") : null;
 
-                if (id == null || sender == null || cipher == null) continue;
+                if (id == null || sender == null) continue;
+                if (cipher == null) cipher = ""; // media messages may have empty/null text
                 if (knownIds.contains(id)) continue;
                 knownIds.add(id);
 
@@ -346,12 +403,25 @@ public class GroupChatActivity extends BaseActivity {
                     plain = "[Decryption failed]";
                 }
 
-                final Message msg = new Message(id, groupId, sender, plain, tsMs, false);
+                // Build Message — include media fields when present
+                final Message msg;
+                if (mType != null) {
+                    msg = new Message(id, groupId, sender, plain, tsMs, false, mediaPath, mType);
+                    msg.setMediaKey(mediaKey);
+                } else {
+                    msg = new Message(id, groupId, sender, plain, tsMs, false);
+                }
                 adapter.appendMessage(msg);
                 scrollToBottom();
 
                 // Persist decrypted message to Room
-                final Message toRoom = new Message(id, groupId, sender, plain, tsMs, false);
+                final Message toRoom;
+                if (mType != null) {
+                    toRoom = new Message(id, groupId, sender, plain, tsMs, false, mediaPath, mType);
+                    toRoom.setMediaKey(mediaKey);
+                } else {
+                    toRoom = new Message(id, groupId, sender, plain, tsMs, false);
+                }
                 executor.execute(() -> {
                     try { localDb.messageDao().insert(toRoom); }
                     catch (Exception ex) { Log.w(TAG, "Room insert conflict for " + id); }
@@ -454,6 +524,34 @@ public class GroupChatActivity extends BaseActivity {
     // Helpers
     // ═════════════════════════════════════════════════════════════════════════
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CAMERA_GROUP) {
+            if (grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                launchGroupCameraCapture();
+            } else if (!ActivityCompat.shouldShowRequestPermissionRationale(
+                    this, Manifest.permission.CAMERA)) {
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                    .setTitle("Camera permission required")
+                    .setMessage("Grant camera access in Settings to take photos.")
+                    .setPositiveButton("Open Settings", (d, w) -> {
+                        Intent intent = new Intent(
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", getPackageName(), null));
+                        startActivity(intent);
+                    })
+                    .setNegativeButton("Not now", null)
+                    .show();
+            } else {
+                Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
     private void retryMessage(Message msg) {
         adapter.removeMessage(msg.getId());
         knownIds.remove(msg.getId());
@@ -464,6 +562,290 @@ public class GroupChatActivity extends BaseActivity {
     private void scrollToBottom() {
         int last = adapter.getItemCount() - 1;
         if (last >= 0) recyclerView.scrollToPosition(last);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Media / camera support
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Shows the media-type picker bottom sheet (image / video / camera). */
+    private void showGroupMediaPickerSheet() {
+        if (groupKey == null) {
+            Toast.makeText(this, "Group key not ready yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        com.google.android.material.bottomsheet.BottomSheetDialog sheet =
+                new com.google.android.material.bottomsheet.BottomSheetDialog(this);
+        View view = getLayoutInflater().inflate(R.layout.bottom_sheet_media_picker, null);
+        sheet.setContentView(view);
+
+        view.findViewById(R.id.mediaPickerImage).setOnClickListener(v -> {
+            sheet.dismiss();
+            pickGroupImageLauncher.launch("image/*");
+        });
+        view.findViewById(R.id.mediaPickerVideo).setOnClickListener(v -> {
+            sheet.dismiss();
+            pickGroupVideoLauncher.launch("video/*");
+        });
+        view.findViewById(R.id.mediaPickerCamera).setOnClickListener(v -> {
+            sheet.dismiss();
+            launchGroupCameraCapture();
+        });
+        // Hide the contact card option — not applicable in group chat
+        View contactPicker = view.findViewById(R.id.mediaPickerContact);
+        if (contactPicker != null) contactPicker.setVisibility(View.GONE);
+
+        sheet.show();
+    }
+
+    /**
+     * Requests CAMERA permission if needed, creates a FileProvider-backed temp file,
+     * and fires the system camera intent via {@link #takeGroupPictureLauncher}.
+     */
+    private void launchGroupCameraCapture() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_GROUP);
+            return;
+        }
+        try {
+            java.io.File photoFile = java.io.File.createTempFile(
+                    "grp_cam_", ".jpg", getCacheDir());
+            cameraGroupPhotoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".provider", photoFile);
+            takeGroupPictureLauncher.launch(cameraGroupPhotoUri);
+        } catch (java.io.IOException e) {
+            Log.e(TAG, "Failed to create group camera temp file", e);
+            Toast.makeText(this, "Camera error — could not create photo file",
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Encrypts and uploads the given media URI, then sends a group message with
+     * the B2 path and per-file AES key.  Files over 500 MB are rejected up-front.
+     *
+     * @param fileUri   Content URI from picker or camera.
+     * @param mediaType "image" or "video".
+     */
+    private void uploadGroupMedia(Uri fileUri, String mediaType) {
+        uploadGroupMediaWithRetry(fileUri, mediaType, 0);
+    }
+
+    private void uploadGroupMediaWithRetry(Uri fileUri, String mediaType, int retryCount) {
+        if (isFinishing() || isDestroyed()) return;
+        if (retryCount > 3) {
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (uploadGroupProgressContainer != null)
+                    uploadGroupProgressContainer.setVisibility(View.GONE);
+                Toast.makeText(this,
+                        "Upload failed after multiple attempts. Please check your connection.",
+                        Toast.LENGTH_LONG).show();
+            });
+            return;
+        }
+
+        // Reject files over 500 MB before any upload work starts.
+        if (retryCount == 0) {
+            long size = getGroupFileSize(fileUri);
+            if (size > 500 * 1024 * 1024L) {
+                Toast.makeText(this,
+                        "File is too large (max 500 MB). Please choose a smaller file.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (uploadGroupProgressContainer != null) {
+                uploadGroupProgressContainer.setVisibility(View.VISIBLE);
+                if (tvGroupUploadPct != null) tvGroupUploadPct.setText("Preparing…");
+            }
+        });
+
+        String ext  = "video".equals(mediaType) ? ".mp4" : ".jpg";
+        String mime = "video".equals(mediaType) ? "video/mp4" : "image/jpeg";
+        String path = "groups/" + groupId + "/" + UUID.randomUUID() + ext;
+
+        if (executor.isShutdown()) return;
+        executor.execute(() -> {
+            try {
+                byte[] plain = readGroupUriBytes(fileUri);
+                if (plain == null || plain.length == 0)
+                    throw new java.io.IOException("Failed to read file or file is empty");
+
+                // Compress images to save bandwidth
+                if ("image".equals(mediaType)) {
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                            tvGroupUploadPct.setText("Compressing…");
+                    });
+                    plain = compressGroupImage(plain);
+                }
+
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                        tvGroupUploadPct.setText("0%");
+                });
+
+                B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+                String storagePath = B2StorageHelper.uploadFile(
+                        enc.data, path, mime,
+                        pct -> runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                                tvGroupUploadPct.setText(pct + "%");
+                        }));
+
+                final String mediaKey = enc.keyBase64;
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (uploadGroupProgressContainer != null)
+                        uploadGroupProgressContainer.setVisibility(View.GONE);
+                    sendGroupMediaMessage(storagePath, mediaType, mediaKey);
+                });
+
+            } catch (Exception e) {
+                Log.e(TAG, "Group media upload failed (attempt " + retryCount + ")", e);
+                long delayMs = (long) (1000 * Math.pow(2, retryCount));
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                        () -> uploadGroupMediaWithRetry(fileUri, mediaType, retryCount + 1),
+                        delayMs);
+            }
+        });
+    }
+
+    /**
+     * Writes a group media message to Firestore after a successful B2 upload.
+     * The message carries the B2 path and per-file AES key; the group AES key
+     * decrypts the B2 ciphertext on each recipient's device.
+     */
+    private void sendGroupMediaMessage(String storagePath, String mediaType, String mediaKey) {
+        if (groupKey == null) return;
+        String msgId = UUID.randomUUID().toString();
+        long   now   = System.currentTimeMillis();
+
+        // Optimistic UI
+        Message optimistic = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
+        optimistic.setMediaKey(mediaKey);
+        optimistic.setStatus("pending");
+        adapter.appendMessage(optimistic);
+        knownIds.add(msgId);
+        scrollToBottom();
+
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("id",          msgId);
+        doc.put("sender",      myUid);
+        doc.put("text",        "");
+        doc.put("isEncrypted", true);
+        doc.put("type",        mediaType);
+        doc.put("mediaType",   mediaType);
+        doc.put("path",        storagePath);
+        doc.put("mediaKey",    mediaKey);
+        doc.put("status",      "sent");
+        doc.put("timestamp",   FieldValue.serverTimestamp());
+
+        FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
+        if (!guard.canWrite(1)) {
+            runOnUiThread(() -> Toast.makeText(this,
+                    "Write quota reached — try again tomorrow", Toast.LENGTH_LONG).show());
+            return;
+        }
+        db.collection("groups").document(groupId)
+          .collection("messages").document(msgId)
+          .set(doc)
+          .addOnSuccessListener(v -> {
+              guard.recordWrites(1);
+              adapter.updateMessage(msgId, m -> m.setStatus("sent"));
+              // Persist to Room
+              Message stored = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
+              stored.setMediaKey(mediaKey);
+              stored.setStatus("sent");
+              executor.execute(() -> localDb.messageDao().insert(stored));
+              // Nudge group doc for FCM
+              db.collection("groups").document(groupId)
+                .update("lastActivity", FieldValue.serverTimestamp())
+                .addOnFailureListener(ex ->
+                    Log.w(TAG, "nudge failed (non-critical): " + ex.getMessage()));
+          })
+          .addOnFailureListener(ex -> {
+              adapter.updateMessage(msgId, m -> m.setStatus("failed"));
+              // Clean up orphaned B2 file
+              if (B2StorageHelper.isB2Path(storagePath)) {
+                  executor.execute(() -> {
+                      try { B2StorageHelper.deleteFile(storagePath); }
+                      catch (Exception ignored) {}
+                  });
+              }
+              Toast.makeText(this, "Failed to send media.", Toast.LENGTH_SHORT).show();
+          });
+    }
+
+    /** Returns the file size in bytes from ContentResolver, or 0 if unavailable. */
+    private long getGroupFileSize(Uri uri) {
+        android.database.Cursor c = getContentResolver().query(
+                uri, new String[]{android.provider.OpenableColumns.SIZE}, null, null, null);
+        if (c == null) return 0;
+        try {
+            if (!c.moveToFirst()) return 0;
+            int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
+            return idx >= 0 ? c.getLong(idx) : 0;
+        } finally { c.close(); }
+    }
+
+    /** Reads all bytes from a content URI. Returns null on error. */
+    private byte[] readGroupUriBytes(Uri uri) {
+        try (java.io.InputStream is = getContentResolver().openInputStream(uri)) {
+            if (is == null) return null;
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+            return baos.toByteArray();
+        } catch (Exception e) {
+            Log.e(TAG, "readGroupUriBytes failed", e);
+            return null;
+        }
+    }
+
+    /**
+     * Compresses a raw image to max 1280px on the longest side at JPEG 85.
+     * Returns the original bytes if compression would produce a larger result.
+     */
+    private byte[] compressGroupImage(byte[] raw) {
+        try {
+            final int MAX_DIM = 1280;
+            android.graphics.BitmapFactory.Options probe = new android.graphics.BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length, probe);
+            int w = probe.outWidth, h = probe.outHeight;
+            if (w <= 0 || h <= 0) return raw;
+
+            int sampleSize = 1;
+            while ((w / sampleSize) > MAX_DIM * 2 || (h / sampleSize) > MAX_DIM * 2) sampleSize *= 2;
+            android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+            opts.inSampleSize = sampleSize;
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeByteArray(
+                    raw, 0, raw.length, opts);
+            if (bm == null) return raw;
+
+            int bW = bm.getWidth(), bH = bm.getHeight();
+            if (bW > MAX_DIM || bH > MAX_DIM) {
+                float scale = (float) MAX_DIM / Math.max(bW, bH);
+                bm = android.graphics.Bitmap.createScaledBitmap(
+                        bm, Math.round(bW * scale), Math.round(bH * scale), true);
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out);
+            bm.recycle();
+            byte[] compressed = out.toByteArray();
+            return compressed.length < raw.length ? compressed : raw;
+        } catch (Exception e) {
+            Log.w(TAG, "compressGroupImage failed — using original", e);
+            return raw;
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

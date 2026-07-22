@@ -89,6 +89,39 @@
         android:layout_height="1dp"
         android:background="@color/divider"/>
 
+    <!-- Upload progress (visible only during media uploads) -->
+    <LinearLayout
+        android:id="@+id/groupUploadProgressContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/ds_surface_2"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/groupUploadProgress"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="0dp"
+            android:layout_height="4dp"
+            android:layout_weight="1"
+            android:progressTint="@color/accent"
+            android:indeterminate="true"/>
+
+        <TextView
+            android:id="@+id/tvGroupUploadPct"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp"
+            android:text="Uploading…"/>
+    </LinearLayout>
+
     <!-- Input bar -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -101,6 +134,23 @@
         android:paddingTop="6dp"
         android:paddingBottom="8dp"
         android:minHeight="56dp">
+
+        <!-- Attach button -->
+        <ImageView
+            android:id="@+id/btn_group_attach"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="4dp"
+            android:src="@drawable/ic_attach"
+            android:tint="@color/text_hint"
+            android:padding="8dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Attach media"/>
+
+        <View android:layout_width="2dp" android:layout_height="2dp"/>
 
         <LinearLayout
             android:layout_width="0dp"

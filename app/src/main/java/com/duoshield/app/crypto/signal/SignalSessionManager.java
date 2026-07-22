@@ -280,6 +280,15 @@ public final class SignalSessionManager {
                     Log.w(TAG, "PQXDH SessionBuilder.process() failed for " + recipientUid
                             + " — partner's Kyber key may be corrupt; retrying with classic X3DH.",
                             pqxdhEx);
+                    // Delete any partial session state written by the failed PQXDH attempt
+                    // before retrying with the X3DH bundle. libsignal does not guarantee
+                    // atomic rollback when process() throws mid-write, so an explicit
+                    // deleteSession() here prevents a corrupted session record from
+                    // blocking future decryption attempts on this address.
+                    try { store.deleteSession(address); }
+                    catch (Exception deleteEx) {
+                        Log.w(TAG, "Could not delete partial session before X3DH fallback", deleteEx);
+                    }
                     PreKeyBundle x3dhFallback = new PreKeyBundle(
                             recipientRegId,
                             DEVICE_ID,
