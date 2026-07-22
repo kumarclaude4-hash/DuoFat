@@ -2415,41 +2415,76 @@ public class ChatMediaActivity extends BaseActivity {
 
         if (executor.isShutdown()) return;
         executor.execute(() -> {
+            // Videos larger than LARGE_FILE_THRESHOLD are stream-encrypted to a temp file
+            // so we never hold the full plaintext + ciphertext in memory simultaneously.
+            // Images always go through the in-memory path because they are compressed first.
+            boolean useLargeFilePath = "video".equals(mediaType)
+                    && getFileSize(fileUri) > LARGE_FILE_THRESHOLD;
             try {
-                byte[] plain = readUriBytes(fileUri);
-                if (plain == null || plain.length == 0) {
-                    throw new java.io.IOException("Failed to read file or file is empty");
-                }
-
-                // Compress images to save bandwidth — can take 200-500ms on large photos
-                if ("image".equals(mediaType)) {
+                if (useLargeFilePath) {
+                    // ── Streaming path: encrypt to disk → upload from disk ─────────
                     runOnUiThread(() -> {
-                        if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("Compressing…");
+                        if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("Encrypting…");
                     });
-                    plain = compressImage(plain);
-                }
-
-                runOnUiThread(() -> {
-                    if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
-                });
-                B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
-                String storagePath = B2StorageHelper.uploadFile(
-                        enc.data, path, mime,
-                        pct -> runOnUiThread(() -> {
-                    if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
-                }));
-                
-                final String mediaKey = enc.keyBase64;
-                final String captionToSend = pendingImageCaption;
-                pendingImageCaption = null;
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    uploadProgressContainer.setVisibility(View.GONE);
-                    sendMediaMessage(storagePath, mediaType, mediaKey);
-                    if (captionToSend != null && !captionToSend.isEmpty()) {
-                        sendMessage(captionToSend);
+                    java.io.File encTmp = java.io.File.createTempFile("enc_", ".tmp", getCacheDir());
+                    try {
+                        String mediaKey = B2StorageHelper.encryptUriToFile(
+                                getContentResolver(), fileUri, encTmp);
+                        runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
+                        });
+                        String storagePath = B2StorageHelper.uploadFileFromDisk(
+                                encTmp, path, mime,
+                                pct -> runOnUiThread(() -> {
+                                    if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
+                                }));
+                        final String finalMediaKey = mediaKey;
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            uploadProgressContainer.setVisibility(View.GONE);
+                            sendMediaMessage(storagePath, mediaType, finalMediaKey);
+                        });
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        encTmp.delete();
                     }
-                });
+                } else {
+                    // ── In-memory path (images + small videos ≤ 50 MB) ───────────
+                    byte[] plain = readUriBytes(fileUri);
+                    if (plain == null || plain.length == 0) {
+                        throw new java.io.IOException("Failed to read file or file is empty");
+                    }
+
+                    // Compress images to save bandwidth — can take 200-500ms on large photos
+                    if ("image".equals(mediaType)) {
+                        runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("Compressing…");
+                        });
+                        plain = compressImage(plain);
+                    }
+
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
+                    });
+                    B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+                    String storagePath = B2StorageHelper.uploadFile(
+                            enc.data, path, mime,
+                            pct -> runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
+                    }));
+
+                    final String mediaKey = enc.keyBase64;
+                    final String captionToSend = pendingImageCaption;
+                    pendingImageCaption = null;
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        uploadProgressContainer.setVisibility(View.GONE);
+                        sendMediaMessage(storagePath, mediaType, mediaKey);
+                        if (captionToSend != null && !captionToSend.isEmpty()) {
+                            sendMessage(captionToSend);
+                        }
+                    });
+                }
             } catch (Exception e) {
                 Log.e(TAG, "B2 media upload failed (attempt " + (retryCount + 1) + "/4): " + e.getMessage());
                 final String errMsg = e.getMessage();

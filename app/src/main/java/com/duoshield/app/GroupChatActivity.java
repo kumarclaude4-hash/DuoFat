@@ -672,41 +672,78 @@ public class GroupChatActivity extends BaseActivity {
 
         if (executor.isShutdown()) return;
         executor.execute(() -> {
+            // Videos larger than LARGE_FILE_THRESHOLD use the disk-streaming path to
+            // avoid loading the full plaintext + ciphertext into memory simultaneously.
+            boolean useLargeFilePath = "video".equals(mediaType)
+                    && getGroupFileSize(fileUri) > LARGE_FILE_THRESHOLD;
             try {
-                byte[] plain = readGroupUriBytes(fileUri);
-                if (plain == null || plain.length == 0)
-                    throw new java.io.IOException("Failed to read file or file is empty");
-
-                // Compress images to save bandwidth
-                if ("image".equals(mediaType)) {
+                if (useLargeFilePath) {
+                    // ── Streaming path: encrypt to disk → upload from disk ─────────
                     runOnUiThread(() -> {
                         if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
-                            tvGroupUploadPct.setText("Compressing…");
+                            tvGroupUploadPct.setText("Encrypting…");
                     });
-                    plain = compressGroupImage(plain);
-                }
-
-                runOnUiThread(() -> {
-                    if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
-                        tvGroupUploadPct.setText("0%");
-                });
-
-                B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
-                String storagePath = B2StorageHelper.uploadFile(
-                        enc.data, path, mime,
-                        pct -> runOnUiThread(() -> {
+                    java.io.File encTmp = java.io.File.createTempFile("enc_", ".tmp", getCacheDir());
+                    try {
+                        String mediaKey = B2StorageHelper.encryptUriToFile(
+                                getContentResolver(), fileUri, encTmp);
+                        runOnUiThread(() -> {
                             if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
-                                tvGroupUploadPct.setText(pct + "%");
-                        }));
+                                tvGroupUploadPct.setText("0%");
+                        });
+                        String storagePath = B2StorageHelper.uploadFileFromDisk(
+                                encTmp, path, mime,
+                                pct -> runOnUiThread(() -> {
+                                    if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                                        tvGroupUploadPct.setText(pct + "%");
+                                }));
+                        final String finalMediaKey = mediaKey;
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            if (uploadGroupProgressContainer != null)
+                                uploadGroupProgressContainer.setVisibility(View.GONE);
+                            sendGroupMediaMessage(storagePath, mediaType, finalMediaKey);
+                        });
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        encTmp.delete();
+                    }
+                } else {
+                    // ── In-memory path (images + small videos ≤ 50 MB) ───────────
+                    byte[] plain = readGroupUriBytes(fileUri);
+                    if (plain == null || plain.length == 0)
+                        throw new java.io.IOException("Failed to read file or file is empty");
 
-                final String mediaKey = enc.keyBase64;
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    if (uploadGroupProgressContainer != null)
-                        uploadGroupProgressContainer.setVisibility(View.GONE);
-                    sendGroupMediaMessage(storagePath, mediaType, mediaKey);
-                });
+                    // Compress images to save bandwidth
+                    if ("image".equals(mediaType)) {
+                        runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                                tvGroupUploadPct.setText("Compressing…");
+                        });
+                        plain = compressGroupImage(plain);
+                    }
 
+                    runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                            tvGroupUploadPct.setText("0%");
+                    });
+
+                    B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+                    String storagePath = B2StorageHelper.uploadFile(
+                            enc.data, path, mime,
+                            pct -> runOnUiThread(() -> {
+                                if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
+                                    tvGroupUploadPct.setText(pct + "%");
+                            }));
+
+                    final String mediaKey = enc.keyBase64;
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (uploadGroupProgressContainer != null)
+                            uploadGroupProgressContainer.setVisibility(View.GONE);
+                        sendGroupMediaMessage(storagePath, mediaType, mediaKey);
+                    });
+                }
             } catch (Exception e) {
                 Log.e(TAG, "Group media upload failed (attempt " + retryCount + ")", e);
                 long delayMs = (long) (1000 * Math.pow(2, retryCount));
