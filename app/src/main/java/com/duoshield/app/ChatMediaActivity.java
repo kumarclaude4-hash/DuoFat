@@ -98,6 +98,13 @@ public class ChatMediaActivity extends BaseActivity {
     private static final int    REQUEST_CALL_VOICE      = 202;
     private static final int    REQUEST_CALL_VIDEO      = 203;
     private static final int    REQUEST_CAMERA_PHOTO    = 204;
+    /**
+     * Files above this threshold are encrypted and uploaded via a streaming path
+     * ({@link B2StorageHelper#encryptUriToFile} + {@link B2StorageHelper#uploadFileFromDisk})
+     * so the full plaintext and ciphertext are never loaded into a single byte[].
+     * Files at or below the threshold use the existing in-memory path.
+     */
+    private static final long   LARGE_FILE_THRESHOLD    = 50 * 1024 * 1024L; // 50 MB
     private boolean             pendingCallIsVideo      = false;
     /** URI of the temp file created for a camera capture — consumed after TakePicture returns. */
     private Uri                 cameraPhotoUri          = null;

@@ -1467,4 +1467,243 @@ public final class B2StorageHelper {
         sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
         return sdf.format(date);
     }
+
+    // ── Streaming upload (large files — avoids full file byte[] in memory) ────
+
+    /** Chunk size for streaming AES-GCM encryption (256 KB). */
+    private static final int ENCRYPT_STREAM_CHUNK = 256 * 1024;
+
+    /**
+     * OkHttp client for streaming uploads — same as {@link #HTTP_CLIENT} but
+     * with a 1-hour write timeout so very large files don't time out mid-transfer.
+     */
+    private static final OkHttpClient STREAMING_HTTP_CLIENT =
+            HTTP_CLIENT.newBuilder()
+                       .writeTimeout(3600, TimeUnit.SECONDS)
+                       .build();
+
+    /**
+     * OkHttp {@link RequestBody} that streams a {@link File} in
+     * {@link #BUFFER_SIZE}-byte chunks and reports progress.
+     * Unlike {@link ProgressRequestBody}, this never holds more than one chunk
+     * in RAM at a time — safe for files up to 500 MB.
+     */
+    private static final class FileRequestBody extends RequestBody {
+        private final File             file;
+        private final MediaType        mediaType;
+        private final ProgressCallback cb;
+
+        FileRequestBody(File file, MediaType mediaType, ProgressCallback cb) {
+            this.file      = file;
+            this.mediaType = mediaType;
+            this.cb        = cb;
+        }
+
+        @Override public MediaType contentType()   { return mediaType; }
+        @Override public long      contentLength() { return file.length(); }
+
+        @Override public void writeTo(BufferedSink sink) throws IOException {
+            long   total   = file.length();
+            long   written = 0;
+            byte[] buf     = new byte[BUFFER_SIZE];
+            try (FileInputStream fis = new FileInputStream(file)) {
+                int n;
+                while ((n = fis.read(buf)) != -1) {
+                    sink.write(buf, 0, n);
+                    written += n;
+                    if (cb != null && total > 0)
+                        cb.onProgress((int) (100L * written / total));
+                }
+            }
+        }
+    }
+
+    /**
+     * AES-256-GCM encrypts the content at {@code uri} into {@code dest} using
+     * streaming {@code Cipher.update()} so the full plaintext and ciphertext are
+     * never held in memory simultaneously — safe for files up to 500 MB.
+     *
+     * <p>Output format: {@code [12-byte IV | ciphertext | 16-byte GCM auth tag]}.
+     * Identical to {@link #encryptForUpload(byte[])} — decrypted by
+     * {@link #decryptAfterDownload(byte[], String)} on the receiver's device.
+     *
+     * <p>Call from a background thread. Deleting {@code dest} after upload is the
+     * caller's responsibility.
+     *
+     * @param cr   ContentResolver for opening the URI.
+     * @param uri  Source URI (content:// from media picker or FileProvider).
+     * @param dest Destination file — will be overwritten if it already exists.
+     * @return Base64-encoded AES-256 key to store in Firestore as "mediaKey".
+     */
+    public static String encryptUriToFile(android.content.ContentResolver cr,
+                                           android.net.Uri uri, File dest)
+            throws Exception {
+        KeyGenerator kg = KeyGenerator.getInstance("AES");
+        kg.init(256, new SecureRandom());
+        SecretKey key = kg.generateKey();
+        byte[] iv = new byte[GCM_IV_LEN];
+        new SecureRandom().nextBytes(iv);
+
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LEN, iv));
+
+        byte[] buf = new byte[ENCRYPT_STREAM_CHUNK];
+        try (InputStream       in  = cr.openInputStream(uri);
+             FileOutputStream  out = new FileOutputStream(dest)) {
+            if (in == null) throw new IOException("Cannot open URI for streaming: " + uri);
+            out.write(iv); // IV prefix — same layout as encryptForUpload()
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                byte[] enc = cipher.update(buf, 0, n);
+                if (enc != null && enc.length > 0) out.write(enc);
+            }
+            // doFinal() returns the last cipher block + 16-byte GCM auth tag.
+            byte[] tail = cipher.doFinal();
+            if (tail != null && tail.length > 0) out.write(tail);
+        }
+        return Base64.encodeToString(key.getEncoded(), Base64.NO_WRAP);
+    }
+
+    /**
+     * Uploads {@code encFile} (already AES-256-GCM encrypted) to the configured
+     * storage backend using a streaming {@link RequestBody} — no full-file byte[]
+     * allocation during the upload phase.
+     *
+     * <p>Routes through the same priority chain as {@link #uploadFile}:
+     * Cloudflare Worker → presigned URL → direct B2 SigV4 (UNSIGNED-PAYLOAD).
+     *
+     * @return "b2:<objectKey>" — store as the Firestore "path" field.
+     */
+    public static String uploadFileFromDisk(File encFile, String objectKey,
+                                             String contentType, ProgressCallback cb)
+            throws Exception {
+        if (!getWorkerUrl().isEmpty())  return uploadFileViaWorkerStream(encFile, objectKey, contentType, cb);
+        if (getKeyId().isEmpty())       return uploadFileViaPresignedStream(encFile, objectKey, contentType, cb);
+        return uploadFileViaB2Stream(encFile, objectKey, contentType, cb);
+    }
+
+    /** Streaming Worker PUT. */
+    private static String uploadFileViaWorkerStream(File encFile, String objectKey,
+                                                     String contentType, ProgressCallback cb)
+            throws Exception {
+        String url = getWorkerUrl() + "/" + objectKey;
+        MediaType mt = MediaType.parse(contentType);
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(url)
+                .put(new FileRequestBody(encFile, mt, cb))
+                .header("Content-Type",   contentType)
+                .header("Content-Length", String.valueOf(encFile.length()))
+                .header("X-Client-ID",    getClientId());
+        String secret = getWorkerSecret();
+        if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
+        Request request = reqBuilder.build();
+
+        return withRetry("worker-stream:" + objectKey, () -> {
+            try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200 || code == 201) {
+                    Log.d(TAG, "Worker stream-uploaded: " + objectKey
+                            + " (" + encFile.length() + " B)");
+                    return B2_PATH_PREFIX + objectKey;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code, "Worker stream-PUT [" + code + "]: " + err);
+                throw new IOException("Worker stream-PUT [" + code + "]: " + err);
+            }
+        });
+    }
+
+    /** Streaming presigned URL PUT. */
+    private static String uploadFileViaPresignedStream(File encFile, String objectKey,
+                                                        String contentType, ProgressCallback cb)
+            throws Exception {
+        String presigned = fetchPresignedPutUrl(objectKey, contentType);
+        MediaType mt = MediaType.parse(contentType);
+        Request request = new Request.Builder()
+                .url(presigned)
+                .put(new FileRequestBody(encFile, mt, cb))
+                .header("Content-Type", contentType)
+                .build();
+        try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+            int code = response.code();
+            if (code == 200 || code == 201) {
+                Log.d(TAG, "B2 presigned stream-uploaded: " + objectKey
+                        + " (" + encFile.length() + " B)");
+                return B2_PATH_PREFIX + objectKey;
+            }
+            ResponseBody errBody = response.body();
+            String err = errBody != null ? errBody.string() : "";
+            if (code >= 400 && code < 500)
+                throw new NonRetryableException(code, "Presigned stream-PUT [" + code + "]: " + err);
+            throw new IOException("Presigned stream-PUT [" + code + "]: " + err);
+        }
+    }
+
+    /**
+     * Streaming direct B2 SigV4 PUT with {@code UNSIGNED-PAYLOAD}.
+     * B2 S3-compatible API accepts UNSIGNED-PAYLOAD, which avoids a full
+     * pre-read pass to compute the body SHA-256 before the upload starts.
+     */
+    private static String uploadFileViaB2Stream(File encFile, String objectKey,
+                                                 String contentType, ProgressCallback cb)
+            throws Exception {
+        final String UNSIGNED = "UNSIGNED-PAYLOAD";
+        String bucket = getBucket();
+        String region = getRegion();
+        String host   = "s3." + region + ".backblazeb2.com";
+        String urlStr = getEndpoint() + "/" + bucket + "/" + objectKey;
+
+        return withRetry("b2-stream:" + objectKey, () -> {
+            Date   now       = new Date();
+            String dateStamp = utcFormat("yyyyMMdd", now);
+            String amzDate   = utcFormat("yyyyMMdd'T'HHmmss'Z'", now);
+
+            String canonicalHeaders =
+                    "content-length:" + encFile.length() + "\n"
+                    + "content-type:" + contentType + "\n"
+                    + "host:" + host + "\n"
+                    + "x-amz-content-sha256:" + UNSIGNED + "\n"
+                    + "x-amz-date:" + amzDate + "\n";
+            String signedHeaders = "content-length;content-type;host;x-amz-content-sha256;x-amz-date";
+            String canonicalUri  = "/" + bucket + "/" + objectKey;
+
+            String canonicalRequest = "PUT\n" + canonicalUri + "\n\n"
+                    + canonicalHeaders + "\n" + signedHeaders + "\n" + UNSIGNED;
+            String credentialScope = dateStamp + "/" + region + "/" + SERVICE + "/aws4_request";
+            String stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n"
+                    + credentialScope + "\n"
+                    + sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
+            byte[] signingKey   = getSigningKey(dateStamp, region);
+            String signature    = hmacSha256Hex(signingKey, stringToSign);
+            String authorization = "AWS4-HMAC-SHA256 Credential="
+                    + getKeyId() + "/" + credentialScope
+                    + ", SignedHeaders=" + signedHeaders
+                    + ", Signature=" + signature;
+
+            MediaType mt = MediaType.parse(contentType);
+            Request request = new Request.Builder()
+                    .url(urlStr)
+                    .put(new FileRequestBody(encFile, mt, cb))
+                    .addHeader("Authorization",        authorization)
+                    .addHeader("x-amz-date",           amzDate)
+                    .addHeader("x-amz-content-sha256", UNSIGNED)
+                    .build();
+
+            try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200 || code == 201) {
+                    Log.d(TAG, "B2 stream-uploaded: " + objectKey
+                            + " (" + encFile.length() + " B)");
+                    return B2_PATH_PREFIX + objectKey;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code, "B2 stream-upload [" + code + "]: " + err);
+                throw new IOException("B2 stream-upload [" + code + "]: " + err);
+            }
+        });
+    }
 }
