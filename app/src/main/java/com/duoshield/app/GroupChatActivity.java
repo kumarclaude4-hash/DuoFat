@@ -170,6 +170,9 @@ public class GroupChatActivity extends BaseActivity {
         ImageView btnSend      = findViewById(R.id.btn_send);
 
         btnGroupAttach                = findViewById(R.id.btn_group_attach);
+        ImageView groupEmojiButton    = findViewById(R.id.group_emoji_button);
+        ImageView btnGroupCameraInline = findViewById(R.id.btn_group_camera_inline);
+        android.view.View groupCameraContainer = findViewById(R.id.group_camera_container);
         uploadGroupProgressContainer  = findViewById(R.id.groupUploadProgressContainer);
         tvGroupUploadPct              = findViewById(R.id.tvGroupUploadPct);
 
@@ -180,6 +183,13 @@ public class GroupChatActivity extends BaseActivity {
         if (btnGroupAttach != null) {
             btnGroupAttach.setOnClickListener(v -> showGroupMediaPickerSheet());
         }
+        if (groupEmojiButton != null) groupEmojiButton.setOnClickListener(v -> {
+            etMessage.requestFocus();
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(etMessage, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        });
+        if (btnGroupCameraInline != null) btnGroupCameraInline.setOnClickListener(v -> launchGroupCameraCapture());
         btnSend.setOnClickListener(v -> {
             v.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_PRESS);
             trySend();
@@ -189,7 +199,10 @@ public class GroupChatActivity extends BaseActivity {
             @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
             @Override public void afterTextChanged(Editable s) {}
             @Override public void onTextChanged(CharSequence s, int st, int b, int c) {
-                btnSend.setAlpha(s.toString().trim().isEmpty() ? 0.4f : 1.0f);
+                boolean hasText = !s.toString().trim().isEmpty();
+                btnSend.setAlpha(hasText ? 1.0f : 0.4f);
+                if (groupCameraContainer != null)
+                    groupCameraContainer.setVisibility(hasText ? android.view.View.GONE : android.view.View.VISIBLE);
             }
         });
 

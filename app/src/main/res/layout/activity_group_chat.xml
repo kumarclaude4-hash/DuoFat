@@ -122,36 +122,20 @@
             android:text="Uploading…"/>
     </LinearLayout>
 
-    <!-- Input bar -->
+    <!-- ── Input bar ── -->
     <LinearLayout
+        android:id="@+id/group_input_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/background"
         android:orientation="horizontal"
         android:gravity="bottom"
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="8dp"
-        android:minHeight="56dp">
+        android:paddingBottom="10dp"
+        android:paddingTop="4dp"
+        android:background="@android:color/transparent">
 
-        <!-- Attach button -->
-        <ImageView
-            android:id="@+id/btn_group_attach"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_gravity="bottom"
-            android:layout_marginBottom="4dp"
-            android:src="@drawable/ic_attach"
-            android:tint="@color/text_hint"
-            android:padding="8dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Attach media"/>
-
-        <View android:layout_width="2dp" android:layout_height="2dp"/>
-
+        <!-- Field: emoji (left) + text + attach (right) -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -159,31 +143,82 @@
             android:background="@drawable/bg_input_field_whatsapp"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="14dp"
-            android:paddingEnd="8dp">
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp">
 
+            <!-- Emoji / keyboard toggle -->
+            <ImageView
+                android:id="@+id/group_emoji_button"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_emoji"
+                android:padding="10dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Emoji"/>
+
+            <!-- Text input -->
             <EditText
                 android:id="@+id/et_message"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:background="@android:color/transparent"
                 android:hint="Message group…"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/text_hint"
-                android:background="@android:color/transparent"
                 android:paddingTop="10dp"
                 android:paddingBottom="10dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
                 android:textSize="15sp"
                 android:maxLines="4"
                 android:inputType="textMultiLine|textCapSentences"
                 android:imeOptions="actionNone"/>
+
+            <!-- Attach (right of field) -->
+            <ImageView
+                android:id="@+id/btn_group_attach"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_attach"
+                android:padding="10dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Attach media"/>
         </LinearLayout>
 
-        <View android:layout_width="8dp" android:layout_height="8dp"/>
-
+        <!-- Camera shortcut — hides when typing, shows with send -->
         <FrameLayout
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:id="@+id/group_camera_container"
+            android:layout_width="46dp"
+            android:layout_height="50dp"
+            android:layout_marginStart="4dp"
+            android:gravity="center">
+
+            <ImageView
+                android:id="@+id/btn_group_camera_inline"
+                android:layout_width="46dp"
+                android:layout_height="46dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_camera"
+                android:padding="11dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Camera"/>
+        </FrameLayout>
+
+        <!-- Send FAB -->
+        <FrameLayout
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_marginStart="4dp"
             android:background="@drawable/bg_send_button_whatsapp">
 
             <ImageView
@@ -191,7 +226,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:src="@drawable/ic_send"
-                android:padding="12dp"
+                android:padding="13dp"
                 app:tint="@color/white"
                 android:contentDescription="Send"/>
         </FrameLayout>
