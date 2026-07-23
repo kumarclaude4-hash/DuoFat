@@ -155,10 +155,13 @@
                 android:id="@+id/btn_close_search"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
-                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                android:src="@drawable/ic_close"
                 android:tint="@color/text_hint"
-                android:padding="8dp"
+                android:padding="10dp"
                 android:layout_marginStart="4dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Close search"/>
         </LinearLayout>
 

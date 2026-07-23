@@ -154,7 +154,8 @@ public class ChatMediaActivity extends BaseActivity {
 
     // Chat views
     private EditText     messageInput;
-    private ImageView    sendButton, uploadButton, micButton;
+    private ImageView    sendButton, uploadButton, micButton, btnCameraInline;
+    private android.view.View cameraButtonContainer;
     private ProgressBar  uploadProgress;
     private View         uploadProgressContainer;
     private android.widget.TextView tvUploadPct;
@@ -408,8 +409,10 @@ public class ChatMediaActivity extends BaseActivity {
         // ── Chat views ──────────────────────────────────────────────
         messageInput        = findViewById(R.id.messageInput);
         sendButton          = findViewById(R.id.sendButton);
-        uploadButton        = findViewById(R.id.uploadButton);
-        micButton           = findViewById(R.id.micButton);
+        uploadButton          = findViewById(R.id.uploadButton);
+        micButton             = findViewById(R.id.micButton);
+        btnCameraInline       = findViewById(R.id.btnCameraInline);
+        cameraButtonContainer = findViewById(R.id.cameraButtonContainer);
         uploadProgress          = findViewById(R.id.uploadProgress);
         uploadProgressContainer = findViewById(R.id.uploadProgressContainer);
         tvUploadPct             = findViewById(R.id.tvUploadPct);
@@ -583,6 +586,7 @@ public class ChatMediaActivity extends BaseActivity {
         });
         if (uploadButton    != null) uploadButton.setOnClickListener(v -> showMediaTypePopup());
         micButton.setOnClickListener(v -> startVoiceRecording());
+        if (btnCameraInline != null) btnCameraInline.setOnClickListener(v -> launchCameraCapture());
         if (cancelReplyBtn  != null) cancelReplyBtn.setOnClickListener(v -> clearReplyMode());
         if (cancelRecordingBtn != null) cancelRecordingBtn.setOnClickListener(v -> cancelVoiceRecording());
         if (stopRecordingBtn   != null) stopRecordingBtn.setOnClickListener(v -> stopAndSendVoiceRecording());
@@ -595,6 +599,8 @@ public class ChatMediaActivity extends BaseActivity {
                 boolean hasText = s.length() > 0;
                 sendButton.setVisibility(hasText ? View.VISIBLE : View.GONE);
                 micButton.setVisibility(hasText  ? View.GONE   : View.VISIBLE);
+                if (cameraButtonContainer != null)
+                    cameraButtonContainer.setVisibility(hasText ? View.GONE : View.VISIBLE);
             }
         });
 

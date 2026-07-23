@@ -57,6 +57,34 @@
             android:paddingBottom="7dp"
             android:maxWidth="290dp">
 
+            <!-- Forwarded label — shown when message.isForwarded == true -->
+            <LinearLayout
+                android:id="@+id/forwardedLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="5dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="13dp"
+                    android:layout_height="13dp"
+                    android:src="@drawable/ic_forward"
+                    android:tint="@color/ds_text_tertiary"
+                    android:layout_marginEnd="5dp"
+                    android:contentDescription="Forwarded"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Forwarded"
+                    android:textSize="11.5sp"
+                    android:textColor="@color/ds_text_tertiary"
+                    android:fontFamily="sans-serif"
+                    android:textStyle="italic"/>
+            </LinearLayout>
+
             <!-- Reply preview -->
             <LinearLayout
                 android:id="@+id/replyPreviewContainer"
@@ -152,12 +180,12 @@
                     android:layout_width="56dp"
                     android:layout_height="56dp"
                     android:layout_gravity="center"
-                    android:background="#88000000">
+                    android:background="@drawable/bg_video_play_circle_lg">
 
                     <ImageView
                         android:id="@+id/videoPlayBtn"
-                        android:layout_width="34dp"
-                        android:layout_height="34dp"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
                         android:layout_gravity="center"
                         android:src="@drawable/ic_play_video"
                         android:tint="#FFFFFFFF"
@@ -413,8 +441,8 @@
                     android:id="@+id/starIcon"
                     android:layout_width="13dp"
                     android:layout_height="13dp"
-                    android:src="@android:drawable/btn_star_big_on"
-                    android:tint="@color/ds_text_tertiary"
+                    android:src="@drawable/ic_star"
+                    android:tint="@color/ds_warning"
                     android:layout_marginStart="4dp"
                     android:visibility="gone"
                     android:contentDescription="Starred"/>

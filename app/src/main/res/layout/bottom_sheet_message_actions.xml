@@ -12,7 +12,7 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="14dp"
         android:layout_marginBottom="6dp"
-        android:background="#2800C8E8"/>
+        android:background="@color/ds_divider"/>
 
     <!-- Reaction row -->
     <LinearLayout
