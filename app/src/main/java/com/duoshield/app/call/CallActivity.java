@@ -184,6 +184,29 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
     /** Cancels the TURN-credential wait if the activity is destroyed before it fires. */
     private Handler turnTimeoutHandler;
+
+    // ── No-answer ring timeout (caller-side) ──────────────────────────────────
+    /**
+     * Fires after 45 seconds if the callee never picks up or declines.
+     *
+     * <p>Without this guard, a caller whose partner is offline would be stuck on the
+     * "Ringing…" screen until CallManager's ICE 60-second timeout fires — which shows
+     * "Call failed — check your network" (wrong message) and saves a FAILED record
+     * (wrong outcome). The 45-second ring window matches Signal's behaviour and stays
+     * well inside the 60-second ICE timeout so the two can never race.
+     */
+    private final Handler  noAnswerHandler  = new Handler(Looper.getMainLooper());
+    private final Runnable noAnswerRunnable = () -> {
+        if (callManager == null) return;
+        if (callManager.getCurrentState() != CallManager.CallState.OUTGOING_RINGING) return;
+        Log.w(TAG, "No answer after 45 s — timing out the outgoing call");
+        Toast.makeText(CallActivity.this, "No answer", Toast.LENGTH_SHORT).show();
+        // timeoutCall writes status:"timeout" to Firestore, deletes the call doc,
+        // and calls setState(ENDED) → onCallStateChanged(ENDED) →
+        // updateStatusUi(ENDED) → saveCallRecord(OUTCOME_MISSED) + finish().
+        callManager.timeoutCall(callId);
+    };
+
     private final Handler  durationHandler = new Handler(Looper.getMainLooper());
     private long           callStartMs     = 0;
     private final Runnable durationTick    = new Runnable() {
@@ -319,6 +342,13 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 // ChatMediaActivity never puts EXTRA_CALL_ID).  The real callId is generated
                 // inside CallManager.startCall(), so we sync it back here immediately.
                 callId = callManager.getCallId();
+
+                // Start the no-answer watchdog.  If the callee is offline (no FCM delivery)
+                // or simply doesn't respond, the call doc stays "ringing" indefinitely.
+                // After 45 s we surface "No answer" and tear down cleanly.  This fires
+                // well before CallManager's 60-second ICE watchdog, so the two never race.
+                noAnswerHandler.removeCallbacks(noAnswerRunnable);
+                noAnswerHandler.postDelayed(noAnswerRunnable, 45_000);
             } else {
                 callManager.acceptCall(myUid, callId, isVideo);
             }
@@ -370,6 +400,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         historyExecutor.shutdownNow();
         durationHandler.removeCallbacksAndMessages(null);
         bannerDismissHandler.removeCallbacksAndMessages(null);
+        noAnswerHandler.removeCallbacksAndMessages(null);
         if (chatMessageListener != null) { chatMessageListener.remove(); chatMessageListener = null; }
         // Cancel the TURN-credential wait if it hasn't fired yet.
         if (turnTimeoutHandler != null) turnTimeoutHandler.removeCallbacksAndMessages(null);
@@ -984,6 +1015,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
     @Override
     public void onCallStateChanged(CallManager.CallState state) {
+        // Cancel the no-answer watchdog as soon as the call leaves OUTGOING_RINGING —
+        // whether the callee answers, declines, or the connection otherwise progresses.
+        if (state != CallManager.CallState.OUTGOING_RINGING) {
+            noAnswerHandler.removeCallbacks(noAnswerRunnable);
+        }
         runOnUiThread(() -> {
             updateStatusUi(state);
             // Refresh TURN banner on CONNECTED (relay may have been skipped due to cap).
