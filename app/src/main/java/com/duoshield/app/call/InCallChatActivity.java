@@ -5,6 +5,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 
@@ -104,6 +105,19 @@ public class InCallChatActivity extends AppCompatActivity {
         View btnClose    = findViewById(R.id.btnCloseChat);
         if (btnMinimize != null) btnMinimize.setOnClickListener(v -> finish());
         if (btnClose    != null) btnClose.setOnClickListener(v -> finish());
+
+        // Emoji button — opens the soft keyboard so the user can switch to emoji panel
+        ImageView btnEmoji = findViewById(R.id.btnEmoji);
+        if (btnEmoji != null) {
+            btnEmoji.setOnClickListener(v -> {
+                etMessage.requestFocus();
+                InputMethodManager imm =
+                        (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(etMessage, InputMethodManager.SHOW_IMPLICIT);
+                }
+            });
+        }
 
         // Send button
         ImageView btnSend = findViewById(R.id.btnSendInCall);

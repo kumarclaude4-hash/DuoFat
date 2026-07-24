@@ -147,6 +147,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 am.setSpeakerphoneOn(isSpeakerOn);
                 if (callManager != null) callManager.setSpeakerOn(isSpeakerOn);
             }
+            // Reflect the new audio route on the speaker button.
+            runOnUiThread(CallActivity.this::updateSpeakerButtonIcon);
         }
     };
 
@@ -476,7 +478,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnCamera.setOnClickListener(v -> {
             isCameraOff = !isCameraOff;
             callManager.setCameraEnabled(!isCameraOff);
-            btnCamera.setAlpha(isCameraOff ? 0.4f : 1f);
+            btnCamera.setImageResource(isCameraOff ? R.drawable.ic_videocam_off : R.drawable.ic_videocam);
+            btnCamera.setAlpha(isCameraOff ? 0.5f : 1f);
             localVideoPip.setVisibility(isCameraOff ? View.GONE : View.VISIBLE);
         });
 
@@ -634,6 +637,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             // Voice calls default to earpiece so the user can hold the phone naturally.
             am.setSpeakerphoneOn(false);
         }
+        // Sync speaker button icon to reflect the initial audio route.
+        updateSpeakerButtonIcon();
 
         // Request exclusive audio focus so music / media apps pause automatically
         // and the OS knows a voice call is in progress (affects Bluetooth routing,
@@ -665,6 +670,29 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                     AudioManager.STREAM_VOICE_CALL,
                     AudioManager.AUDIOFOCUS_GAIN);
         }
+    }
+
+    /**
+     * Updates the speaker/audio-output button icon in the header to reflect the
+     * current routing state: loudspeaker, earpiece, or Bluetooth.
+     *
+     * <p>Called after every audio-route change (picker selection, headset plug/unplug,
+     * initial setup) so the button always matches the active output device.
+     */
+    private void updateSpeakerButtonIcon() {
+        if (btnSpeaker == null) return;
+        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (am == null) return;
+        int iconRes;
+        if (am.isBluetoothScoOn()) {
+            iconRes = R.drawable.ic_bluetooth_audio;
+        } else if (am.isSpeakerphoneOn()) {
+            iconRes = R.drawable.ic_speaker_on;
+        } else {
+            // Earpiece / wired headset / muted
+            iconRes = R.drawable.ic_call_phone;
+        }
+        btnSpeaker.setImageResource(iconRes);
     }
 
     private void abandonAudioFocus() {
@@ -727,6 +755,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                     if (am != null) { am.setSpeakerphoneOn(true); am.setBluetoothScoOn(false); }
                     isSpeakerOn = true;
                     callManager.setSpeakerOn(true);
+                    updateSpeakerButtonIcon();
                     dialog.dismiss();
                 });
 
@@ -736,6 +765,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                     if (am != null) { am.setSpeakerphoneOn(false); am.setBluetoothScoOn(false); }
                     isSpeakerOn = false;
                     callManager.setSpeakerOn(false);
+                    updateSpeakerButtonIcon();
                     dialog.dismiss();
                 });
 
@@ -759,6 +789,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                                         isSpeakerOn = false;
                                         callManager.setSpeakerOn(false);
                                     } catch (Exception ignored) { }
+                                    updateSpeakerButtonIcon();
                                     dialog.dismiss();
                                 });
                     }
@@ -791,6 +822,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                             btnMute.setAlpha(0.5f);
                         });
                     }
+                    updateSpeakerButtonIcon();
                     dialog.dismiss();
                 });
 
