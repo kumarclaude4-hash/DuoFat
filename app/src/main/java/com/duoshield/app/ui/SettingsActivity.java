@@ -75,13 +75,6 @@ public class SettingsActivity extends BaseActivity {
         if (tvProfileDisplayName != null)
             tvProfileDisplayName.setText(myName != null && !myName.isEmpty() ? myName : "—");
 
-        // Compat display name row (hidden, but still wired)
-        TextView tvDisplayName = findViewById(R.id.tvDisplayName);
-        if (tvDisplayName != null) {
-            String name = prefs.getString("my_display_name", null);
-            tvDisplayName.setText(name != null && !name.isEmpty() ? name : "—");
-        }
-
         // Load profile photo — local disk cache first (instant, no network),
         // then fall back to authenticated B2 download.
         loadProfilePhoto();
@@ -129,6 +122,14 @@ public class SettingsActivity extends BaseActivity {
 
         if (rowCallDataUsage != null) {
             rowCallDataUsage.setOnClickListener(v -> showCallDataDialog());
+        }
+
+        // ── App version footer ────────────────────────────────────────────────
+        TextView tvAppVersion = findViewById(R.id.tvAppVersion);
+        if (tvAppVersion != null) {
+            String vName = com.duoshield.app.util.AppUpdateHelper.getVersionName(this);
+            int    vCode = com.duoshield.app.util.AppUpdateHelper.getVersionCode(this);
+            tvAppVersion.setText("DuoShield v" + vName + " (" + vCode + ")");
         }
     }
 
@@ -263,9 +264,6 @@ public class SettingsActivity extends BaseActivity {
                     }
                     prefs.edit().putString("my_display_name", name).apply();
                     if (tvProfileDisplayName != null) tvProfileDisplayName.setText(name);
-                    // Also update the hidden legacy tvDisplayName if present
-                    TextView legacy = findViewById(R.id.tvDisplayName);
-                    if (legacy != null) legacy.setText(name);
                     // Persist to Firestore so other users/devices see the new name
                     saveNameToFirestore(name);
                     Toast.makeText(this, "Name updated.", Toast.LENGTH_SHORT).show();

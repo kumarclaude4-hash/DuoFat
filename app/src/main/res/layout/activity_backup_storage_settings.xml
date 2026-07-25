@@ -103,6 +103,52 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- ══ LOCAL CACHE ═══════════════════════════════════════════════ -->
+            <TextView
+                android:text="LOCAL CACHE"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="14dp"
+                android:paddingBottom="14dp"
+                android:minHeight="60dp">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:src="@drawable/ic_image"
+                    android:tint="#9A81FF"
+                    android:layout_marginEnd="18dp"/>
+
+                <TextView
+                    android:id="@+id/tvCacheSize"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Local cache: calculating…"
+                    android:textColor="@color/ds_text_primary"
+                    android:textSize="14.5sp"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnClearCache"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:text="Clear cache"
+                    android:textAllCaps="false"
+                    android:textSize="13sp"
+                    android:layout_marginStart="14dp"
+                    app:cornerRadius="18dp"/>
+            </LinearLayout>
+
             <!-- ══ CLOUD BACKUP ══════════════════════════════════════════════ -->
             <TextView
                 android:text="CLOUD BACKUP"

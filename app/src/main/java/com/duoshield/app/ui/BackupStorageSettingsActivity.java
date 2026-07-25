@@ -97,7 +97,47 @@ public class BackupStorageSettingsActivity extends BaseActivity {
             });
         }
 
+        // ── Local cache size ──────────────────────────────────────────────────
+        TextView tvCacheSize = findViewById(R.id.tvCacheSize);
+        com.google.android.material.button.MaterialButton btnClearCache =
+                findViewById(R.id.btnClearCache);
+        if (tvCacheSize != null) {
+            bgExecutor.execute(() -> {
+                String label = com.duoshield.app.util.MediaSizeEstimator.getCacheSizeLabel(this);
+                runOnUiThread(() -> {
+                    if (!isDestroyed() && !isFinishing()) tvCacheSize.setText("Local cache: " + label);
+                });
+            });
+        }
+        if (btnClearCache != null) {
+            btnClearCache.setOnClickListener(v -> {
+                btnClearCache.setEnabled(false);
+                btnClearCache.setText("Clearing…");
+                bgExecutor.execute(() -> {
+                    clearDirRecursive(getCacheDir());
+                    String label = com.duoshield.app.util.MediaSizeEstimator.getCacheSizeLabel(this);
+                    runOnUiThread(() -> {
+                        if (isDestroyed() || isFinishing()) return;
+                        btnClearCache.setEnabled(true);
+                        btnClearCache.setText("Clear cache");
+                        if (tvCacheSize != null) tvCacheSize.setText("Local cache: " + label);
+                        Toast.makeText(this, "Cache cleared", Toast.LENGTH_SHORT).show();
+                    });
+                });
+            });
+        }
+
         loadBackupStatus();
+    }
+
+    private void clearDirRecursive(java.io.File dir) {
+        if (dir == null) return;
+        java.io.File[] files = dir.listFiles();
+        if (files == null) return;
+        for (java.io.File f : files) {
+            if (f.isDirectory()) clearDirRecursive(f);
+            else f.delete();
+        }
     }
 
     private void loadBackupStatus() {

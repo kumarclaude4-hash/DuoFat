@@ -29,7 +29,10 @@ public class Message {
     @ColumnInfo(name = "status")                       public String  status;
     @ColumnInfo(name = "sigType", defaultValue = "0")  public int     sigType;
     @ColumnInfo(name = "mediaKey")                     public String  mediaKey;
-    @ColumnInfo(name = "isDeleted", defaultValue = "0") public boolean isDeleted;
+    @ColumnInfo(name = "isDeleted", defaultValue = "0")  public boolean isDeleted;
+
+    /** True when this message was forwarded from another conversation. */
+    @ColumnInfo(name = "forwarded", defaultValue = "0")  public boolean forwarded;
 
     /**
      * Total voice-note duration in milliseconds, known at record time and stored
@@ -149,6 +152,8 @@ public class Message {
     public void setMediaKey(String v)        { mediaKey = v; }
     public boolean isDeleted()               { return isDeleted; }
     public void setDeleted(boolean v)        { isDeleted = v; }
+    public boolean isForwarded()             { return forwarded; }
+    public void setForwarded(boolean v)      { forwarded = v; }
     public long    getReadAt()               { return readAt; }
     public void    setReadAt(long v)         { readAt = v; }
 }

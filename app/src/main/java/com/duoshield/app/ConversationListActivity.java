@@ -220,12 +220,14 @@ public class ConversationListActivity extends BaseActivity {
             popup.getMenu().add(0, 1, 0, "Settings");
             popup.getMenu().add(0, 3, 0, "New Chat");
             popup.getMenu().add(0, 5, 0, "New Group");
+            popup.getMenu().add(0, 2, 0, "Quota");
             popup.getMenu().add(0, 4, 0, "Wipe & Exit");
             popup.setOnMenuItemClickListener(item -> {
                 int id = item.getItemId();
                 if (id == 1) { startActivity(new Intent(this, com.duoshield.app.ui.SettingsActivity.class)); return true; }
                 if (id == 3) { startActivity(new Intent(this, com.duoshield.app.ui.AddContactActivity.class)); return true; }
                 if (id == 5) { startActivity(new Intent(this, CreateGroupActivity.class)); return true; }
+                if (id == 2) { showQuotaDialog(); return true; }
                 if (id == 4) { confirmWipeAndExit(); return true; }
                 return false;
             });
@@ -253,6 +255,15 @@ public class ConversationListActivity extends BaseActivity {
      * confirmation and adds a typed confirmation step since this entry point
      * sits in a generic overflow menu next to routine actions like "New Chat".
      */
+    private void showQuotaDialog() {
+        String summary = com.duoshield.app.util.FirebaseQuotaSummary.get(this);
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Firebase Quota (Today)")
+                .setMessage(summary)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
     private void confirmWipeAndExit() {
         new MaterialAlertDialogBuilder(this)
                 .setTitle("Wipe & Exit")

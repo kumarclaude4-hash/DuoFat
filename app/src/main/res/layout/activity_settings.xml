@@ -113,18 +113,6 @@
                     android:layout_marginTop="4dp"/>
             </LinearLayout>
 
-            <!-- Hidden compat row -->
-            <LinearLayout
-                android:id="@+id/rowDisplayName"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:visibility="gone">
-                <TextView
-                    android:id="@+id/tvDisplayName"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"/>
-            </LinearLayout>
-
             <!-- ══ SETTINGS NAVIGATION ROWS ════════════════════════════════════ -->
             <TextView
                 android:text="SETTINGS"
@@ -415,6 +403,19 @@
                     android:src="@drawable/ic_arrow_forward"
                     android:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
+
+            <!-- ══ APP VERSION FOOTER ══════════════════════════════════════════ -->
+            <TextView
+                android:id="@+id/tvAppVersion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="28dp"
+                android:paddingBottom="12dp"
+                android:gravity="center"
+                android:textColor="@color/ds_text_tertiary"
+                android:textSize="11.5sp"
+                android:fontFamily="monospace"
+                android:text="DuoShield"/>
 
         </LinearLayout>
     </ScrollView>

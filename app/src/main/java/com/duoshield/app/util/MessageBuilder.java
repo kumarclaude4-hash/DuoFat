@@ -40,9 +40,17 @@ public class MessageBuilder {
         return text.length() > 80 ? text.substring(0, 80) + "…" : text;
     }
 
+    /** Convenience overload — not forwarded (normal reply, notification reply, etc.). */
     public static void sendTextMessage(Context ctx, String convId, String myUid,
                                        String partnerUid, String text,
                                        String replyToId, String replyPreview) {
+        sendTextMessage(ctx, convId, myUid, partnerUid, text, replyToId, replyPreview, false);
+    }
+
+    public static void sendTextMessage(Context ctx, String convId, String myUid,
+                                       String partnerUid, String text,
+                                       String replyToId, String replyPreview,
+                                       boolean forwarded) {
         if (!SignalKeyManager.isInitialized(ctx)) {
             Log.w(TAG, "sendTextMessage: Signal keys not initialised — message NOT sent.");
             return;
@@ -71,6 +79,7 @@ public class MessageBuilder {
                 local.setTimestamp(now);
                 local.setStatus("pending");
                 local.expiresAt = expiresAt;
+                local.forwarded = forwarded;
                 AppDatabase.getInstance(ctx).messageDao().insert(local);
                 BackupManager.backup(ctx, local);
 
@@ -89,6 +98,7 @@ public class MessageBuilder {
                     doc.put("replyToId",    replyToId);
                     doc.put("replyPreview", replyPreview != null ? replyPreview : "");
                 }
+                if (forwarded) doc.put("forwarded", true);
 
                 FirebaseFirestore.getInstance()
                     .collection("chats").document(convId)
@@ -122,9 +132,17 @@ public class MessageBuilder {
      * @param mediaType   "image", "video", or "voice"
      * @param mediaKey    Base64 AES-256-GCM key; null for unencrypted legacy files
      */
+    /** Convenience overload — not forwarded (normal media send). */
     public static void sendMediaMessage(Context ctx, String convId, String myUid,
                                         String partnerUid, String storagePath,
                                         String mediaType, String mediaKey) {
+        sendMediaMessage(ctx, convId, myUid, partnerUid, storagePath, mediaType, mediaKey, false);
+    }
+
+    public static void sendMediaMessage(Context ctx, String convId, String myUid,
+                                        String partnerUid, String storagePath,
+                                        String mediaType, String mediaKey,
+                                        boolean forwarded) {
         if (storagePath == null || storagePath.isEmpty()) {
             Log.w(TAG, "sendMediaMessage: storagePath is null — message NOT sent.");
             return;
@@ -146,6 +164,7 @@ public class MessageBuilder {
             local.setStatus("pending");
             local.setExpiresAt(expiresAt);
             if (mediaKey != null) local.setMediaKey(mediaKey);
+            local.forwarded = forwarded;
             AppDatabase.getInstance(ctx).messageDao().insert(local);
             BackupManager.backup(ctx, local);
 
@@ -163,6 +182,7 @@ public class MessageBuilder {
             doc.put("expiresAt",   expiresAt);
             doc.put("timestamp",   FieldValue.serverTimestamp());
             doc.put("status",      "sent");
+            if (forwarded) doc.put("forwarded", true);
 
             FirebaseFirestore.getInstance()
                 .collection("chats").document(convId)

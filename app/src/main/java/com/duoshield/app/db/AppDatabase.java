@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 20
+    version = 21
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -82,7 +82,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20)
+                MIGRATION_19_20, MIGRATION_20_21)
             .build();
     }
 
@@ -268,6 +268,13 @@ public abstract class AppDatabase extends RoomDatabase {
                     "startedAt INTEGER NOT NULL, " +
                     "durationSeconds INTEGER NOT NULL DEFAULT 0)");
             db.execSQL("CREATE INDEX IF NOT EXISTS index_call_history_startedAt ON call_history (startedAt)");
+        }
+    };
+
+    // v21: Add forwarded column to messages — tracks messages forwarded from other conversations.
+    static final Migration MIGRATION_20_21 = new Migration(20, 21) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN forwarded INTEGER NOT NULL DEFAULT 0");
         }
     };
 

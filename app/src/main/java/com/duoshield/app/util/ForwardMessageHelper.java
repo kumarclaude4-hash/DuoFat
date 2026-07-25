@@ -11,8 +11,8 @@ import java.util.UUID;
 /**
  * Forwards a message to the current conversation.
  *
- * <p><b>Text messages</b> are re-sent via {@link MessageBuilder} with a
- * "[Forwarded]" prefix.
+ * <p><b>Text messages</b> are re-sent via {@link MessageBuilder} with the
+ * {@code forwarded} flag set to {@code true}; no text prefix is added.
  *
  * <p><b>Media messages</b> (image / video / voice) are <em>re-encrypted</em>
  * with a fresh per-file AES-256-GCM key before forwarding (BUG-MB02).  The
@@ -71,7 +71,7 @@ public class ForwardMessageHelper {
                     return;
                 }
                 MessageBuilder.sendTextMessage(ctx, convId, myUid, partnerUid,
-                        "[Forwarded] " + plaintext, null, null);
+                        plaintext, null, null, /* forwarded= */ true);
                 break;
             }
         }
@@ -103,7 +103,7 @@ public class ForwardMessageHelper {
                 String stored    = B2StorageHelper.uploadFile(em.data, objectKey, mime, null);
 
                 MessageBuilder.sendMediaMessage(ctx, convId, myUid, partnerUid,
-                        stored, mediaType, em.keyBase64);
+                        stored, mediaType, em.keyBase64, /* forwarded= */ true);
 
             } catch (Exception e) {
                 Log.e(TAG, "Re-encrypt + B2 re-upload failed for forward", e);

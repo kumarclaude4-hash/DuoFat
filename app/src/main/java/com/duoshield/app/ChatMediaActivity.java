@@ -1583,10 +1583,11 @@ public class ChatMediaActivity extends BaseActivity {
                     if (mUrl == null) mUrl = dc.getDocument().getString("mediaUrl");
                     String mType = dc.getDocument().getString("mediaType");
                     String mKey  = dc.getDocument().getString("mediaKey");
-                    String rpId  = dc.getDocument().getString("replyToId");
-                    String rpPrv = dc.getDocument().getString("replyPreview");
-                    Long   expAt = dc.getDocument().getLong("expiresAt");
-                    long   ts    = System.currentTimeMillis();
+                    String  rpId    = dc.getDocument().getString("replyToId");
+                    String  rpPrv   = dc.getDocument().getString("replyPreview");
+                    Long    expAt   = dc.getDocument().getLong("expiresAt");
+                    Boolean fwdFlag = dc.getDocument().getBoolean("forwarded");
+                    long    ts      = System.currentTimeMillis();
 
                     com.google.firebase.Timestamp serverTs =
                             dc.getDocument().getTimestamp("timestamp");
@@ -1674,6 +1675,7 @@ public class ChatMediaActivity extends BaseActivity {
                             if (rpPrv != null) pending.setReplyPreview(rpPrv);
                             if (expAt != null) pending.setExpiresAt(expAt);
                             if (mKey  != null) pending.setMediaKey(mKey);
+                            pending.forwarded = Boolean.TRUE.equals(fwdFlag);
                             String fsStatus = dc.getDocument().getString("status");
                             if (fsStatus != null) pending.setStatus(fsStatus);
                             pendingDecryptQueue.add(pending);
@@ -1698,6 +1700,7 @@ public class ChatMediaActivity extends BaseActivity {
                     if (expAt     != null) m.setExpiresAt(expAt);
                     if (mKey      != null) m.setMediaKey(mKey);
                     if (statusFromFs != null) m.setStatus(statusFromFs);
+                    m.forwarded = Boolean.TRUE.equals(fwdFlag);
                     // Populate waveform bars for voice messages from Firestore amplitudes field
                     if ("voice".equals(mType)) {
                         Object rawAmps = dc.getDocument().get("amplitudes");

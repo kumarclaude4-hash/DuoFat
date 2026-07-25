@@ -440,6 +440,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         h.pinIndicatorRow.setVisibility(View.GONE);
         h.linkPreviewCard.setVisibility(View.GONE);
         h.starIcon.setVisibility(msg.starred ? View.VISIBLE : View.GONE);
+        // Forwarded label — shown when message was forwarded from another chat
+        if (h.forwardedLabel != null) {
+            boolean isForwarded = msg.isForwarded()
+                    || (msg.getText() != null && msg.getText().startsWith("[Forwarded] "));
+            h.forwardedLabel.setVisibility(isForwarded ? View.VISIBLE : View.GONE);
+        }
 
         // Restore default bubble padding (overridden to 0 for image/video below)
         int p13 = dp(ctx, 13); int p9 = dp(ctx, 9); int p7 = dp(ctx, 7);
@@ -884,7 +890,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                      tickIcon, starIcon, voicePlayPauseBtn, linkPreviewImage, voiceAvatarImg;
         LinearLayout bubble, voiceNoteContainer, pinIndicatorRow, linkPreviewCard;
         FrameLayout  bubbleWrapper, voiceTrailingSlot;
-        View         videoContainer, contactCardContainer, replyPreviewContainer;
+        View         videoContainer, contactCardContainer, replyPreviewContainer, forwardedLabel;
         WaveformView voiceWaveform;
         Button       cardCopyBtn;
 
@@ -892,6 +898,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             super(v);
             senderLabel           = v.findViewById(R.id.senderLabel);
             pinIndicatorRow       = v.findViewById(R.id.pinIndicatorRow);
+            forwardedLabel        = v.findViewById(R.id.forwardedLabel);
             bubbleWrapper         = v.findViewById(R.id.bubbleWrapper);
             bubble                = v.findViewById(R.id.messageBubble);
             textView              = v.findViewById(R.id.messageText);
