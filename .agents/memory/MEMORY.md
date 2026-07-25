@@ -71,3 +71,5 @@
 - [DuoShield incall-chat firestore rule](duoshield-incall-chat-rule.md) — calls/{callId}/chat subcollection had NO rule → PERMISSION_DENIED; rule added gating on callerId/calleeId from parent call doc
 - [DuoShield PQXDH hardening](duoshield-pqxdh-hardening.md) — corrupt-Kyber guard in SessionBuilder.process(); ensureKyberKeyExists() for legacy accounts; camera TakePicture fix; 500 MB multi-select media
 - [DuoShield large-video streaming upload](duoshield-large-video-streaming.md) — videos >50 MB must stream-encrypt to disk; readUriBytes() for all sizes = OOM on large videos
+- [DuoShield skeleton layout](duoshield-skeleton-layout.md) — item_conversation_skeleton.xml is actively used by shimmerContainer in ConversationListActivity; must not be deleted; references skeleton_circle + skeleton_rect drawables
+- [DuoShield forwarded messages](duoshield-forwarded-messages.md) — Message.forwarded (Room v21 col); MessageBuilder 8-arg overloads; ForwardMessageHelper sets flag (no text prefix); ChatMediaActivity reads "forwarded" field from Firestore
