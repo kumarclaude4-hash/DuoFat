@@ -376,9 +376,10 @@ public class GroupChatActivity extends BaseActivity {
                 String cipher = doc.getString("text");
                 Object ts     = doc.get("timestamp");
                 // Media fields (present only on image/video messages)
-                String mediaPath = doc.getString("path");
-                String mediaKey  = doc.getString("mediaKey");
-                String docType   = doc.getString("type");
+                String  mediaPath = doc.getString("path");
+                String  mediaKey  = doc.getString("mediaKey");
+                String  docType   = doc.getString("type");
+                Boolean fwdFlag   = doc.getBoolean("forwarded");
                 // mediaType: "image" | "video" | null (text message)
                 String mType = (mediaPath != null && !mediaPath.isEmpty())
                         ? (docType != null ? docType : "image") : null;
@@ -424,6 +425,7 @@ public class GroupChatActivity extends BaseActivity {
                 } else {
                     msg = new Message(id, groupId, sender, plain, tsMs, false);
                 }
+                msg.forwarded = Boolean.TRUE.equals(fwdFlag);
                 adapter.appendMessage(msg);
                 scrollToBottom();
 
@@ -435,6 +437,7 @@ public class GroupChatActivity extends BaseActivity {
                 } else {
                     toRoom = new Message(id, groupId, sender, plain, tsMs, false);
                 }
+                toRoom.forwarded = Boolean.TRUE.equals(fwdFlag);
                 executor.execute(() -> {
                     try { localDb.messageDao().insert(toRoom); }
                     catch (Exception ex) { Log.w(TAG, "Room insert conflict for " + id); }
