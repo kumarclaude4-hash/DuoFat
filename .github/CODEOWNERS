@@ -1,0 +1,24 @@
+# CODEOWNERS
+# Each line is a file pattern followed by one or more owners.
+# Order matters — the last matching pattern wins.
+
+# Default: repo owner reviews everything
+*                                   @kumarclaude4-hash
+
+# Cryptography — highest sensitivity, always requires owner review
+app/src/main/java/com/duoshield/app/crypto/   @kumarclaude4-hash
+app/src/main/java/com/duoshield/app/backup/   @kumarclaude4-hash
+
+# Firestore security rules
+firestore.rules                     @kumarclaude4-hash
+appfirestore.rules                  @kumarclaude4-hash
+firestore-tests/                    @kumarclaude4-hash
+
+# CI / release pipelines
+.github/workflows/                  @kumarclaude4-hash
+build-release.sh                    @kumarclaude4-hash
+build-apks.sh                       @kumarclaude4-hash
+
+# Infrastructure
+server/                             @kumarclaude4-hash
+worker/                             @kumarclaude4-hash

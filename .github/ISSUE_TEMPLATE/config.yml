@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: 🔒 Security vulnerability
+    url: https://github.com/kumarclaude4-hash/DuoFat/blob/main/SECURITY.md
+    about: Please read SECURITY.md and report vulnerabilities via e-mail — do NOT open a public issue.
+  - name: 💬 General question / discussion
+    url: https://github.com/kumarclaude4-hash/DuoFat/discussions
+    about: For questions that aren't bugs or feature requests, use GitHub Discussions.
