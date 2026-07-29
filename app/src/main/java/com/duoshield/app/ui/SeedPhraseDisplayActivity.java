@@ -8,6 +8,9 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.SpannableString;
+import android.text.Spannable;
+import android.text.style.ForegroundColorSpan;
 import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
@@ -66,6 +69,7 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
 
     private String mnemonic;
     private String displayName;
+    private boolean wordsVisible = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,28 +88,38 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
             return;
         }
 
-        CheckBox                cbSaved     = findViewById(R.id.cbSaved);
-        MaterialButton          btnContinue = findViewById(R.id.btnContinue);
-        GridLayout              gridWords   = findViewById(R.id.gridWords);
-        LinearProgressIndicator progress    = findViewById(R.id.progressSetup);
-        TextView                tvStep      = findViewById(R.id.tvStep);
-        MaterialButton          btnCopy     = findViewById(R.id.btnCopyPhrase);
-        MaterialButton          btnViewQr   = findViewById(R.id.btnViewQr);
-        MaterialButton          btnHide     = findViewById(R.id.btnHidePhrase);
+        CheckBox                cbSaved       = findViewById(R.id.cbSaved);
+        MaterialButton          btnContinue   = findViewById(R.id.btnContinue);
+        GridLayout              gridWords     = findViewById(R.id.gridWords);
+        LinearLayout            gridWordsCard = findViewById(R.id.gridWordsCard);
+        LinearProgressIndicator progress      = findViewById(R.id.progressSetup);
+        TextView                tvStep        = findViewById(R.id.tvStep);
+        MaterialButton          btnCopy       = findViewById(R.id.btnCopyPhrase);
+        MaterialButton          btnViewQr     = findViewById(R.id.btnViewQr);
+        MaterialButton          btnHide       = findViewById(R.id.btnHidePhrase);
 
         // ── Back ──────────────────────────────────────────────────────────────
         View btnBack = findViewById(R.id.btnBack);
         if (btnBack != null) btnBack.setOnClickListener(v -> finish());
 
         // ── Populate the 12-word grid ─────────────────────────────────────────
+        // Each cell shows the word number in muted gray and the word in accent color,
+        // e.g. "1. abandon". Numbers are essential — users must write words in order.
         String[] words = mnemonic.trim().split("\\s+");
         for (int i = 0; i < words.length && i < 12; i++) {
+            String label = (i + 1) + ". " + words[i];
+            SpannableString ss = new SpannableString(label);
+            // Number part: muted gray
+            int dotEnd = String.valueOf(i + 1).length() + 2; // "N. "
+            ss.setSpan(new ForegroundColorSpan(0xFF777777), 0, dotEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            // Word part: accent purple
+            ss.setSpan(new ForegroundColorSpan(0xFF9A81FF), dotEnd, label.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+
             TextView tv = new TextView(this);
-            tv.setText(words[i]);
+            tv.setText(ss);
             tv.setTypeface(Typeface.MONOSPACE);
             tv.setTextSize(15f);
-            tv.setTextColor(0xFF9A81FF); // Session green
-            tv.setPadding(12, 6, 12, 6);
+            tv.setPadding(12, 8, 12, 8);
             tv.setGravity(Gravity.START);
 
             GridLayout.LayoutParams params = new GridLayout.LayoutParams();
@@ -131,12 +145,17 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
             btnViewQr.setOnClickListener(v -> showMnemonicQrDialog());
         }
 
-        // ── Hide button ───────────────────────────────────────────────────────
-        if (btnHide != null) {
-            btnHide.setOnClickListener(v ->
-                    Toast.makeText(this,
-                            "Recovery password hidden on this device.",
-                            Toast.LENGTH_SHORT).show());
+        // ── Hide button — toggles word grid visibility ────────────────────────
+        if (btnHide != null && gridWordsCard != null) {
+            btnHide.setOnClickListener(v -> {
+                wordsVisible = !wordsVisible;
+                gridWordsCard.setVisibility(wordsVisible ? View.VISIBLE : View.GONE);
+                btnHide.setText(wordsVisible ? "Hide" : "Show");
+                btnHide.setTextColor(wordsVisible ? 0xFFFF4444 : 0xFF9A81FF);
+                btnHide.setStrokeColor(
+                        android.content.res.ColorStateList.valueOf(
+                                wordsVisible ? 0xFFFF4444 : 0xFF9A81FF));
+            });
         }
 
         // ── Checkbox gates Continue ───────────────────────────────────────────

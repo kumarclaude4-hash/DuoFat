@@ -91,6 +91,7 @@
 
         <!-- Word box (card) -->
         <LinearLayout
+            android:id="@+id/gridWordsCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
@@ -172,7 +173,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Permanently hide your recovery phrase on this device."
+                    android:text="Hide the words from view. Tap again to show them."
                     android:textSize="13sp"
                     android:textColor="#888888"
                     android:lineSpacingMultiplier="1.3" />
