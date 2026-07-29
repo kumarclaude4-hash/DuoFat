@@ -105,11 +105,6 @@ public class ConversationListActivity extends BaseActivity {
         // Schedule the daily background backup sync (KEEP policy — safe to call every launch).
         BackupScheduler.schedule(this);
 
-        // Soft-delete backup docs older than 90 days (fire-and-forget, runs on backup thread).
-        // Firestore security rules block hard-delete; this sets isDeleted:true so restore skips them.
-        final String uidForCleanup = myUid;
-        executor.execute(() -> BackupManager.cleanupOldBackupsAsync(uidForCleanup));
-
         // Ensure FCM token is uploaded for this user on every app launch.
         // Covers the case where onNewToken() fired before sign-in completed (new users).
         FcmTokenHelper.register(this);

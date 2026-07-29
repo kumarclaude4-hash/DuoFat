@@ -130,6 +130,9 @@ public class BackupStorageSettingsActivity extends BaseActivity {
         loadBackupStatus();
     }
 
+    private static final long STALE_WARN_MS = 48L * 60 * 60 * 1000;  // 48 hours
+    private static final long STALE_CRIT_MS = 7L  * 24 * 60 * 60 * 1000; // 7 days
+
     private void clearDirRecursive(java.io.File dir) {
         if (dir == null) return;
         java.io.File[] files = dir.listFiles();
@@ -148,16 +151,16 @@ public class BackupStorageSettingsActivity extends BaseActivity {
             if (tvBackupHealth != null) tvBackupHealth.setVisibility(View.GONE);
             return;
         }
+
+        // ── Firestore meta (last backup time + message count for display) ──
         BackupManager.loadMeta(user.getUid(), (lastTs, count) -> runOnUiThread(() -> {
             if (tvLastBackup == null || tvBackupCount == null) return;
             if (lastTs < 0) {
                 tvLastBackup .setText("Last backup: Unable to reach server");
                 tvBackupCount.setText("Messages backed up: —");
-                if (tvBackupHealth != null) tvBackupHealth.setVisibility(View.GONE);
             } else if (lastTs == 0) {
                 tvLastBackup .setText("Last backup: Never");
                 tvBackupCount.setText("Messages backed up: 0");
-                if (tvBackupHealth != null) tvBackupHealth.setVisibility(View.GONE);
             } else {
                 java.text.SimpleDateFormat sdf =
                         new java.text.SimpleDateFormat("MMM d 'at' h:mm a",
@@ -167,21 +170,48 @@ public class BackupStorageSettingsActivity extends BaseActivity {
             }
         }));
 
+        // ── Health indicator: combine staleness + unsynced count ──────────
+        // Reads local SharedPreferences (instant) + Room (fast) — no network needed.
         bgExecutor.execute(() -> {
-            int unsynced = BackupManager.getUnsyncedCount(this);
+            long localLastTs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
+                    .getLong("last_backup_ts", 0);
+            int  unsynced    = BackupManager.getUnsyncedCount(this);
+            long ageMs       = localLastTs > 0 ? System.currentTimeMillis() - localLastTs : -1;
+
             runOnUiThread(() -> {
-                if (tvBackupHealth == null) return;
-                if (unsynced < 0) {
+                if (tvBackupHealth == null || isDestroyed() || isFinishing()) return;
+
+                if (ageMs > STALE_CRIT_MS) {
+                    // Critical: backup hasn't run in over a week
+                    long days = ageMs / (24L * 60 * 60 * 1000);
+                    tvBackupHealth.setVisibility(View.VISIBLE);
+                    tvBackupHealth.setText("⚠ No backup in " + days + " day"
+                            + (days == 1 ? "" : "s") + " — tap Sync now");
+                    tvBackupHealth.setTextColor(0xFFD96A7C); // red
+
+                } else if (ageMs > STALE_WARN_MS) {
+                    // Warning: backup is more than 48 h old
+                    long hours = ageMs / (60L * 60 * 1000);
+                    String ago = hours >= 48
+                            ? (hours / 24) + " day" + (hours / 24 == 1 ? "" : "s") + " ago"
+                            : hours + " hour" + (hours == 1 ? "" : "s") + " ago";
+                    tvBackupHealth.setVisibility(View.VISIBLE);
+                    tvBackupHealth.setText("⚠ Last backup " + ago + " — tap Sync now");
+                    tvBackupHealth.setTextColor(0xFFE7B15D); // amber
+
+                } else if (unsynced < 0) {
                     tvBackupHealth.setVisibility(View.GONE);
+
                 } else if (unsynced == 0) {
                     tvBackupHealth.setVisibility(View.VISIBLE);
                     tvBackupHealth.setText("✓ All messages backed up");
-                    tvBackupHealth.setTextColor(0xFF6BBF8A);
+                    tvBackupHealth.setTextColor(0xFF6BBF8A); // green
+
                 } else {
                     tvBackupHealth.setVisibility(View.VISIBLE);
-                    tvBackupHealth.setText(unsynced + " message" + (unsynced == 1 ? "" : "s")
-                            + " pending sync");
-                    tvBackupHealth.setTextColor(0xFFE7B15D);
+                    tvBackupHealth.setText(unsynced + " message"
+                            + (unsynced == 1 ? "" : "s") + " pending sync");
+                    tvBackupHealth.setTextColor(0xFFE7B15D); // amber
                 }
             });
         });

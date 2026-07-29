@@ -47,9 +47,6 @@ import java.util.concurrent.Executors;
  * Size limit: syncAll() and syncIncremental() log a warning when > 10 000 messages are
  * pending (no hard cap — backup proceeds; the warning surfaces in logcat and backup_logs).
  *
- * Retention: cleanupOldBackupsAsync() soft-deletes (isDeleted:true) Firestore docs older
- * than 90 days in batches of 500.  Hard-delete is blocked by Firestore security rules.
- *
  * All Firestore writes are fire-and-forget (failures logged, never crash the UI).
  * Restore is synchronous (designed to run on a background thread).
  */
@@ -66,7 +63,6 @@ public final class BackupManager {
     private static final String PREF_FILE      = "duoshield_prefs";
     private static final String PREF_LAST_BAK  = "last_backup_ts";
     private static final int    SIZE_WARN_LIMIT = 10_000;
-    private static final long   RETENTION_MS    = 90L * 24 * 60 * 60 * 1000; // 90 days
     /** Max docs per WriteBatch. Firestore limit is 500; we use 200 to stay well inside the 10 MB request cap. */
     private static final int    BATCH_SIZE      = 200;
 
@@ -761,100 +757,6 @@ public final class BackupManager {
         }
     }
 
-    // ── Retention policy ──────────────────────────────────────────────────────
-
-    /**
-     * Soft-deletes (sets isDeleted:true) Firestore backup docs whose {@code ts} field
-     * is older than 90 days, in batches of 500.
-     *
-     * Hard-delete is blocked by Firestore security rules — soft-delete ensures the
-     * restore path still skips these docs without needing a schema change.
-     *
-     * Safe to call fire-and-forget. No-op if uid is null.
-     */
-    public static void cleanupOldBackupsAsync(String uid) {
-        if (uid == null) return;
-        long cutoff = System.currentTimeMillis() - RETENTION_MS;
-
-        executor.execute(() -> {
-            try {
-                FirebaseFirestore fdb = FirebaseFirestore.getInstance();
-                Map<String, Object> patch = new HashMap<>();
-                patch.put("isDeleted", true);
-                int totalDeleted = 0;
-
-                // Loop through all old docs using cursor pagination so we never re-scan
-                // already-processed pages.  No composite index needed — single-field
-                // inequality on "ts" ordered by "ts" is covered by the automatic index.
-                DocumentSnapshot cursor = null;
-                while (true) {
-                    final Object lock = new Object();
-                    final com.google.firebase.firestore.QuerySnapshot[] holder = {null};
-
-                    com.google.firebase.firestore.Query q =
-                            fdb.collection(COL_BACKUPS).document(uid)
-                               .collection(COL_MSGS)
-                               .whereLessThan("ts", cutoff)
-                               .orderBy("ts")
-                               .limit(500);
-                    if (cursor != null) q = q.startAfter(cursor);
-
-                    q.get()
-                     .addOnSuccessListener(snap -> {
-                         synchronized (lock) { holder[0] = snap; lock.notifyAll(); }
-                     })
-                     .addOnFailureListener(e -> {
-                         Log.w(TAG, "cleanupOldBackups: fetch failed: " + e.getMessage());
-                         synchronized (lock) { lock.notifyAll(); }
-                     });
-
-                    synchronized (lock) { if (holder[0] == null) lock.wait(15_000); }
-
-                    if (holder[0] == null || holder[0].isEmpty()) break;
-
-                    List<DocumentSnapshot> docs = holder[0].getDocuments();
-                    com.google.firebase.firestore.WriteBatch batch = fdb.batch();
-                    int count = 0;
-                    for (DocumentSnapshot doc : docs) {
-                        // Only soft-delete docs that aren't already marked deleted
-                        Boolean already = doc.getBoolean("isDeleted");
-                        if (!Boolean.TRUE.equals(already)) {
-                            batch.set(doc.getReference(), patch, SetOptions.merge());
-                            count++;
-                        }
-                    }
-
-                    if (count > 0) {
-                        final boolean[] committed = {false};
-                        final Object bLock = new Object();
-                        batch.commit()
-                             .addOnSuccessListener(v -> { synchronized (bLock) { committed[0] = true; bLock.notifyAll(); } })
-                             .addOnFailureListener(e -> {
-                                 Log.w(TAG, "cleanupOldBackups: batch commit failed: " + e.getMessage());
-                                 synchronized (bLock) { bLock.notifyAll(); }
-                             });
-                        synchronized (bLock) { if (!committed[0]) bLock.wait(15_000); }
-                        if (!committed[0]) break; // commit failed — stop to avoid infinite retry
-                        totalDeleted += count;
-                        Log.d(TAG, "cleanupOldBackups: soft-deleted " + count
-                                + " docs (running total=" + totalDeleted + ")");
-                    }
-
-                    if (docs.size() < 500) break; // last page — done
-                    cursor = docs.get(docs.size() - 1);
-                }
-
-                if (totalDeleted == 0) {
-                    Log.d(TAG, "cleanupOldBackups: nothing older than 90 days to clean up");
-                } else {
-                    Log.d(TAG, "cleanupOldBackups: finished — total soft-deleted=" + totalDeleted);
-                }
-
-            } catch (Exception e) {
-                Log.e(TAG, "cleanupOldBackups: unexpected error", e);
-            }
-        });
-    }
 
     // ── Contact backup / restore ──────────────────────────────────────────────
 
@@ -1203,7 +1105,8 @@ public final class BackupManager {
         }
     }
 
-    private static String toJson(Message m) throws Exception {
+    /** Package-private for unit testing. */
+    static String toJson(Message m) throws Exception {
         JSONObject o = new JSONObject();
         o.put("id",            nvl(m.getId()));
         o.put("conversationId",nvl(m.getConversationId()));
@@ -1224,7 +1127,8 @@ public final class BackupManager {
         return o.toString();
     }
 
-    private static Message fromJson(String json) throws Exception {
+    /** Package-private for unit testing. */
+    static Message fromJson(String json) throws Exception {
         JSONObject o = new JSONObject(json);
         String id     = o.optString("id",             null);
         String convId = o.optString("conversationId", null);
