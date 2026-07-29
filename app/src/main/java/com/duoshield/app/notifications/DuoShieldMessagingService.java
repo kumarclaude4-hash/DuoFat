@@ -66,11 +66,13 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         }
 
         // ── 1. Device-level delivery acknowledgement ──────────────────────────
+        // For group messages the server sends chatId=groupId + type="new_group_message".
+        // Route the ACK to the correct Firestore collection based on message type.
         String chatId    = remoteMessage.getData().get("chatId");
         String messageId = remoteMessage.getData().get("messageId");
         if (chatId != null && !chatId.isEmpty()
                 && messageId != null && !messageId.isEmpty()) {
-            acknowledgeDelivery(chatId, messageId);
+            acknowledgeDelivery(chatId, messageId, msgType);
         }
 
         // ── 2. Dedup: skip notification if already shown for this messageId ──
@@ -134,7 +136,7 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         Log.d(TAG, "call_invite handled: callId=" + callId + " caller=" + callerName);
     }
 
-    private void acknowledgeDelivery(String chatId, String messageId) {
+    private void acknowledgeDelivery(String chatId, String messageId, String msgType) {
         // The FCM data payload can still land after the recipient has already opened
         // the chat and marked the message "read" (e.g. the push was delayed, or the
         // chat was foregrounded from a different trigger). An unconditional
@@ -142,8 +144,13 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         // down to "delivered", which is what caused the sender's tick to silently
         // revert / never show real-time read receipts on one side. Guard the write
         // in a transaction so delivery ACKs can only ever move the status forward.
+        //
+        // Group messages (type="new_group_message") use the groups/ collection;
+        // 1-to-1 messages use the chats/ collection.
+        boolean isGroup = "new_group_message".equals(msgType);
+        String topCollection = isGroup ? "groups" : "chats";
         com.google.firebase.firestore.DocumentReference ref = FirebaseFirestore.getInstance()
-                .collection("chats").document(chatId)
+                .collection(topCollection).document(chatId)
                 .collection("messages").document(messageId);
 
         FirebaseFirestore.getInstance().runTransaction(txn -> {

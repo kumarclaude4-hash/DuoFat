@@ -62,7 +62,6 @@ secrets/
 .cache/
 .replit
 replit.nix
-replit.md
 skills-lock.json
 attached_assets/
 
