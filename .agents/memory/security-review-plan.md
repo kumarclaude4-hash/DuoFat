@@ -38,23 +38,24 @@ Source reports: `attached_assets/DuoShield_Code_Review_Report_(6)_1783403471815.
 - **F40** TextStyleHelper.java deleted (zero callers)
 - **F41** ReactMessageHelper.java + TypingThrottle.java deleted (zero callers)
 - **F43** SelfDestructWorker dead TTL block removed; MessageDao.deleteOlderThan() removed; stale indexes pruned from firestore.indexes.json
+- **F20** (re-verified 2026-07-29) FLAG_SECURE active on all activities — global in BaseActivity/MainActivity/LockScreenActivity, plus RestoreFromSeedActivity/SeedPhraseDisplayActivity keep it unconditionally
+- **F1** (re-verified 2026-07-29) Release keystore no longer tracked in git — removed from repo, `*.keystore` gitignored
+- **F9** (re-verified 2026-07-29) CallCleanupWorker is wired via `scheduleIfNeeded()` in DuoShieldApp — not dead code
+- **F11** (re-verified 2026-07-29, partial) TURN credentials fetched server-side (`/turnCredentials`, TURN_TOKEN_ID/TURN_API_TOKEN never reach the device); B2 keys no longer in BuildConfig — media now routes through the Cloudflare Worker (WORKER_URL/WORKER_SECRET) instead of raw B2 SigV4 signing on-device
 
 - **F21** "Delete for everyone" gated on `mine` in UI; Firestore message update rule restricts `deletedForAll` to sender only — ⚠️ rules file updated but NOT yet deployed (needs `firebase deploy --only firestore:rules`)
 - **F37** MediaStoreWipeHelper.java: recordUri() tracks gallery saves; wipeAll() deletes them; called from WipeHelper.wipeAll() and DuressManager.performLogout() before prefs clear
 - **F42** MODIFIED listener + deleteForEveryone() show "⛔ Message deleted" tombstone via adapter.updateMessage() + messageDao().updateText() instead of silent removal
 
-## Confirmed OPEN (lower priority / architectural)
-- **F1** Release keystore committed to repo — keystore at app/duoshield-release.keystore; rotate and git-ignore pre-production
+## Confirmed OPEN (lower priority / architectural) — re-verified 2026-07-29
 - **F2** Identity front-running window during new-account onboarding
 - **F3** No group key rotation on member removal (no removal feature yet)
-- **F5** Plaintext contact/group metadata in cloud backups
+- **F5** Plaintext contact/group metadata in cloud backups (displayName etc. stored unencrypted in `backups/{uid}/contacts`)
 - **F6** No contact-consent gate (chats created server-side via /createChat; calls still possible without consent)
-- **F8** No relay-only calling option — IP exposed to call partner
-- **F9** CallCleanupWorker dead code
-- **F11** B2/TURN credentials baked into APK via BuildConfig
-- **F12** Link preview auto-fetch leaks user IP to target server
-- **F15** Plaintext chat-export PDF persists in storage
-- **F34** Broken UID migration in RestoreFromSeedActivity.migrateOldUid()
+- **F8** No relay-only calling option — `CallManager` sets `iceTransportsType = ALL`, not RELAY; IP still exposed to call partner
+- **F12** Link preview auto-fetch leaks user IP to target server (LinkPreviewFetcher/LinkPreviewHelper still fetch directly)
+- **F15** Plaintext chat-export PDF persists in storage (ExportHelper)
+- **F34** RestoreFromSeedActivity.migrateOldUidViaServer() exists and looks functional — re-audit for correctness before closing (not verified line-by-line this pass)
 
 ## Implementation Rules
 1. Every code change cross-checked by a review subagent — non-negotiable

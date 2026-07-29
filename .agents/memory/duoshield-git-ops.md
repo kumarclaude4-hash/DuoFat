@@ -14,7 +14,10 @@ description: git write ops are blocked in the main agent sandbox; use git show f
 - `git diff --name-status HEAD origin/main` shows what files differ between local and remote.
 
 ## Remote
-`https://github.com/kumarclaude4-hash/DuoShield-` (trailing dash — important for GitHub API calls)
+`https://github.com/kumarclaude4-hash/DuoFat` (verified 2026-07-29 via `git remote -v` and successful `gitPush`)
 
 ## PAT
 `GIT_PAT` secret holds the GitHub Personal Access Token (renamed from `GIT`/`GITREPLIT`). Available as `$GIT_PAT` at runtime.
+
+## Preferred push method
+Use the `gitPush({})` callback from the git-remote skill (CodeExecution) rather than raw `git push` — it handles credentials automatically and is confirmed working.
