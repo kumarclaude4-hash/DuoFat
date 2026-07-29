@@ -381,7 +381,7 @@ public class CallManager {
         PeerConnection.RTCConfiguration config =
                 new PeerConnection.RTCConfiguration(buildIceServers());
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // Use ALL transport types — the same strategy WhatsApp and Signal use.
+        // Default: ALL transport types — the same strategy WhatsApp and Signal use.
         //
         // The ICE agent gathers host, STUN-reflexive (srflx), and TURN relay
         // candidates simultaneously and runs connectivity checks in parallel.
@@ -389,11 +389,18 @@ public class CallManager {
         //   • Same LAN / hotspot  → host candidate connects in <100 ms
         //   • Different networks  → srflx (STUN) or relay (TURN) connects in 1-3 s
         //
-        // RELAY-only would guarantee connectivity on symmetric NAT networks but
-        // forces every call through Cloudflare even when a direct path is available,
-        // adds unnecessary latency, and burns TURN quota on calls that didn't need
-        // relay.  ALL lets ICE pick the optimal path for each call automatically.
-        config.iceTransportsType = PeerConnection.IceTransportsType.ALL;
+        // RELAY-only guarantees the call partner never learns this device's real
+        // IP (host/srflx candidates are never gathered or offered) at the cost of
+        // always routing media through the Cloudflare TURN relay and burning TURN
+        // quota. It is opt-in via Settings → Security & Privacy → "Relay-only
+        // calls" (F8 fix) because most users prefer the lower latency of ALL.
+        boolean relayOnly = context
+                .getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE)
+                .getBoolean("relay_only_calls_enabled", false);
+        config.iceTransportsType = relayOnly
+                ? PeerConnection.IceTransportsType.RELAY
+                : PeerConnection.IceTransportsType.ALL;
+        Log.d(TAG, "createPeerConnection: iceTransportsType=" + config.iceTransportsType);
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
             @Override

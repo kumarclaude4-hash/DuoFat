@@ -382,14 +382,17 @@ public final class BackupManager {
                 try {
                     AppDatabase rdb = AppDatabase.getInstance(ctx);
                     
-                    // 1. Contacts
+                    // 1. Contacts (F5 fix: displayName encrypted before leaving the device)
                     List<Contact> contacts = rdb.contactDao().getAll();
                     if (contacts != null && !contacts.isEmpty()) {
                         for (Contact c : contacts) {
                             if (c.uid == null) continue;
+                            String encName = encMeta(key, c.displayName);
+                            if (encName == null) continue; // encryption failed — don't leak plaintext
                             Map<String, Object> cdoc = new HashMap<>();
                             cdoc.put("partnerUid",     c.uid);
-                            cdoc.put("displayName",    c.displayName != null ? c.displayName : "");
+                            cdoc.put("displayName",    encName);
+                            cdoc.put("encMeta",        true);
                             cdoc.put("conversationId", c.conversationId != null ? c.conversationId : "");
                             fdb.collection(COL_BACKUPS).document(uid)
                                .collection(COL_CONTACTS).document(c.uid)
@@ -397,7 +400,7 @@ public final class BackupManager {
                         }
                     }
 
-                    // 2. Groups — metadata + members array (E2EE group backup)
+                    // 2. Groups — metadata + members array (E2EE group backup, F5 fix: name encrypted)
                     List<com.duoshield.app.models.Group> groups = rdb.groupDao().getAllGroups();
                     if (groups != null && !groups.isEmpty()) {
                         for (com.duoshield.app.models.Group g : groups) {
@@ -413,9 +416,13 @@ public final class BackupManager {
                                 }
                             } catch (Exception ignored) {}
 
+                            String encGroupName = encMeta(key, g.name);
+                            if (encGroupName == null) continue; // encryption failed — don't leak plaintext
+
                             Map<String, Object> gdoc = new HashMap<>();
                             gdoc.put("id",          g.id);
-                            gdoc.put("name",        g.name != null ? g.name : "");
+                            gdoc.put("name",        encGroupName);
+                            gdoc.put("encMeta",     true);
                             gdoc.put("createdBy",   g.createdBy != null ? g.createdBy : "");
                             gdoc.put("createdAt",   g.createdAt);
                             gdoc.put("members",     memberUids);
@@ -676,9 +683,13 @@ public final class BackupManager {
                                     }
                                 }
                             } catch (Exception ignored) {}
+                            String encGroupName = encMeta(key, g.name);
+                            if (encGroupName == null) continue; // encryption failed — don't leak plaintext
+
                             Map<String, Object> gdoc = new HashMap<>();
                             gdoc.put("id",        g.id);
-                            gdoc.put("name",      g.name != null ? g.name : "");
+                            gdoc.put("name",      encGroupName);
+                            gdoc.put("encMeta",   true);
                             gdoc.put("createdBy", g.createdBy != null ? g.createdBy : "");
                             gdoc.put("createdAt", g.createdAt);
                             gdoc.put("members",   memberUids);
@@ -763,6 +774,41 @@ public final class BackupManager {
     // ── Contact backup / restore ──────────────────────────────────────────────
 
     /**
+     * Encrypts a metadata string field (contact/group display name, etc.) before
+     * it leaves the device for cloud backup.
+     *
+     * <p><b>F5 fix:</b> contact and group metadata used to be written to
+     * {@code backups/{uid}/contacts} and {@code backups/{uid}/groups} in
+     * plaintext. It is now AES-256-GCM encrypted with the same per-user backup
+     * key used for message bodies, so Firestore only ever sees ciphertext.
+     *
+     * @return the ciphertext wire string, or {@code null} if encryption failed
+     *         (callers must skip writing the field rather than fall back to plaintext).
+     */
+    private static String encMeta(byte[] key, String plaintext) {
+        try {
+            return BackupCryptoHelper.encryptCompressed(key, plaintext != null ? plaintext : "");
+        } catch (Exception e) {
+            Log.w(TAG, "encMeta: encryption failed — field will be omitted", e);
+            return null;
+        }
+    }
+
+    /**
+     * Decrypts a metadata field written by {@link #encMeta}. Falls back to the
+     * raw stored value on failure so legacy plaintext backups (written before
+     * the F5 fix) still restore correctly.
+     */
+    private static String decMeta(byte[] key, String stored) {
+        if (stored == null || stored.isEmpty() || key == null) return stored;
+        try {
+            return BackupCryptoHelper.decryptCompressed(key, stored);
+        } catch (Exception e) {
+            return stored; // legacy plaintext doc, or foreign/rotated key — best effort
+        }
+    }
+
+    /**
      * Backs up all Room contacts to {@code backups/{uid}/contacts/{partnerUid}}.
      */
     public static void backupContacts(Context ctx) {
@@ -778,9 +824,12 @@ public final class BackupManager {
                 FirebaseFirestore fdb = FirebaseFirestore.getInstance();
                 for (Contact c : contacts) {
                     if (c.uid == null) continue;
+                    String encName = encMeta(key, c.displayName);
+                    if (encName == null) continue; // encryption failed — don't leak plaintext
                     Map<String, Object> doc = new HashMap<>();
                     doc.put("partnerUid",     c.uid);
-                    doc.put("displayName",    c.displayName != null ? c.displayName : "");
+                    doc.put("displayName",    encName);
+                    doc.put("encMeta",        true);
                     doc.put("conversationId", c.conversationId != null ? c.conversationId : "");
                     fdb.collection(COL_BACKUPS).document(uid)
                        .collection(COL_CONTACTS).document(c.uid)
@@ -801,6 +850,7 @@ public final class BackupManager {
     public static int restoreContactsSync(Context ctx, String uid) {
         if (uid == null) return 0;
         int count = 0;
+        byte[] key = BackupCryptoHelper.getStoredKey(ctx); // F5 fix: needed to decrypt displayName/name
         try {
             FirebaseFirestore fdb = FirebaseFirestore.getInstance();
             AppDatabase db = AppDatabase.getInstance(ctx);
@@ -818,8 +868,9 @@ public final class BackupManager {
                     String pUid = doc.getString("partnerUid");
                     if (pUid == null) continue;
                     if (db.contactDao().getByUid(pUid) == null) {
-                        db.contactDao().insert(new Contact(pUid, 
-                            doc.getString("displayName"), doc.getString("conversationId")));
+                        String displayName = decMeta(key, doc.getString("displayName"));
+                        db.contactDao().insert(new Contact(pUid,
+                            displayName, doc.getString("conversationId")));
                         count++;
                     }
                 }
@@ -840,7 +891,7 @@ public final class BackupManager {
                     if (db.groupDao().getGroupById(gid) == null) {
                         com.duoshield.app.models.Group g = new com.duoshield.app.models.Group();
                         g.id = gid;
-                        g.name = doc.getString("name");
+                        g.name = decMeta(key, doc.getString("name"));
                         g.createdBy = doc.getString("createdBy") != null ? doc.getString("createdBy") : "";
                         Long ca = doc.getLong("createdAt");
                         g.createdAt = ca != null ? ca : 0;

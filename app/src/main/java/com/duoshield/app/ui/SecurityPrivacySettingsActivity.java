@@ -32,7 +32,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
     private static final String[] LOCK_LBL = {"Immediately", "30 seconds", "1 minute", "3 minutes", "5 minutes", "15 minutes", "30 minutes"};
 
     private SharedPreferences prefs;
-    private SwitchCompat      switchBiometric, switchAppScreenshot, switchShakeLock;
+    private SwitchCompat      switchBiometric, switchAppScreenshot, switchShakeLock, switchRelayOnlyCalls;
     private LinearLayout      rowManageUnlockCodes;
     private LinearLayout      layoutPinInputs, layoutPinSet;
     private EditText          etNewPin, etConfirmPin;
@@ -54,9 +54,10 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
 
-        switchBiometric     = findViewById(R.id.switchBiometric);
-        switchAppScreenshot = findViewById(R.id.switchAppScreenshot);
-        switchShakeLock     = findViewById(R.id.switchShakeLock);
+        switchBiometric      = findViewById(R.id.switchBiometric);
+        switchAppScreenshot  = findViewById(R.id.switchAppScreenshot);
+        switchShakeLock      = findViewById(R.id.switchShakeLock);
+        switchRelayOnlyCalls = findViewById(R.id.switchRelayOnlyCalls);
         layoutPinInputs     = findViewById(R.id.layoutPinInputs);
         layoutPinSet        = findViewById(R.id.layoutPinSet);
         rowManageUnlockCodes = findViewById(R.id.rowManageUnlockCodes);
@@ -79,6 +80,8 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
             switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", false));
         if (switchShakeLock != null)
             switchShakeLock.setChecked(prefs.getBoolean("shake_to_lock_enabled", false));
+        if (switchRelayOnlyCalls != null)
+            switchRelayOnlyCalls.setChecked(prefs.getBoolean("relay_only_calls_enabled", false));
         updateAutoSignOutLabel();
         updateLockTimeoutLabel();
         refreshPinStatus();
@@ -138,6 +141,14 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         // Screenshot toggle — requires the app PIN to change (security gate).
         if (switchAppScreenshot != null) attachScreenshotListener();
+
+        // ── Relay-only calls (F8 fix) ────────────────────────────────────────
+        // Forces WebRTC to use only TURN relay candidates so the call partner
+        // never learns this device's IP address. See CallManager.createPeerConnection().
+        if (switchRelayOnlyCalls != null) {
+            switchRelayOnlyCalls.setOnCheckedChangeListener((btn, checked) ->
+                prefs.edit().putBoolean("relay_only_calls_enabled", checked).apply());
+        }
 
         // ── Auto sign-out ─────────────────────────────────────────────────────
         if (btnAutoSignOut != null) btnAutoSignOut.setOnClickListener(v -> showAutoSignOutPicker());

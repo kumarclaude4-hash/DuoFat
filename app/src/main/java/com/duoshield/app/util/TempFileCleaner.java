@@ -97,6 +97,9 @@ public class TempFileCleaner extends Worker {
             || (name.startsWith("voice_")           && name.endsWith(".m4a"))  // F25 fix: recorder uses .m4a
             || (name.startsWith("vid_")             && name.endsWith(".mp4"))
             || (name.startsWith("share_")           && name.endsWith(".jpg"))
-            || (name.startsWith("duoshield_export_") && name.endsWith(".pdf"));
+            // F15 fix: ExportHelper now writes .txt (PDF export was removed); .pdf kept
+            // for any stale files left over from the previous export format.
+            || (name.startsWith("duoshield_export_") && name.endsWith(".pdf"))
+            || (name.startsWith("duoshield_export_") && name.endsWith(".txt"));
     }
 }
