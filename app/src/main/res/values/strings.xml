@@ -40,11 +40,7 @@
     <string name="wrong_pin">Incorrect PIN</string>
     <string name="wrong_pin_remaining">Incorrect PIN — %d attempts remaining</string>
     <string name="unlock">Unlock</string>
-    <string name="use_biometric">Use biometrics instead</string>
     <string name="lock_tagline">Your privacy. Our priority.</string>
-    <string name="biometric_prompt_title">Unlock DuoShield</string>
-    <string name="biometric_prompt_subtitle">Use fingerprint or face to unlock</string>
-    <string name="biometric_negative">Use PIN</string>
 
     <!-- Settings -->
     <string name="settings">Settings</string>
@@ -55,8 +51,6 @@
     <string name="section_about">About</string>
     <string name="app_pin">App PIN</string>
     <string name="app_pin_desc">Lock app with a PIN on resume</string>
-    <string name="biometric_lock">Biometric unlock</string>
-    <string name="biometric_desc">Use fingerprint or face to unlock</string>
     <string name="self_destruct">Self-destruct timer</string>
     <string name="self_destruct_desc">Auto-delete messages after a set time</string>
     <string name="duress_pin">Duress PIN</string>

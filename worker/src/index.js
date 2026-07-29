@@ -17,7 +17,7 @@ const MAX_MIGRATIONS_PER_RUN = 200;
 
 // ─── Tier config ──────────────────────────────────────────────────────────────
 function hotTierMs(env)  { return safeInt(env.HOT_TIER_DAYS || '30', 30) * 86_400_000; }
-function maxFileSize(env){ return safeInt(env.MAX_FILE_SIZE  || '10485760', 10_485_760); }
+function maxFileSize(env){ return safeInt(env.MAX_FILE_SIZE  || '524288000', 524_288_000); }
 function rateLimit(env)  { return safeInt(env.RATE_LIMIT_PER_MIN || '120', 120); }
 
 // ─── Safe integer parsing ─────────────────────────────────────────────────────

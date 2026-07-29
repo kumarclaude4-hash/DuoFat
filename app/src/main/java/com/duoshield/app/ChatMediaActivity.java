@@ -41,7 +41,7 @@ import com.duoshield.app.crypto.signal.SignalSessionManager;
 import com.duoshield.app.db.AppDatabase;
 import org.signal.libsignal.protocol.message.CiphertextMessage;
 import com.duoshield.app.models.Message;
-// BiometricHelper removed from direct use here — lock handled by BaseActivity
+// Biometric unlock removed — lock handled entirely by BaseActivity via PIN
 import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.ui.SettingsActivity;
 import com.duoshield.app.ui.SwipeToReplyCallback;
@@ -2560,6 +2560,10 @@ public class ChatMediaActivity extends BaseActivity {
                 || detail.contains("timeout") || detail.contains("connect"))) {
             errorCode = "Network error";
             advice = "Could not reach Backblaze B2. Check your internet connection and try again.";
+        } else if (detail != null && detail.contains("[413]")) {
+            errorCode = "HTTP 413 — File too large";
+            advice = "This file exceeds the server's upload size limit (max 500 MB).\n\n"
+                   + "Choose a smaller file, or compress the video before sending.";
         } else {
             errorCode = "Unknown error";
             advice = "An unexpected error occurred during upload.\n\nDetails: "

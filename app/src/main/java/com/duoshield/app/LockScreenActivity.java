@@ -13,7 +13,6 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
-import com.duoshield.app.security.BiometricHelper;
 import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.ui.FingerprintScanView;
 import com.duoshield.app.ui.PinDotsView;
@@ -45,7 +44,6 @@ public class LockScreenActivity extends AppCompatActivity {
     private PinDotsView      pinDotsView;
     private TextView         tvError;
     private Button           btnUnlock;   // kept GONE; ButtonPressAnimator still attaches
-    private View             btnBiometric;
     private FingerprintScanView fingerprintScanView;
     private ImageView        ivLockShield;
 
@@ -80,7 +78,6 @@ public class LockScreenActivity extends AppCompatActivity {
         pinDotsView         = findViewById(R.id.pinDotsView);
         tvError             = findViewById(R.id.tvError);
         btnUnlock           = findViewById(R.id.btnUnlock);
-        btnBiometric        = findViewById(R.id.btnBiometric);
         fingerprintScanView = findViewById(R.id.fingerprintScanView);
         ivLockShield        = findViewById(R.id.ivLockShield);
 
@@ -101,19 +98,9 @@ public class LockScreenActivity extends AppCompatActivity {
                 getResources().getColor(R.color.ds_accent_deep, null),
                 getResources().getColor(R.color.ls_dot_empty, null));
 
-        // Biometric
-        boolean bioEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean("biometric_enabled", false);
-        if (bioEnabled && BiometricHelper.isAvailable(this)) {
-            btnBiometric.setVisibility(View.VISIBLE);
-            showBiometric();
-        }
-
         // Hidden unlock button (GONE in layout — kept so ButtonPressAnimator doesn't NPE)
         ButtonPressAnimator.attach(btnUnlock);
         btnUnlock.setOnClickListener(v -> checkPin());
-
-        btnBiometric.setOnClickListener(v -> showBiometric());
 
         // ── Wire numpad keys ──────────────────────────────────────────────
         digitKeys[1] = findViewById(R.id.key1);
@@ -167,7 +154,7 @@ public class LockScreenActivity extends AppCompatActivity {
         }
     }
 
-    // ── Biometric / scan animation ────────────────────────────────────────
+    // ── Scan animation ──────────────────────────────────────────────────────
 
     private void showScanAnim() {
         ivLockShield.setVisibility(View.GONE);
@@ -177,21 +164,6 @@ public class LockScreenActivity extends AppCompatActivity {
     private void hideScanAnim() {
         fingerprintScanView.setVisibility(View.GONE);
         ivLockShield.setVisibility(View.VISIBLE);
-    }
-
-    private void showBiometric() {
-        showScanAnim();
-        BiometricHelper.authenticate(this, new BiometricHelper.AuthCallback() {
-            @Override public void onSuccess() {
-                getSharedPreferences(PREFS_SECURITY, MODE_PRIVATE)
-                        .edit().putInt(KEY_FAIL_COUNT, 0).apply();
-                hideScanAnim();
-                unlock();
-            }
-            @Override public void onFailure() {
-                hideScanAnim();
-            }
-        });
     }
 
     // ── PIN verification ──────────────────────────────────────────────────
@@ -263,7 +235,6 @@ public class LockScreenActivity extends AppCompatActivity {
 
     private void setInputEnabled(boolean enabled) {
         btnUnlock.setEnabled(enabled);
-        btnBiometric.setEnabled(enabled);
         keyBackspace.setEnabled(enabled);
         for (int i = 0; i <= 9; i++) {
             if (digitKeys[i] != null) digitKeys[i].setEnabled(enabled);

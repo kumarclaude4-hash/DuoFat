@@ -2,7 +2,7 @@
 <!--
   Lock Screen — Lavender light design, compact layout for all screen sizes.
   IDs kept for LockScreenActivity.java:
-    tvError, btnUnlock (GONE), btnBiometric, pinDotsView
+    tvError, btnUnlock (GONE), pinDotsView
     key0–key9, keyBackspace, flLockIcon, ivLockShield, fingerprintScanView
 -->
 <ScrollView
@@ -93,7 +93,7 @@
                 android:background="@drawable/bg_lock_icon_circle"
                 android:elevation="4dp">
 
-                <!-- Lock icon — shown by default, hidden during biometric scan -->
+                <!-- Lock icon — shown by default, hidden during PIN verification scan -->
                 <ImageView
                     android:id="@+id/ivLockShield"
                     android:layout_width="30dp"
@@ -104,7 +104,7 @@
                     app:tint="@color/ds_accent"
                     android:contentDescription="Locked"/>
 
-                <!-- Fingerprint scan animation — shown during biometric scan -->
+                <!-- Verification scan animation — shown while checking PIN -->
                 <com.duoshield.app.ui.FingerprintScanView
                     android:id="@+id/fingerprintScanView"
                     android:layout_width="match_parent"
@@ -244,7 +244,7 @@
 
             </LinearLayout>
 
-            <!-- Row 4: [biometric/empty], 0, [backspace] -->
+            <!-- Row 4: [empty], 0, [backspace] -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -291,36 +291,6 @@
             android:layout_width="0dp"
             android:layout_height="0dp"
             android:visibility="gone"/>
-
-        <!-- ── Biometric link ── -->
-        <LinearLayout
-            android:id="@+id/btnBiometric"
-            android:layout_width="wrap_content"
-            android:layout_height="44dp"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:layout_marginTop="16dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:visibility="gone"
-            android:contentDescription="Use biometrics">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_fingerprint"
-                app:tint="@color/ds_accent"
-                android:contentDescription="Fingerprint"/>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="7dp"
-                android:text="@string/use_biometric"
-                android:textColor="@color/ds_accent"
-                android:textSize="13sp"/>
-
-        </LinearLayout>
 
     </LinearLayout>
 

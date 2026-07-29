@@ -14,7 +14,6 @@ import androidx.appcompat.widget.SwitchCompat;
 import androidx.appcompat.widget.Toolbar;
 import com.duoshield.app.BaseActivity;
 import com.duoshield.app.R;
-import com.duoshield.app.security.BiometricHelper;
 import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.PinManager;
@@ -32,7 +31,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
     private static final String[] LOCK_LBL = {"Immediately", "30 seconds", "1 minute", "3 minutes", "5 minutes", "15 minutes", "30 minutes"};
 
     private SharedPreferences prefs;
-    private SwitchCompat      switchBiometric, switchAppScreenshot, switchShakeLock, switchRelayOnlyCalls;
+    private SwitchCompat      switchAppScreenshot, switchShakeLock, switchRelayOnlyCalls;
     private LinearLayout      rowManageUnlockCodes;
     private LinearLayout      layoutPinInputs, layoutPinSet;
     private EditText          etNewPin, etConfirmPin;
@@ -54,7 +53,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
 
-        switchBiometric      = findViewById(R.id.switchBiometric);
         switchAppScreenshot  = findViewById(R.id.switchAppScreenshot);
         switchShakeLock      = findViewById(R.id.switchShakeLock);
         switchRelayOnlyCalls = findViewById(R.id.switchRelayOnlyCalls);
@@ -75,7 +73,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         Button btnChangePinMode = findViewById(R.id.btnChangePinMode);
 
         // ── Restore saved state ───────────────────────────────────────────────
-        switchBiometric.setChecked(prefs.getBoolean("biometric_enabled", false));
         if (switchAppScreenshot != null)
             switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", false));
         if (switchShakeLock != null)
@@ -97,25 +94,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (btnClearPin      != null) btnClearPin.setOnClickListener(v -> confirmClearPin());
         if (btnChangePinMode != null) btnChangePinMode.setOnClickListener(v -> enterChangePinMode());
         if (btnCancelPinForm != null) btnCancelPinForm.setOnClickListener(v -> refreshPinStatus());
-
-        // ── Biometric ─────────────────────────────────────────────────────────
-        switchBiometric.setOnCheckedChangeListener((b, checked) -> {
-            if (checked && !PinManager.hasPinSet(this)) {
-                switchBiometric.setChecked(false);
-                Toast.makeText(this,
-                    "Set an app PIN first before enabling biometric lock.",
-                    Toast.LENGTH_LONG).show();
-                return;
-            }
-            if (checked && !BiometricHelper.isAvailable(this)) {
-                switchBiometric.setChecked(false);
-                Toast.makeText(this,
-                    "No biometric enrolled on this device. Enroll fingerprint or face in system Settings first.",
-                    Toast.LENGTH_LONG).show();
-                return;
-            }
-            prefs.edit().putBoolean("biometric_enabled", checked).apply();
-        });
 
         // ── Shake to lock ─────────────────────────────────────────────────────
         if (switchShakeLock != null) {
@@ -222,10 +200,8 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
     private void doClearPin() {
         PinManager.clearPin(this);
         prefs.edit()
-             .putBoolean("biometric_enabled", false)
              .putBoolean("shake_to_lock_enabled", false)
              .apply();
-        switchBiometric.setChecked(false);
         if (switchShakeLock != null) switchShakeLock.setChecked(false);
         DuressManager.clearDuressPin(this);
         applyPinUiState(false);
