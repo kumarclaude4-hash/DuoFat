@@ -36,7 +36,7 @@
                     android:layout_height="28dp"
                     android:src="@drawable/ic_shield"
                     android:scaleType="fitCenter"
-                    android:tint="@color/accent"
+                    app:tint="@color/accent"
                     android:contentDescription="DuoShield"
                     android:layout_marginEnd="10dp"/>
 
@@ -73,7 +73,7 @@
                 android:layout_height="48dp"
                 android:src="@drawable/ic_call_phone"
                 android:padding="12dp"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:clickable="true"
                 android:focusable="true"
                 android:background="?attr/selectableItemBackgroundBorderless"
@@ -85,7 +85,7 @@
                 android:layout_height="48dp"
                 android:src="@drawable/ic_search"
                 android:padding="12dp"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:clickable="true"
                 android:focusable="true"
                 android:background="?attr/selectableItemBackgroundBorderless"
@@ -97,7 +97,7 @@
                 android:layout_height="48dp"
                 android:src="@drawable/ic_more_vert"
                 android:padding="12dp"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:clickable="true"
                 android:focusable="true"
                 android:background="?attr/selectableItemBackgroundBorderless"
@@ -132,7 +132,7 @@
                     android:layout_width="18dp"
                     android:layout_height="18dp"
                     android:src="@drawable/ic_search"
-                    android:tint="@color/text_hint"
+                    app:tint="@color/text_hint"
                     android:layout_marginEnd="10dp"
                     android:contentDescription="Search"/>
 
@@ -156,7 +156,7 @@
                 android:layout_width="40dp"
                 android:layout_height="40dp"
                 android:src="@drawable/ic_close"
-                android:tint="@color/text_hint"
+                app:tint="@color/text_hint"
                 android:padding="10dp"
                 android:layout_marginStart="4dp"
                 android:clickable="true"
@@ -199,7 +199,7 @@
                 android:layout_width="20dp"
                 android:layout_height="20dp"
                 android:src="@drawable/ic_archive"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:layout_marginEnd="14dp"
                 android:contentDescription="Archived"/>
 
@@ -225,7 +225,7 @@
                 android:layout_width="18dp"
                 android:layout_height="18dp"
                 android:src="@drawable/ic_arrow_forward"
-                android:tint="@color/text_secondary"
+                app:tint="@color/text_secondary"
                 android:contentDescription="Open archived"/>
 
         </LinearLayout>
@@ -291,7 +291,7 @@
                             android:layout_height="50dp"
                             android:layout_gravity="center"
                             android:src="@drawable/ic_shield"
-                            android:tint="@color/accent"
+                            app:tint="@color/accent"
                             android:contentDescription="No chats"/>
                     </FrameLayout>
 

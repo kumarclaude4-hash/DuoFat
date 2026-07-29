@@ -120,17 +120,21 @@ public class SecurePrefs {
     private static SharedPreferences buildWithExplicitSpec(Context appCtx,
                                                             boolean requireStrongBox)
             throws Exception {
-        KeyGenParameterSpec spec = new KeyGenParameterSpec.Builder(
+        KeyGenParameterSpec.Builder specBuilder = new KeyGenParameterSpec.Builder(
                 MasterKey.DEFAULT_MASTER_KEY_ALIAS,
                 KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
+                .setKeySize(256);
                 // Explicitly NOT setting setUserAuthenticationRequired(true) — that is
                 // what causes the "screen lock required" failure on Vivo Y11 / POCO C51
                 // when security-crypto sets it implicitly on some API levels.
-                .setIsStrongBoxBacked(requireStrongBox)
-                .build();
+        // setIsStrongBoxBacked() requires API 28; minSdk is 26. Devices below 28 never
+        // have StrongBox anyway, so requireStrongBox is only ever true when SDK_INT >= 28.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            specBuilder.setIsStrongBoxBacked(requireStrongBox);
+        }
+        KeyGenParameterSpec spec = specBuilder.build();
         MasterKey masterKey = new MasterKey.Builder(appCtx)
                 .setKeyGenParameterSpec(spec)
                 .build();

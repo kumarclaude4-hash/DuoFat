@@ -49,7 +49,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_image"
-                    android:tint="#9A81FF"
+                    app:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <LinearLayout
@@ -125,7 +125,7 @@
                     android:layout_width="22dp"
                     android:layout_height="22dp"
                     android:src="@drawable/ic_image"
-                    android:tint="#9A81FF"
+                    app:tint="#9A81FF"
                     android:layout_marginEnd="18dp"/>
 
                 <TextView
@@ -176,7 +176,7 @@
                         android:layout_width="22dp"
                         android:layout_height="22dp"
                         android:src="@drawable/ic_arrow_down"
-                        android:tint="#9A81FF"
+                        app:tint="#9A81FF"
                         android:layout_marginEnd="18dp"/>
 
                     <LinearLayout

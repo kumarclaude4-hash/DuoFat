@@ -37,7 +37,7 @@
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:src="@android:drawable/ic_menu_close_clear_cancel"
-            android:tint="#FFFFFF"
+            app:tint="#FFFFFF"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Close"/>
 
@@ -116,7 +116,7 @@
                 android:layout_height="26dp"
                 android:layout_gravity="center"
                 android:src="@drawable/ic_send"
-                android:tint="#FFFFFF"
+                app:tint="#FFFFFF"
                 android:contentDescription="Send"/>
         </FrameLayout>
 

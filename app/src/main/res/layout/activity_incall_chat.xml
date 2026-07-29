@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -21,7 +22,7 @@
             android:layout_height="48dp"
             android:padding="12dp"
             android:src="@drawable/ic_arrow_down"
-            android:tint="#FFFFFF"
+            app:tint="#FFFFFF"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Back to call" />
@@ -43,7 +44,7 @@
             android:layout_height="48dp"
             android:padding="12dp"
             android:src="@drawable/ic_close"
-            android:tint="#FFFFFF"
+            app:tint="#FFFFFF"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Close chat" />
@@ -65,7 +66,7 @@
             android:layout_width="18dp"
             android:layout_height="18dp"
             android:src="@drawable/ic_lock"
-            android:tint="#9A81FF"
+            app:tint="#9A81FF"
             android:importantForAccessibility="no" />
 
         <TextView
@@ -118,7 +119,7 @@
             android:layout_height="40dp"
             android:padding="8dp"
             android:src="@drawable/ic_emoji"
-            android:tint="@color/ds_text_tertiary"
+            app:tint="@color/ds_text_tertiary"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Emoji" />
@@ -149,7 +150,7 @@
             android:padding="12dp"
             android:src="@drawable/ic_send"
             android:background="@drawable/bg_fab"
-            android:tint="#FFFFFF"
+            app:tint="#FFFFFF"
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Send" />

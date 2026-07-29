@@ -1,6 +1,8 @@
 package com.duoshield.app.util;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaCodec;
@@ -11,6 +13,8 @@ import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+
+import androidx.core.content.ContextCompat;
 
 import java.io.File;
 import java.lang.ref.WeakReference;
@@ -137,6 +141,12 @@ public class VoiceRecorderHelper {
             // Use MIC source so our DRC operates on unmodified PCM.
             // VOICE_COMMUNICATION applies hardware AGC which would flatten the
             // dynamics our adaptive tracker is designed to handle.
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                cb.onError("RECORD_AUDIO permission not granted");
+                return;
+            }
+
             int minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNELS, PCM_ENCODING);
             int recBuf = Math.max(minBuf, CHUNK_BYTES * 16); // ring buffer ≥ 16 chunks
             audioRecord = new AudioRecord(

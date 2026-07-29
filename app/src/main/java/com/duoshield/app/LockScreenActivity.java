@@ -1,5 +1,6 @@
 package com.duoshield.app;
 
+import android.annotation.SuppressLint;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
@@ -275,6 +276,10 @@ public class LockScreenActivity extends AppCompatActivity {
         finish();
     }
 
+    // Intentionally does NOT call super.onBackPressed() — the lock screen must block
+    // back navigation until the user authenticates, so the default finish() behavior
+    // is deliberately suppressed here.
+    @SuppressLint("MissingSuperCall")
     @Override public void onBackPressed() {
         // Block back — user must authenticate
     }

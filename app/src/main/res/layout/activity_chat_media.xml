@@ -24,7 +24,7 @@
             android:layout_height="44dp"
             android:src="@drawable/ic_arrow_back"
             android:padding="10dp"
-            android:tint="@color/text_primary"
+            app:tint="@color/text_primary"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -104,7 +104,7 @@
             android:layout_height="44dp"
             android:src="@drawable/ic_call_phone"
             android:padding="10dp"
-            android:tint="@color/text_secondary"
+            app:tint="@color/text_secondary"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -117,7 +117,7 @@
             android:layout_height="44dp"
             android:src="@drawable/ic_call_video"
             android:padding="10dp"
-            android:tint="@color/text_secondary"
+            app:tint="@color/text_secondary"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -130,7 +130,7 @@
             android:layout_height="44dp"
             android:src="@drawable/ic_more_vert"
             android:padding="10dp"
-            android:tint="@color/text_secondary"
+            app:tint="@color/text_secondary"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -153,7 +153,7 @@
             android:layout_width="14dp"
             android:layout_height="14dp"
             android:src="@drawable/ic_pin"
-            android:tint="@color/accent"
+            app:tint="@color/accent"
             android:layout_marginEnd="10dp"
             android:contentDescription="Pinned"/>
 
@@ -182,7 +182,7 @@
             android:layout_height="36dp"
             android:src="@drawable/ic_close"
             android:padding="9dp"
-            android:tint="@color/text_hint"
+            app:tint="@color/text_hint"
             android:contentDescription="Dismiss"/>
     </LinearLayout>
 
@@ -247,7 +247,7 @@
             android:layout_height="36dp"
             android:src="@drawable/ic_close"
             android:padding="9dp"
-            android:tint="#99FFFFFF"
+            app:tint="#99FFFFFF"
             android:contentDescription="Dismiss safety number warning"/>
     </LinearLayout>
 
@@ -424,7 +424,7 @@
             android:layout_height="42dp"
             android:src="@drawable/ic_delete"
             android:padding="9dp"
-            android:tint="@color/error_red"
+            app:tint="@color/error_red"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -454,7 +454,7 @@
             android:layout_height="46dp"
             android:src="@drawable/ic_send"
             android:padding="10dp"
-            android:tint="@color/accent"
+            app:tint="@color/accent"
             android:clickable="true"
             android:focusable="true"
             android:background="?attr/selectableItemBackgroundBorderless"

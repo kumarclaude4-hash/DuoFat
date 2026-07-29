@@ -13,7 +13,7 @@
         android:layout_height="48dp"
         android:src="@drawable/ic_arrow_back"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:tint="@color/dn_accent"
+        app:tint="@color/dn_accent"
         android:contentDescription="Back"
         android:layout_marginStart="8dp"
         android:layout_marginTop="8dp"
@@ -82,7 +82,7 @@
             android:layout_width="22dp"
             android:layout_height="22dp"
             android:src="@drawable/ic_person"
-            android:tint="@color/dn_accent"
+            app:tint="@color/dn_accent"
             android:contentDescription="Person"
             android:layout_marginEnd="12dp"/>
 

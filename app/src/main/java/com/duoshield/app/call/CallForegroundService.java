@@ -76,14 +76,16 @@ public class CallForegroundService extends Service {
 
         if (ACTION_END.equals(action)) {
             // Relay to CallActivity so it can tear down the PeerConnection cleanly.
-            sendBroadcast(new Intent(BROADCAST_END_CALL));
+            // setPackage() scopes this broadcast to our own app — required since the
+            // receiving BroadcastReceiver is registered non-exported.
+            sendBroadcast(new Intent(BROADCAST_END_CALL).setPackage(getPackageName()));
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
 
         if (ACTION_MUTE.equals(action)) {
-            sendBroadcast(new Intent(BROADCAST_TOGGLE_MUTE));
+            sendBroadcast(new Intent(BROADCAST_TOGGLE_MUTE).setPackage(getPackageName()));
             return START_NOT_STICKY;
         }
 

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- One row in the audio-output bottom sheet -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:minHeight="64dp"
@@ -34,7 +35,7 @@
         android:layout_width="22dp"
         android:layout_height="22dp"
         android:src="@drawable/ic_check"
-        android:tint="#9A81FF"
+        app:tint="#9A81FF"
         android:visibility="gone"
         android:importantForAccessibility="no" />
 

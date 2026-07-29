@@ -1,5 +1,6 @@
 package com.duoshield.app.notifications;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -7,10 +8,13 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.RemoteInput;
+import androidx.core.content.ContextCompat;
 import com.duoshield.app.MainActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.util.MessageBuilder;
@@ -86,7 +90,13 @@ public class MessageReplyReceiver extends BroadcastReceiver {
             .setAutoCancel(true)
             .setContentIntent(pi);
 
-        NotificationManagerCompat.from(context)
-            .notify(MarkReadReceiver.NOTIF_ID + 1, builder.build());
+        // API 33+ requires POST_NOTIFICATIONS at runtime; a receiver can't prompt for it,
+        // so just skip showing the notification if it was never granted (or was revoked).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                        == PackageManager.PERMISSION_GRANTED) {
+            NotificationManagerCompat.from(context)
+                .notify(MarkReadReceiver.NOTIF_ID + 1, builder.build());
+        }
     }
 }

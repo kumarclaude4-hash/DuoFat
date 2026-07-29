@@ -75,7 +75,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
     private TextView                  tvError;
-    private TextView                  tvStep;
     private TextView                  tvMediaProgress;
     private MaterialButton            btnRestore;
     private LinearProgressIndicator   progressRestore;
@@ -98,7 +97,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         etAccountId     = findViewById(R.id.etAccountId);
         etSeedWords     = findViewById(R.id.etSeedWords);
         tvError         = findViewById(R.id.tvError);
-        tvStep               = findViewById(R.id.tvStep);
         tvMediaProgress      = findViewById(R.id.tvMediaProgress);
         btnRestore           = findViewById(R.id.btnRestore);
         progressRestore      = findViewById(R.id.progressRestore);
@@ -109,7 +107,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         decryptGridView    = findViewById(R.id.decryptGridView);
         tvRestoreStep      = findViewById(R.id.tvRestoreStep);
 
-        if (tvStep != null) tvStep.setVisibility(View.GONE);
 
         btnRestore.setOnClickListener(v -> attemptRestore());
 
@@ -574,12 +571,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     }
 
     private void setStep(String label) {
-        if (tvStep != null) {
-            runOnUiThread(() -> {
-                tvStep.setText(label);
-                tvStep.setVisibility(View.VISIBLE);
-            });
-        }
         if (tvRestoreStep != null) {
             runOnUiThread(() -> tvRestoreStep.setText(label));
         }

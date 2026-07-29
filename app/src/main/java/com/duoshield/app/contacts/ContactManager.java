@@ -258,13 +258,13 @@ public class ContactManager {
             if (code != 200) {
                 String errBody = "";
                 try (InputStream es = conn.getErrorStream()) {
-                    if (es != null) errBody = new String(es.readAllBytes(), StandardCharsets.UTF_8);
+                    if (es != null) errBody = new String(readAllBytesCompat(es), StandardCharsets.UTF_8);
                 }
                 throw new Exception("Server returned HTTP " + code + ": " + errBody);
             }
 
             try (InputStream is = conn.getInputStream()) {
-                String json = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+                String json = new String(readAllBytesCompat(is), StandardCharsets.UTF_8);
                 return new JSONObject(json).getString("chatId");
             }
         } finally {
@@ -273,6 +273,17 @@ public class ContactManager {
     }
 
     // ── Utility ───────────────────────────────────────────────────────────────
+
+    /** InputStream#readAllBytes() requires API 33; minSdk is 26, so read manually. */
+    private static byte[] readAllBytesCompat(InputStream is) throws java.io.IOException {
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = is.read(chunk)) != -1) {
+            buf.write(chunk, 0, n);
+        }
+        return buf.toByteArray();
+    }
 
     private String getMyDisplayName() {
         // Custom-token auth never sets Firebase displayName — read from SharedPreferences
