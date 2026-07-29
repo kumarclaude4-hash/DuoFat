@@ -542,6 +542,58 @@ public final class BackupManager {
                 Log.d(TAG, "syncIncremental: wrote " + written + "/" + total
                         + " (" + failed + " failed)");
 
+                // Also sync contacts/groups on every incremental run — otherwise new contacts
+                // added after the first full backup are never cloud-backed until a manual sync.
+                try {
+                    AppDatabase rdb = AppDatabase.getInstance(ctx);
+                    List<Contact> contacts = rdb.contactDao().getAll();
+                    if (contacts != null && !contacts.isEmpty()) {
+                        for (Contact c : contacts) {
+                            if (c.uid == null) continue;
+                            String encName = encMeta(key, c.displayName);
+                            if (encName == null) continue;
+                            Map<String, Object> cdoc = new HashMap<>();
+                            cdoc.put("partnerUid",     c.uid);
+                            cdoc.put("displayName",    encName);
+                            cdoc.put("encMeta",        true);
+                            cdoc.put("conversationId", c.conversationId != null ? c.conversationId : "");
+                            fdb.collection(COL_BACKUPS).document(uid)
+                               .collection(COL_CONTACTS).document(c.uid)
+                               .set(cdoc);
+                        }
+                    }
+                    List<com.duoshield.app.models.Group> groups = rdb.groupDao().getAllGroups();
+                    if (groups != null && !groups.isEmpty()) {
+                        for (com.duoshield.app.models.Group g : groups) {
+                            List<String> memberUids = new ArrayList<>();
+                            try {
+                                List<com.duoshield.app.models.GroupMember> mems =
+                                        rdb.groupDao().getMembersOf(g.id);
+                                if (mems != null) {
+                                    for (com.duoshield.app.models.GroupMember m : mems) {
+                                        if (m.memberUid != null) memberUids.add(m.memberUid);
+                                    }
+                                }
+                            } catch (Exception ignored) {}
+                            String encGroupName = encMeta(key, g.name);
+                            if (encGroupName == null) continue;
+                            Map<String, Object> gdoc = new HashMap<>();
+                            gdoc.put("id",          g.id);
+                            gdoc.put("name",        encGroupName);
+                            gdoc.put("encMeta",     true);
+                            gdoc.put("createdBy",   g.createdBy != null ? g.createdBy : "");
+                            gdoc.put("createdAt",   g.createdAt);
+                            gdoc.put("members",     memberUids);
+                            fdb.collection(COL_BACKUPS).document(uid)
+                               .collection(COL_GROUPS).document(g.id)
+                               .set(gdoc);
+                        }
+                    }
+                    Log.d(TAG, "syncIncremental: queued contacts/groups backup");
+                } catch (Exception ce) {
+                    Log.w(TAG, "syncIncremental: contacts/groups backup error (non-fatal)", ce);
+                }
+
             } catch (Exception e) {
                 Log.e(TAG, "syncIncremental: unexpected error", e);
                 logEvent(uid, "backup_failed", written, e.getMessage());
@@ -727,43 +779,76 @@ public final class BackupManager {
         executor.execute(() -> {
             try {
                 FirebaseFirestore fdb = FirebaseFirestore.getInstance();
-                final Object lock = new Object();
-                final com.google.firebase.firestore.QuerySnapshot[] holder = {null};
-
-                fdb.collection(COL_BACKUPS).document(uid)
-                   .collection(COL_MSGS)
-                   .whereLessThan("ts", cutoff)
-                   .limit(500)
-                   .get()
-                   .addOnSuccessListener(snap -> {
-                       synchronized (lock) { holder[0] = snap; lock.notifyAll(); }
-                   })
-                   .addOnFailureListener(e -> {
-                       Log.w(TAG, "cleanupOldBackups: fetch failed: " + e.getMessage());
-                       synchronized (lock) { lock.notifyAll(); }
-                   });
-
-                synchronized (lock) { if (holder[0] == null) lock.wait(15_000); }
-
-                if (holder[0] == null || holder[0].isEmpty()) {
-                    Log.d(TAG, "cleanupOldBackups: nothing older than 90 days to clean up");
-                    return;
-                }
-
                 Map<String, Object> patch = new HashMap<>();
                 patch.put("isDeleted", true);
-                com.google.firebase.firestore.WriteBatch batch = fdb.batch();
-                int count = 0;
-                for (DocumentSnapshot doc : holder[0].getDocuments()) {
-                    batch.set(doc.getReference(), patch, SetOptions.merge());
-                    count++;
+                int totalDeleted = 0;
+
+                // Loop through all old docs using cursor pagination so we never re-scan
+                // already-processed pages.  No composite index needed — single-field
+                // inequality on "ts" ordered by "ts" is covered by the automatic index.
+                DocumentSnapshot cursor = null;
+                while (true) {
+                    final Object lock = new Object();
+                    final com.google.firebase.firestore.QuerySnapshot[] holder = {null};
+
+                    com.google.firebase.firestore.Query q =
+                            fdb.collection(COL_BACKUPS).document(uid)
+                               .collection(COL_MSGS)
+                               .whereLessThan("ts", cutoff)
+                               .orderBy("ts")
+                               .limit(500);
+                    if (cursor != null) q = q.startAfter(cursor);
+
+                    q.get()
+                     .addOnSuccessListener(snap -> {
+                         synchronized (lock) { holder[0] = snap; lock.notifyAll(); }
+                     })
+                     .addOnFailureListener(e -> {
+                         Log.w(TAG, "cleanupOldBackups: fetch failed: " + e.getMessage());
+                         synchronized (lock) { lock.notifyAll(); }
+                     });
+
+                    synchronized (lock) { if (holder[0] == null) lock.wait(15_000); }
+
+                    if (holder[0] == null || holder[0].isEmpty()) break;
+
+                    List<DocumentSnapshot> docs = holder[0].getDocuments();
+                    com.google.firebase.firestore.WriteBatch batch = fdb.batch();
+                    int count = 0;
+                    for (DocumentSnapshot doc : docs) {
+                        // Only soft-delete docs that aren't already marked deleted
+                        Boolean already = doc.getBoolean("isDeleted");
+                        if (!Boolean.TRUE.equals(already)) {
+                            batch.set(doc.getReference(), patch, SetOptions.merge());
+                            count++;
+                        }
+                    }
+
+                    if (count > 0) {
+                        final boolean[] committed = {false};
+                        final Object bLock = new Object();
+                        batch.commit()
+                             .addOnSuccessListener(v -> { synchronized (bLock) { committed[0] = true; bLock.notifyAll(); } })
+                             .addOnFailureListener(e -> {
+                                 Log.w(TAG, "cleanupOldBackups: batch commit failed: " + e.getMessage());
+                                 synchronized (bLock) { bLock.notifyAll(); }
+                             });
+                        synchronized (bLock) { if (!committed[0]) bLock.wait(15_000); }
+                        if (!committed[0]) break; // commit failed — stop to avoid infinite retry
+                        totalDeleted += count;
+                        Log.d(TAG, "cleanupOldBackups: soft-deleted " + count
+                                + " docs (running total=" + totalDeleted + ")");
+                    }
+
+                    if (docs.size() < 500) break; // last page — done
+                    cursor = docs.get(docs.size() - 1);
                 }
-                int finalCount = count;
-                batch.commit()
-                     .addOnSuccessListener(v ->
-                         Log.d(TAG, "cleanupOldBackups: soft-deleted " + finalCount + " docs older than 90 days"))
-                     .addOnFailureListener(e ->
-                         Log.w(TAG, "cleanupOldBackups: batch commit failed: " + e.getMessage()));
+
+                if (totalDeleted == 0) {
+                    Log.d(TAG, "cleanupOldBackups: nothing older than 90 days to clean up");
+                } else {
+                    Log.d(TAG, "cleanupOldBackups: finished — total soft-deleted=" + totalDeleted);
+                }
 
             } catch (Exception e) {
                 Log.e(TAG, "cleanupOldBackups: unexpected error", e);
@@ -1133,6 +1218,9 @@ public final class BackupManager {
         o.put("reaction",      nvl(m.getReaction()));
         o.put("status",        nvl(m.getStatus()));
         o.put("isDeleted",     m.isDeleted());
+        o.put("forwarded",     m.isForwarded());
+        o.put("edited",        m.isEdited());
+        o.put("starred",       m.starred);
         return o.toString();
     }
 
@@ -1161,6 +1249,11 @@ public final class BackupManager {
         if (react != null && !react.isEmpty())  m.setReaction(react);
         if (stat  != null && !stat.isEmpty())   m.setStatus(stat);
         if (mKey  != null && !mKey.isEmpty())   m.setMediaKey(mKey);
+
+        // Fields added in later Room versions — default to false for legacy docs
+        m.setForwarded(o.optBoolean("forwarded", false));
+        m.setEdited(o.optBoolean("edited",       false));
+        m.starred = o.optBoolean("starred",      false);
 
         return m;
     }
