@@ -367,7 +367,16 @@ export default {
         const r2Size = r2Head.size ?? 0;
         await env.HOT_BUCKET.delete(key).catch(() => {});
         if (r2Size > 0) ctx.waitUntil(adjustR2(env, -r2Size));
-        // No need to touch B2 — a file in R2 hasn't been migrated yet.
+        // Race guard: the nightly migration PUTs to B2 and THEN deletes from R2
+        // as two separate steps. If a client DELETE lands in that gap, the file
+        // briefly exists in both tiers and this branch (R2-present) runs, which
+        // would otherwise leave an orphaned copy in B2 forever. Fire a best-effort
+        // B2 delete alongside — a 404 (object never migrated) is a normal, cheap
+        // no-op, so this is safe to do unconditionally without checking B2 first.
+        const b2 = getB2Client(env);
+        ctx.waitUntil(
+          b2.fetch(b2Url(env, key), { method: 'DELETE' }).catch(() => {})
+        );
       } else {
         // File is not in R2 → it must have been migrated to B2 (cold tier).
         // B2 counter is reconciled nightly by the cron — no KV write here.
