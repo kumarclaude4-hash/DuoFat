@@ -435,7 +435,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         h.voiceNoteContainer.setVisibility(View.GONE);
         h.replyPreviewContainer.setVisibility(View.GONE);
         h.reactionText.setVisibility(View.GONE);
-        if (h.replyAuthorText != null) h.replyAuthorText.setVisibility(View.GONE);
+        if (h.replyAuthorText   != null) h.replyAuthorText.setVisibility(View.GONE);
+        if (h.mediaCaptionText  != null) h.mediaCaptionText.setVisibility(View.GONE);
+        if (h.mediaGridContainer != null) h.mediaGridContainer.setVisibility(View.GONE);
         h.senderLabel.setVisibility(View.GONE);
         h.pinIndicatorRow.setVisibility(View.GONE);
         h.linkPreviewCard.setVisibility(View.GONE);
@@ -649,6 +651,15 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 }
             });
 
+        } else if (msg.getMediaItems() != null && !msg.getMediaItems().isEmpty()) {
+            // ── Multi-media album grid ────────────────────────────────
+            float density = ctx.getResources().getDisplayMetrics().density;
+            h.bubble.setPadding(0, 0, (int)(6 * density), (int)(7 * density));
+            if (h.mediaGridContainer != null) {
+                h.mediaGridContainer.setVisibility(View.VISIBLE);
+                bindMediaGrid(h, msg, ctx);
+            }
+
         } else if (msg.getMediaUrl() != null && !msg.getMediaUrl().isEmpty()) {
             // Media goes edge-to-edge — remove start/top/end padding, keep bottom for timestamp
             float density = ctx.getResources().getDisplayMetrics().density;
@@ -700,6 +711,22 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.textView.setVisibility(View.VISIBLE);
             h.textView.setText(msg.getText());
             bindLinkPreview(h, msg, ctx);
+        }
+
+        // ── Media caption (photo / video / album) ───────────────────
+        if (h.mediaCaptionText != null) {
+            String cap = msg.getCaption();
+            if (cap != null && !cap.isEmpty()) {
+                h.mediaCaptionText.setText(cap);
+                h.mediaCaptionText.setVisibility(View.VISIBLE);
+                // Restore horizontal padding so caption text has breathing room
+                if (h.bubble.getPaddingStart() == 0) {
+                    float d = h.itemView.getContext().getResources().getDisplayMetrics().density;
+                    h.bubble.setPadding((int)(4 * d), 0, (int)(8 * d), (int)(7 * d));
+                }
+            } else {
+                h.mediaCaptionText.setVisibility(View.GONE);
+            }
         }
 
         // ── Edited label ────────────────────────────────────────────
@@ -840,6 +867,85 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
      * (0f–1f). Called on every playback progress tick (~200ms) for a smooth,
      * "breathing" expand/contract rather than a discrete jump.
      */
+    // ── Multi-media album grid binding ──────────────────────────────────────
+    private void bindMediaGrid(MsgViewHolder h, Message msg, Context ctx) {
+        if (h.gridImg1 == null) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(msg.getMediaItems());
+            int count = arr.length();
+
+            ImageView[] slots  = { h.gridImg1, h.gridImg2, h.gridImg3, h.gridImg4 };
+            // Show only as many rows as needed
+            android.view.ViewGroup row2 = (android.view.ViewGroup)
+                    h.mediaGridContainer.getChildAt(2); // second LinearLayout row
+
+            boolean showRow2 = count > 2;
+            if (row2 != null) row2.setVisibility(showRow2 ? View.VISIBLE : View.GONE);
+            // The gap View between rows is at index 1
+            h.mediaGridContainer.getChildAt(1).setVisibility(showRow2 ? View.VISIBLE : View.GONE);
+
+            for (int i = 0; i < 4; i++) {
+                if (i >= count) {
+                    slots[i].setVisibility(View.GONE);
+                    if (i == 3 && h.tvGridMore != null) h.tvGridMore.setVisibility(View.GONE);
+                    continue;
+                }
+                slots[i].setVisibility(View.VISIBLE);
+                org.json.JSONObject item = arr.getJSONObject(i);
+                String url  = item.optString("url", null);
+                String key  = item.optString("key", null);
+                final ImageView slot = slots[i];
+                slot.setTag(url);
+
+                if (i == 3 && count > 4 && h.tvGridMore != null) {
+                    h.tvGridMore.setText("+" + (count - 4));
+                    h.tvGridMore.setVisibility(View.VISIBLE);
+                }
+
+                if (url == null) continue;
+                if (com.duoshield.app.util.B2StorageHelper.isB2Path(url)) {
+                    byte[] cached = com.duoshield.app.util.B2StorageHelper.getCached(url);
+                    if (cached != null) {
+                        Glide.with(ctx).load(cached).centerCrop().into(slot);
+                    } else {
+                        Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(slot);
+                        final String finalUrl = url;
+                        final String finalKey = key;
+                        com.duoshield.app.util.B2StorageHelper.loadMedia(ctx, url, key,
+                            new com.duoshield.app.util.B2StorageHelper.MediaCallback() {
+                                @Override public void onLoaded(byte[] plainBytes) {
+                                    if (finalUrl.equals(slot.getTag())) {
+                                        Glide.with(ctx).load(plainBytes).centerCrop().into(slot);
+                                    }
+                                }
+                                @Override public void onError(Exception e) {}
+                            });
+                    }
+                } else {
+                    Glide.with(ctx).load(url).placeholder(R.drawable.ic_image)
+                         .centerCrop().into(slot);
+                }
+            }
+
+            // Tap any slot → open gallery (first image for simplicity)
+            String firstUrl = arr.getJSONObject(0).optString("url", null);
+            String firstKey = arr.getJSONObject(0).optString("key", null);
+            for (int i = 0; i < Math.min(count, 4); i++) {
+                int fi = i;
+                String iUrl = arr.getJSONObject(fi).optString("url", null);
+                String iKey = arr.getJSONObject(fi).optString("key", null);
+                slots[i].setOnClickListener(v -> {
+                    Intent intent = new Intent(ctx, com.duoshield.app.FullScreenImageActivity.class);
+                    intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, iUrl);
+                    intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MEDIA_KEY, iKey);
+                    ctx.startActivity(intent);
+                });
+            }
+        } catch (org.json.JSONException e) {
+            android.util.Log.w("MessageAdapter", "bindMediaGrid: bad JSON — " + e.getMessage());
+        }
+    }
+
     public static void applyBreathingAmplitude(View bubbleView, float amplitude) {
         if (bubbleView == null) return;
         float clamped = Math.max(0f, Math.min(1f, amplitude));
@@ -886,9 +992,17 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                      linkPreviewDomain, linkPreviewTitle,
                      tvSeenAt;
         TextView     voiceAvatarInitial, voiceSpeedPill;
+        /** Caption text shown beneath a photo, video, or album bubble. */
+        TextView     mediaCaptionText;
+        /** "+N more" overlay on the 4th cell of a media grid. */
+        TextView     tvGridMore;
         ImageView    imageView, videoThumbnail, videoPlayBtn,
                      tickIcon, starIcon, voicePlayPauseBtn, linkPreviewImage, voiceAvatarImg;
+        /** Four slots for multi-media album grid (2×2). */
+        ImageView    gridImg1, gridImg2, gridImg3, gridImg4;
         LinearLayout bubble, voiceNoteContainer, pinIndicatorRow, linkPreviewCard;
+        /** Container for the 2×2 album grid. */
+        LinearLayout mediaGridContainer;
         FrameLayout  bubbleWrapper, voiceTrailingSlot;
         View         videoContainer, contactCardContainer, replyPreviewContainer, forwardedLabel;
         WaveformView voiceWaveform;
@@ -932,6 +1046,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             linkPreviewDomain     = v.findViewById(R.id.linkPreviewDomain);
             linkPreviewTitle      = v.findViewById(R.id.linkPreviewTitle);
             tvSeenAt              = v.findViewById(R.id.tvSeenAt);
+            // Media caption + grid
+            mediaCaptionText      = v.findViewById(R.id.mediaCaptionText);
+            mediaGridContainer    = v.findViewById(R.id.mediaGridContainer);
+            gridImg1              = v.findViewById(R.id.gridImg1);
+            gridImg2              = v.findViewById(R.id.gridImg2);
+            gridImg3              = v.findViewById(R.id.gridImg3);
+            gridImg4              = v.findViewById(R.id.gridImg4);
+            tvGridMore            = v.findViewById(R.id.tvGridMore);
         }
     }
 

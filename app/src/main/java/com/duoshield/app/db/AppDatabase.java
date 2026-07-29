@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 21
+    version = 22
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -82,7 +82,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21)
+                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
             .build();
     }
 
@@ -272,6 +272,15 @@ public abstract class AppDatabase extends RoomDatabase {
     };
 
     // v21: Add forwarded column to messages — tracks messages forwarded from other conversations.
+    static final Migration MIGRATION_21_22 = new Migration(21, 22) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            // caption: text caption shown beneath a photo/video in the same bubble
+            db.execSQL("ALTER TABLE messages ADD COLUMN caption TEXT NOT NULL DEFAULT ''");
+            // media_items: JSON array for multi-photo/video album messages
+            db.execSQL("ALTER TABLE messages ADD COLUMN media_items TEXT");
+        }
+    };
+
     static final Migration MIGRATION_20_21 = new Migration(20, 21) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN forwarded INTEGER NOT NULL DEFAULT 0");

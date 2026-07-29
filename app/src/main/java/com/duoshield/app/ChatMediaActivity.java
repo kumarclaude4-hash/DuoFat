@@ -155,10 +155,20 @@ public class ChatMediaActivity extends BaseActivity {
     // Chat views
     private EditText     messageInput;
     private ImageView    sendButton, uploadButton, micButton, btnCameraInline;
-    private android.view.View cameraButtonContainer;
     private ProgressBar  uploadProgress;
     private View         uploadProgressContainer;
     private android.widget.TextView tvUploadPct;
+    private ImageView    ivUploadThumb;
+    private View         uploadThumbDim, uploadPlainBg;
+    // Multi-media album upload state
+    private final Object multiUploadLock = new Object();
+    private final java.util.concurrent.atomic.AtomicInteger pendingMultiCompleted =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.List<String[]> pendingMultiItems = new java.util.ArrayList<>();
+    private int    pendingMultiTotal   = 0;
+    private String pendingMultiCaption = null;
+    // Emoji keyboard
+    private com.duoshield.app.ui.EmojiKeyboardHelper emojiHelper;
     private RecyclerView recyclerView;
     private LinearLayout typingIndicatorRow;
     private TextView     typingIndicator;
@@ -412,11 +422,16 @@ public class ChatMediaActivity extends BaseActivity {
         uploadButton          = findViewById(R.id.uploadButton);
         micButton             = findViewById(R.id.micButton);
         btnCameraInline       = findViewById(R.id.btnCameraInline);
-        cameraButtonContainer = findViewById(R.id.cameraButtonContainer);
         ImageView emojiButton = findViewById(R.id.emojiButton);
         uploadProgress          = findViewById(R.id.uploadProgress);
         uploadProgressContainer = findViewById(R.id.uploadProgressContainer);
         tvUploadPct             = findViewById(R.id.tvUploadPct);
+        ivUploadThumb           = findViewById(R.id.ivUploadThumb);
+        uploadThumbDim          = findViewById(R.id.uploadThumbDim);
+        uploadPlainBg           = findViewById(R.id.uploadPlainBg);
+        if (emojiButton != null) {
+            emojiHelper = new com.duoshield.app.ui.EmojiKeyboardHelper(this, messageInput);
+        }
         recyclerView        = findViewById(R.id.messageRecycler);
         typingIndicatorRow  = findViewById(R.id.typingIndicatorRow);
         typingIndicator     = findViewById(R.id.typingIndicator);
@@ -589,10 +604,23 @@ public class ChatMediaActivity extends BaseActivity {
         micButton.setOnClickListener(v -> startVoiceRecording());
         if (btnCameraInline != null) btnCameraInline.setOnClickListener(v -> launchCameraCapture());
         if (emojiButton     != null) emojiButton.setOnClickListener(v -> {
-            messageInput.requestFocus();
-            android.view.inputmethod.InputMethodManager imm =
-                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-            if (imm != null) imm.showSoftInput(messageInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+            if (emojiHelper != null) {
+                if (emojiHelper.isShowing()) {
+                    emojiHelper.dismiss();
+                    // Re-show keyboard
+                    messageInput.requestFocus();
+                    android.view.inputmethod.InputMethodManager imm =
+                        (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                    if (imm != null) imm.showSoftInput(messageInput,
+                            android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                } else {
+                    // Hide soft keyboard first, then show emoji panel
+                    android.view.inputmethod.InputMethodManager imm =
+                        (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                    if (imm != null) imm.hideSoftInputFromWindow(messageInput.getWindowToken(), 0);
+                    emojiHelper.show();
+                }
+            }
         });
         if (cancelReplyBtn  != null) cancelReplyBtn.setOnClickListener(v -> clearReplyMode());
         if (cancelRecordingBtn != null) cancelRecordingBtn.setOnClickListener(v -> cancelVoiceRecording());
@@ -606,8 +634,8 @@ public class ChatMediaActivity extends BaseActivity {
                 boolean hasText = s.length() > 0;
                 sendButton.setVisibility(hasText ? View.VISIBLE : View.GONE);
                 micButton.setVisibility(hasText  ? View.GONE   : View.VISIBLE);
-                if (cameraButtonContainer != null)
-                    cameraButtonContainer.setVisibility(hasText ? View.GONE : View.VISIBLE);
+                if (btnCameraInline != null)
+                    btnCameraInline.setVisibility(hasText ? View.GONE : View.VISIBLE);
             }
         });
 

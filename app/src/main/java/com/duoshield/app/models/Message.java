@@ -35,6 +35,23 @@ public class Message {
     @ColumnInfo(name = "forwarded", defaultValue = "0")  public boolean forwarded;
 
     /**
+     * Optional caption for photo/video messages — shown below the media in the bubble.
+     * Empty string means no caption.
+     */
+    @ColumnInfo(name = "caption", defaultValue = "")  public String caption;
+    public String getCaption()     { return caption != null ? caption : ""; }
+    public void   setCaption(String v) { caption = v; }
+
+    /**
+     * JSON array of media items for multi-photo/video messages, e.g.:
+     * [{"url":"b2:...","key":"base64","type":"image"}, ...]
+     * Null for single-media and text messages.
+     */
+    @ColumnInfo(name = "media_items")  public String mediaItems;
+    public String getMediaItems()      { return mediaItems; }
+    public void   setMediaItems(String v) { mediaItems = v; }
+
+    /**
      * Total voice-note duration in milliseconds, known at record time and stored
      * so the bubble can show the real length at rest (before playback starts)
      * instead of a static placeholder.

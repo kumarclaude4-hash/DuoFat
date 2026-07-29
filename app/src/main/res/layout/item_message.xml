@@ -177,22 +177,127 @@
                     android:background="#FF0D1825"
                     android:contentDescription="Video"/>
 
+                <!-- WhatsApp-style play button: compact 44dp filled circle -->
                 <FrameLayout
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
                     android:layout_gravity="center"
                     android:background="@drawable/bg_video_play_circle_lg">
 
                     <ImageView
                         android:id="@+id/videoPlayBtn"
-                        android:layout_width="28dp"
-                        android:layout_height="28dp"
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
                         android:layout_gravity="center"
+                        android:layout_marginStart="2dp"
                         android:src="@drawable/ic_play_video"
                         app:tint="#FFFFFFFF"
                         android:contentDescription="Play video"/>
                 </FrameLayout>
             </FrameLayout>
+
+            <!-- Multi-media grid (2×2 album) — shown when mediaItems JSON is non-null -->
+            <LinearLayout
+                android:id="@+id/mediaGridContainer"
+                android:layout_width="230dp"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_media_rounded"
+                android:clipToOutline="true"
+                android:outlineProvider="background"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="112dp"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/gridImg1"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:scaleType="centerCrop"
+                        android:contentDescription="Photo 1"/>
+
+                    <View
+                        android:layout_width="2dp"
+                        android:layout_height="match_parent"
+                        android:background="@color/background"/>
+
+                    <ImageView
+                        android:id="@+id/gridImg2"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:scaleType="centerCrop"
+                        android:contentDescription="Photo 2"/>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="2dp"
+                    android:background="@color/background"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="112dp"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:id="@+id/gridImg3"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:scaleType="centerCrop"
+                        android:contentDescription="Photo 3"/>
+
+                    <View
+                        android:layout_width="2dp"
+                        android:layout_height="match_parent"
+                        android:background="@color/background"/>
+
+                    <FrameLayout
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1">
+
+                        <ImageView
+                            android:id="@+id/gridImg4"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:scaleType="centerCrop"
+                            android:contentDescription="Photo 4"/>
+
+                        <!-- "+N more" overlay when there are more than 4 photos -->
+                        <TextView
+                            android:id="@+id/tvGridMore"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:gravity="center"
+                            android:background="#BB000000"
+                            android:textColor="#FFFFFF"
+                            android:textSize="22sp"
+                            android:textStyle="bold"
+                            android:fontFamily="sans-serif-medium"
+                            android:visibility="gone"/>
+                    </FrameLayout>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Media caption — shown beneath a photo, video, or album in the same bubble -->
+            <TextView
+                android:id="@+id/mediaCaptionText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="14.5sp"
+                android:textColor="@color/ds_text_primary"
+                android:lineSpacingExtra="1.5dp"
+                android:paddingTop="7dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:maxWidth="230dp"
+                android:visibility="gone"/>
 
             <!-- Contact card -->
             <LinearLayout
