@@ -285,7 +285,7 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
                                 saveDisplayNameToFirebase(displayName);
                             }
                             // Register identity so other users can look this account
-                            // up by its DS-ID in ContactManager.addContact().
+                            // up by its User ID in ContactManager.addContact().
                             // RestoreFromSeedActivity does this correctly; new-account
                             // creation was missing this write — nobody could ever be
                             // found until it was added here.

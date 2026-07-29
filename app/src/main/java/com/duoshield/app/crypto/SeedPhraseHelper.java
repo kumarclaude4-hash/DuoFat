@@ -31,7 +31,7 @@ import javax.crypto.spec.SecretKeySpec;
  *   <li>{@link #validateMnemonic(String)} — verify checksum and word membership.</li>
  *   <li>{@link #mnemonicToSeed(String)} — PBKDF2-SHA512 (BIP39 standard) → 64-byte seed.</li>
  *   <li>{@link #deriveIdentityKeyPair(byte[])} — first 32 seed bytes → Curve25519 IdentityKeyPair.</li>
- *   <li>{@link #deriveUserId(byte[])} — SHA-256(seed) first 4 bytes → "DS-XXXXXXXX".</li>
+ *   <li>{@link #deriveUserId(byte[])} — SHA-256(seed) first 8 bytes → Base32 → "XXXXX-XXXXX-XXX".</li>
  * </ol>
  *
  * <h3>Security invariants</h3>

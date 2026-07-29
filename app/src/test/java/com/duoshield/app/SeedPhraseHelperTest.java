@@ -154,11 +154,15 @@ public class SeedPhraseHelperTest {
         byte[] seed = SeedPhraseHelper.mnemonicToSeed(mnemonic);
         String userId = SeedPhraseHelper.deriveUserId(seed);
         assertNotNull("userId must not be null", userId);
-        assertTrue("userId must start with 'DS-'", userId.startsWith("DS-"));
-        assertEquals("userId must be 11 chars total (DS- + 8 hex)", 11, userId.length());
-        String hex = userId.substring(3);
-        assertTrue("hex part must be uppercase", hex.equals(hex.toUpperCase()));
-        assertTrue("hex part must match [0-9A-F]+", hex.matches("[0-9A-F]+"));
+        // Current format: 13 Base32 chars (unambiguous alphabet, no O/I/L/0/1) grouped
+        // as XXXXX-XXXXX-XXX, e.g. "K3MNP-Q8RXA-7BC". This replaced the old
+        // "DS-XXXXXXXX" hex format — must stay in sync with SeedPhraseHelper.deriveUserId()
+        // and the acceptance regex in AddContactActivity.
+        assertEquals("userId must be 15 chars total (5+1+5+1+3)", 15, userId.length());
+        assertTrue("userId must match XXXXX-XXXXX-XXX Base32 format",
+                userId.matches("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}"));
+        assertFalse("Base32 alphabet must exclude ambiguous chars O, I, L, 0, 1",
+                userId.matches(".*[OIL01].*"));
         System.out.println("Derived userId: [REDACTED — format OK]");
     }
 

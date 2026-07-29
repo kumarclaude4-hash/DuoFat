@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
  * Replaces PairingManager with a multi-contact flow.
  *
  * Add-contact flow:
- *  1. Resolve partner DS-XXXXXXXX → Firebase UID via identities/{userId}.uid
+ *  1. Resolve partner User ID (e.g. XXXXX-XXXXX-XXX) → Firebase UID via identities/{userId}.uid
  *  2. Upload own displayName to users/{myUid}
  *  3. Fetch partner displayName from users/{partnerUid} (8 retries / 2-second backoff)
  *  4. chatId = SHA-256(smaller_uid + "/" + larger_uid) — deterministic, identical on both devices
@@ -71,7 +71,7 @@ public class ContactManager {
     // ── Public entry point ────────────────────────────────────────────────────
 
     /**
-     * Add a contact by their DuoShield User ID (e.g. DS-A1B2C3D4).
+     * Add a contact by their DuoShield User ID (e.g. K3MNP-Q8RXA-7BC).
      * Safe to call from the UI thread — all Firestore work is async.
      */
     public void addContact(String partnerId, ContactCallback callback) {
