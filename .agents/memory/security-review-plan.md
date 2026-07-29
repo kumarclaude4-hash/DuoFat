@@ -46,16 +46,18 @@ Source reports: `attached_assets/DuoShield_Code_Review_Report_(6)_1783403471815.
 - **F21** "Delete for everyone" gated on `mine` in UI; Firestore message update rule restricts `deletedForAll` to sender only — ⚠️ rules file updated but NOT yet deployed (needs `firebase deploy --only firestore:rules`)
 - **F37** MediaStoreWipeHelper.java: recordUri() tracks gallery saves; wipeAll() deletes them; called from WipeHelper.wipeAll() and DuressManager.performLogout() before prefs clear
 - **F42** MODIFIED listener + deleteForEveryone() show "⛔ Message deleted" tombstone via adapter.updateMessage() + messageDao().updateText() instead of silent removal
+- **F2** (verified 2026-07-29) Identity front-running closed — server `/mintToken` claims `identities/{userId}` inside a Firestore transaction before minting the custom token; no window between "account doesn't exist" and "identity bound"
+- **F3** (verified 2026-07-29) Group key rotation on member removal shipped — `GroupChatActivity.showGroupInfoSheet()`/`removeMemberAndRotateKey()` + server `/removeGroupMember` (creator-only, atomic array-remove + key-doc delete) + fresh AES key redistributed to remaining members via Signal
+- **F5** (verified 2026-07-29) Contact/group backup metadata (displayName, group name) AES-256-GCM encrypted via `BackupManager.encMeta()`/`decMeta()` before leaving the device; legacy plaintext docs still decode via fallback
+- **F8** (verified 2026-07-29) Relay-only calling shipped — `switchRelayOnlyCalls` in SecurityPrivacySettingsActivity toggles `relay_only_calls_enabled`; CallManager reads it and sets `IceTransportsType.RELAY` vs `ALL`
+- **F12** (verified 2026-07-29) Link preview fetch proxied server-side — `LinkPreviewFetcher` posts to push-server `/linkPreview` with a Firebase ID token; client/target never talk directly
+- **F15** (verified 2026-07-29) Chat export switched from PDF to plaintext `.txt` with a mandatory "unencrypted, will be removed" warning dialog (`ExportHelper`); `TempFileCleaner` deletes `duoshield_export_*` files after 5 min
 
-## Confirmed OPEN (lower priority / architectural) — re-verified 2026-07-29
-- **F2** Identity front-running window during new-account onboarding
-- **F3** No group key rotation on member removal (no removal feature yet)
-- **F5** Plaintext contact/group metadata in cloud backups (displayName etc. stored unencrypted in `backups/{uid}/contacts`)
+## Confirmed OPEN (lower priority / architectural)
 - **F6** No contact-consent gate (chats created server-side via /createChat; calls still possible without consent)
-- **F8** No relay-only calling option — `CallManager` sets `iceTransportsType = ALL`, not RELAY; IP still exposed to call partner
-- **F12** Link preview auto-fetch leaks user IP to target server (LinkPreviewFetcher/LinkPreviewHelper still fetch directly)
-- **F15** Plaintext chat-export PDF persists in storage (ExportHelper)
 - **F34** RestoreFromSeedActivity.migrateOldUidViaServer() exists and looks functional — re-audit for correctness before closing (not verified line-by-line this pass)
+
+**Note:** this file previously lagged the actual code — F2/F3/F5/F8/F12/F15 were already fixed and tagged in-code (`// F<n> fix`) before this memory entry was updated. When in doubt, grep the codebase for the finding tag rather than trusting this list at face value.
 
 ## Implementation Rules
 1. Every code change cross-checked by a review subagent — non-negotiable
