@@ -75,3 +75,4 @@
 - [DuoShield skeleton layout](duoshield-skeleton-layout.md) — item_conversation_skeleton.xml is actively used by shimmerContainer in ConversationListActivity; must not be deleted; references skeleton_circle + skeleton_rect drawables
 - [DuoShield forwarded messages](duoshield-forwarded-messages.md) — Message.forwarded (Room v21 col); MessageBuilder 8-arg overloads; ForwardMessageHelper sets flag (no text prefix); ChatMediaActivity reads "forwarded" field from Firestore
 - [DuoShield Cloudflare account ID mismatch](duoshield-cloudflare-account-mismatch.md) — wrangler auth error 10000 can mean CLOUDFLARE_ACCOUNT_ID secret ≠ token's real account, not just a scope issue; check `wrangler whoami` first
+- [DuoShield biometric lock removed](duoshield-biometric-removed.md) — biometric unlock fully deleted from app+UI+deps 2026-07-29; PIN is the only unlock method now, don't reintroduce without explicit ask
