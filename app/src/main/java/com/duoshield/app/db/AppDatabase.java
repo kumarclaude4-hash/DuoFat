@@ -75,6 +75,10 @@ public abstract class AppDatabase extends RoomDatabase {
     private static AppDatabase buildDatabase(Context appCtx, SupportFactory factory) {
         return Room.databaseBuilder(appCtx, AppDatabase.class, "duoshield_db")
             .openHelperFactory(factory)
+            // WAL mode: readers don't block the writer and vice-versa; yields
+            // significantly lower latency when Firestore callbacks write to Room
+            // while the UI thread reads (e.g. seeding the chat list on open).
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .addMigrations(
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                 MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,

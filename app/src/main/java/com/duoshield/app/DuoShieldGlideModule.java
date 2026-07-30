@@ -5,6 +5,7 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import com.bumptech.glide.GlideBuilder;
 import com.bumptech.glide.annotation.GlideModule;
+import com.bumptech.glide.load.engine.cache.DiskLruCacheFactory;
 import com.bumptech.glide.load.engine.cache.LruResourceCache;
 import com.bumptech.glide.load.engine.bitmap_recycle.LruBitmapPool;
 import com.bumptech.glide.load.DecodeFormat;
@@ -25,6 +26,10 @@ import com.bumptech.glide.request.RequestOptions;
  *       Fits ~120–250 decoded thumbnails — ample for a chat scroll session.</li>
  *   <li><b>Standard RAM (memoryClass &gt; 128 MB)</b>: 32 MB bitmap pool + 16 MB cache = 48 MB.</li>
  * </ul>
+ *
+ * <p>Disk cache: Glide's default is 250 MB. We cap at 150 MB (low-RAM: 75 MB) to leave
+ * headroom for B2StorageHelper's own disk cache and SQLCipher's WAL files. This still
+ * covers thousands of decoded thumbnails and keeps cold-scroll instant even without network.
  */
 @GlideModule
 public class DuoShieldGlideModule extends AppGlideModule {
@@ -36,6 +41,8 @@ public class DuoShieldGlideModule extends AppGlideModule {
     private static final int MEMORY_CACHE_MB_NORMAL = 16;
     private static final int BITMAP_POOL_MB_LOWRAM  = 16;
     private static final int MEMORY_CACHE_MB_LOWRAM = 8;
+    private static final int DISK_CACHE_MB_NORMAL   = 150;
+    private static final int DISK_CACHE_MB_LOWRAM   = 75;
     private static final long MB = 1024L * 1024L;
 
     @Override
@@ -45,9 +52,15 @@ public class DuoShieldGlideModule extends AppGlideModule {
 
         int bitmapPoolMb  = lowRam ? BITMAP_POOL_MB_LOWRAM  : BITMAP_POOL_MB_NORMAL;
         int memoryCacheMb = lowRam ? MEMORY_CACHE_MB_LOWRAM : MEMORY_CACHE_MB_NORMAL;
+        int diskCacheMb   = lowRam ? DISK_CACHE_MB_LOWRAM   : DISK_CACHE_MB_NORMAL;
 
         builder.setBitmapPool(new LruBitmapPool(bitmapPoolMb * MB));
         builder.setMemoryCache(new LruResourceCache(memoryCacheMb * MB));
+        // Explicit disk cache: Glide's default 250 MB competes with B2StorageHelper's own
+        // disk cache. Cap it here so total disk pressure stays predictable.
+        builder.setDiskCache(new DiskLruCacheFactory(
+                () -> new java.io.File(context.getCacheDir(), "glide_image_cache"),
+                diskCacheMb * MB));
 
         if (lowRam) {
             // RGB_565 uses 2 bytes/pixel vs ARGB_8888's 4 bytes — halves bitmap RAM

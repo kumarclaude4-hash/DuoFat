@@ -1481,6 +1481,8 @@ public class ChatMediaActivity extends BaseActivity {
                   if (lastReadMs > lastPartnerReadMs) {
                       lastPartnerReadMs = lastReadMs;
                       // Mark messages we sent whose timestamp <= lastReadMs as "read".
+                      // batchUpdateStatus() fires exactly one notifyItemChanged per row
+                      // instead of N separate adapter.updateMessage() calls — O(n) total.
                       final long readCutoff = lastReadMs;
                       List<Message> allMsgs = adapter.getMessages();
                       List<String> toUpdateRoom = new ArrayList<>();
@@ -1488,11 +1490,11 @@ public class ChatMediaActivity extends BaseActivity {
                           if (myUid != null && myUid.equals(m.getSender())
                                   && !"read".equals(m.getStatus())
                                   && m.getTimestamp() <= readCutoff) {
-                              adapter.updateMessage(m.getId(), upd -> upd.setStatus("read"));
                               if (m.getId() != null) toUpdateRoom.add(m.getId());
                           }
                       }
                       if (!toUpdateRoom.isEmpty()) {
+                          adapter.batchUpdateStatus(toUpdateRoom, "read");
                           dbExecutor.execute(() -> {
                               for (String id : toUpdateRoom) {
                                   AppDatabase.getInstance(ChatMediaActivity.this)
@@ -1901,10 +1903,8 @@ public class ChatMediaActivity extends BaseActivity {
                     }
                 }
                 if (!sentIds.isEmpty()) {
-                    // Update adapter immediately (optimistic UI)
-                    for (String sid : sentIds) {
-                        adapter.updateMessage(sid, msg -> msg.setStatus("delivered"));
-                    }
+                    // batchUpdateStatus: single notifyItemChanged per row vs N adapter.updateMessage() calls.
+                    adapter.batchUpdateStatus(sentIds, "delivered");
                     // Persist to Firestore so ticks survive app restarts
                     DeliveryReceiptHelper.markDeliveredByIds(conversationId, sentIds);
                 }

@@ -110,6 +110,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private final Map<String, String>        senderByMsgId  = new HashMap<>();
     /** O(1) msgId → adapter position lookup; built by rebuildDisplay() and kept in sync by appendMessage(). */
     private final Map<String, Integer>       positionById   = new HashMap<>();
+    /** O(1) msgId → Message object lookup; eliminates the O(n) linear scan in updateMessage(). */
+    private final Map<String, Message>       messagesById   = new HashMap<>();
     /** Timestamp of the last date-header boundary written; lets appendMessage() skip a full rebuildDisplay(). */
     private long                             lastHeaderTimestamp = -1;
     /** ID of the single outgoing message that should play bubble_fade_in on next bind. Cleared after one use. */
@@ -228,6 +230,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         }
         if (m.getId() != null) {
             positionById.put(m.getId(), displayItems.size()); // size() == next free index
+            messagesById.put(m.getId(), m);
             if (m.getSender() != null) senderByMsgId.put(m.getId(), m.getSender());
         }
         displayItems.add(m);
@@ -246,21 +249,42 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
      * the mutation is already visible in displayItems immediately. rebuildDisplay()
      * is intentionally NOT called — date separators do not change when a message
      * field changes. Only notifyItemChanged() for the exact position is needed.
+     *
+     * <p>O(1): uses the messagesById HashMap for direct lookup instead of a linear scan.
      */
     public void updateMessage(String msgId, java.util.function.Consumer<Message> mutator) {
         if (msgId == null || mutator == null) return;
-        for (Message msg : messages) {
-            if (msgId.equals(msg.getId())) {
-                mutator.accept(msg);
-                Integer pos = positionById.get(msgId);
-                if (pos != null) {
-                    notifyItemChanged(pos);
-                } else {
-                    // Safety fallback — shouldn't happen since positionById mirrors displayItems.
-                    notifyDataSetChanged();
-                }
-                return;
+        Message msg = messagesById.get(msgId);
+        if (msg != null) {
+            mutator.accept(msg);
+            Integer pos = positionById.get(msgId);
+            if (pos != null) {
+                notifyItemChanged(pos);
+            } else {
+                // Safety fallback — shouldn't happen since positionById mirrors displayItems.
+                notifyDataSetChanged();
             }
+        }
+    }
+
+    /**
+     * Batch-update the {@code status} field on multiple messages in a single pass.
+     *
+     * <p>Compared to calling {@link #updateMessage} N times, this fires exactly one
+     * {@code notifyItemChanged()} per affected position — avoiding N separate RecyclerView
+     * rebind dispatches when a burst of receipts arrives (e.g. "all sent → read" on chat open).
+     *
+     * @param ids    message IDs to update
+     * @param status new status string (e.g. {@code "read"}, {@code "delivered"})
+     */
+    public void batchUpdateStatus(List<String> ids, String status) {
+        if (ids == null || ids.isEmpty() || status == null) return;
+        for (String msgId : ids) {
+            Message msg = messagesById.get(msgId);
+            if (msg == null) continue;
+            msg.setStatus(status);
+            Integer pos = positionById.get(msgId);
+            if (pos != null) notifyItemChanged(pos);
         }
     }
 
@@ -355,6 +379,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         displayItems.clear();
         senderByMsgId.clear();
         positionById.clear();
+        messagesById.clear();
         lastHeaderTimestamp = -1;
         long prevHeaderTs = -1;
         for (Message m : messages) {
@@ -366,6 +391,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // Record the adapter position before adding the message to the list.
             if (m.getId() != null) {
                 positionById.put(m.getId(), displayItems.size());
+                messagesById.put(m.getId(), m);
                 // Build O(1) sender lookup for reply-author resolution in onBindViewHolder.
                 if (m.getSender() != null) senderByMsgId.put(m.getId(), m.getSender());
             }
