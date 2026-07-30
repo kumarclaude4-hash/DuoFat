@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
@@ -1705,5 +1706,206 @@ public final class B2StorageHelper {
                 throw new IOException("B2 stream-upload [" + code + "]: " + err);
             }
         });
+    }
+
+    // ── Streaming download + decrypt (large files — avoids full byte[] in memory) ──
+
+    /**
+     * Downloads raw encrypted bytes for {@code b2Path} directly to {@code dest} on disk,
+     * streaming the HTTP response body in {@link #BUFFER_SIZE}-byte chunks. Unlike
+     * {@link #downloadFile(String)}, this never holds the full encrypted blob in memory —
+     * safe for large videos where the full file could exceed available heap.
+     *
+     * <p>Uses the same routing priority as {@link #downloadFile(String)} (Worker → presigned
+     * URL → direct SigV4 GET). Call from a background thread.
+     */
+    public static void downloadFileToDisk(String b2Path, File dest) throws Exception {
+        if (!getWorkerUrl().isEmpty()) {
+            downloadViaWorkerToDisk(b2Path, dest);
+            return;
+        }
+        if (getKeyId().isEmpty()) {
+            downloadViaPublicUrlToDisk(b2Path, dest);
+            return;
+        }
+        downloadViaSigV4ToDisk(b2Path, dest);
+    }
+
+    /** Streams an OkHttp response body straight to disk — never buffers the whole thing. */
+    private static void streamResponseToFile(Response response, File dest) throws IOException {
+        ResponseBody body = response.body();
+        if (body == null) throw new IOException("Empty response body");
+        try (InputStream in = body.byteStream();
+             FileOutputStream out = new FileOutputStream(dest)) {
+            byte[] buf = new byte[BUFFER_SIZE];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        }
+    }
+
+    private static void downloadViaWorkerToDisk(String b2Path, File dest) throws Exception {
+        String objectKey = toObjectKey(b2Path);
+        String url       = getWorkerUrl() + "/" + objectKey;
+        withRetry("worker-download-disk:" + objectKey, () -> {
+            Request.Builder reqBuilder = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .header("X-Client-ID", getClientId());
+            String secret = getWorkerSecret();
+            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
+            Request request = reqBuilder.build();
+            try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200) {
+                    streamResponseToFile(response, dest);
+                    Log.d(TAG, "Worker stream-downloaded: " + objectKey + " (" + dest.length() + " B)");
+                    return null;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code == 404) throw new NonRetryableException(404, "File not found: " + objectKey);
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code, "Worker GET failed [" + code + "]: " + err);
+                throw new IOException("Worker GET failed [" + code + "]: " + err);
+            }
+        });
+    }
+
+    private static void downloadViaPublicUrlToDisk(String b2Path, File dest) throws Exception {
+        String objectKey = toObjectKey(b2Path);
+        withRetry("dl-presigned-disk:" + objectKey, () -> {
+            String presignedUrl = fetchPresignedGetUrl(objectKey);
+            Request request = new Request.Builder().url(presignedUrl).get().build();
+            try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200) {
+                    streamResponseToFile(response, dest);
+                    return null;
+                }
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code,
+                            "B2 presigned GET failed [" + code + "]: " + objectKey);
+                throw new IOException("B2 presigned GET failed [" + code + "]: " + objectKey);
+            }
+        });
+    }
+
+    private static void downloadViaSigV4ToDisk(String b2Path, File dest) throws Exception {
+        String objectKey = toObjectKey(b2Path);
+        String bucket    = getBucket();
+        String region    = getRegion();
+        String host      = "s3." + region + ".backblazeb2.com";
+
+        withRetry("download-disk:" + objectKey, () -> {
+            Date now         = new Date();
+            String dateStamp = utcFormat("yyyyMMdd", now);
+            String amzDate   = utcFormat("yyyyMMdd'T'HHmmss'Z'", now);
+            String urlStr    = getEndpoint() + "/" + bucket + "/" + objectKey;
+
+            String canonicalHeaders =
+                    "host:" + host + "\n"
+                    + "x-amz-content-sha256:" + EMPTY_BODY_HASH + "\n"
+                    + "x-amz-date:" + amzDate + "\n";
+            String signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+            String canonicalUri  = "/" + bucket + "/" + objectKey;
+
+            String canonicalRequest = "GET\n" + canonicalUri + "\n\n"
+                    + canonicalHeaders + "\n" + signedHeaders + "\n" + EMPTY_BODY_HASH;
+            String credentialScope = dateStamp + "/" + region + "/" + SERVICE + "/aws4_request";
+            String stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n"
+                    + credentialScope + "\n"
+                    + sha256Hex(canonicalRequest.getBytes(StandardCharsets.UTF_8));
+            byte[] signingKey   = getSigningKey(dateStamp, region);
+            String signature    = hmacSha256Hex(signingKey, stringToSign);
+            String authorization = "AWS4-HMAC-SHA256 Credential="
+                    + getKeyId() + "/" + credentialScope
+                    + ", SignedHeaders=" + signedHeaders
+                    + ", Signature=" + signature;
+
+            Request request = new Request.Builder()
+                    .url(urlStr)
+                    .get()
+                    .addHeader("Authorization",        authorization)
+                    .addHeader("x-amz-date",           amzDate)
+                    .addHeader("x-amz-content-sha256", EMPTY_BODY_HASH)
+                    .build();
+
+            try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 200) {
+                    streamResponseToFile(response, dest);
+                    return null;
+                }
+                ResponseBody errBody = response.body();
+                String err = errBody != null ? errBody.string() : "";
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code, "B2 download failed [" + code + "]: " + err);
+                throw new IOException("B2 download failed [" + code + "]: " + err);
+            }
+        });
+    }
+
+    /**
+     * AES-256-GCM decrypts {@code encFile} (format: {@code [12-byte IV | ciphertext | 16-byte
+     * tag]}) into {@code dest}, streaming through {@link CipherInputStream} so the full
+     * plaintext and ciphertext are never held in memory simultaneously — safe for files up to
+     * 500 MB. Inverse of {@link #encryptUriToFile}; also decrypts blobs produced by
+     * {@link #encryptForUpload(byte[])} since the on-wire format is identical.
+     */
+    public static void decryptFileToFile(File encFile, String keyBase64, File dest) throws Exception {
+        if (keyBase64 == null || keyBase64.isEmpty()) {
+            copyFile(encFile, dest);
+            return;
+        }
+        if (encFile.length() < GCM_IV_LEN + 16)
+            throw new IOException("Encrypted file too short: " + encFile.length());
+
+        byte[] decodedKey = Base64.decode(keyBase64, Base64.NO_WRAP);
+        SecretKey key = new SecretKeySpec(decodedKey, "AES");
+
+        try (FileInputStream fis = new FileInputStream(encFile)) {
+            byte[] iv = new byte[GCM_IV_LEN];
+            int read = 0;
+            while (read < GCM_IV_LEN) {
+                int n = fis.read(iv, read, GCM_IV_LEN - read);
+                if (n == -1) throw new IOException("Truncated file — missing IV");
+                read += n;
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LEN, iv));
+
+            try (CipherInputStream cis = new CipherInputStream(fis, cipher);
+                 FileOutputStream out = new FileOutputStream(dest)) {
+                byte[] buf = new byte[ENCRYPT_STREAM_CHUNK];
+                int n;
+                while ((n = cis.read(buf)) != -1) out.write(buf, 0, n);
+            }
+        }
+    }
+
+    private static void copyFile(File src, File dest) throws IOException {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dest)) {
+            byte[] buf = new byte[BUFFER_SIZE];
+            int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+        }
+    }
+
+    /**
+     * Downloads and decrypts {@code b2Path} directly to {@code dest} on disk, without ever
+     * holding the full file in memory. Combines {@link #downloadFileToDisk} and
+     * {@link #decryptFileToFile}, cleaning up the intermediate encrypted temp file even on
+     * failure. Call from a background thread.
+     */
+    public static void downloadAndDecryptToFile(String b2Path, String keyBase64, File dest)
+            throws Exception {
+        File tmp = File.createTempFile("b2dl_", ".enc", dest.getParentFile());
+        try {
+            downloadFileToDisk(b2Path, tmp);
+            decryptFileToFile(tmp, keyBase64, dest);
+        } finally {
+            tmp.delete();
+        }
     }
 }

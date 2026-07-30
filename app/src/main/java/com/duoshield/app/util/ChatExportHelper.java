@@ -10,8 +10,11 @@ import android.os.Looper;
 import android.util.Log;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.FileProvider;
 
 import com.duoshield.app.db.AppDatabase;
@@ -29,6 +32,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
@@ -60,6 +64,14 @@ import java.util.zip.ZipOutputStream;
  * into one sub-folder per sender rather than just two — the same per-sender
  * separation rule applies regardless of chat type. Category folders are only
  * created when they actually contain at least one file.
+ *
+ * <p>Each media file is streamed straight from B2 to disk and decrypted in
+ * place (see {@link B2StorageHelper#downloadAndDecryptToFile}) — the full
+ * plaintext of a large video is never held in memory at once, mirroring the
+ * streaming guarantee already made on the upload side.
+ *
+ * <p>Progress is reported live via an {@link ExportProgressUi} dialog so a
+ * chat with hundreds of messages and media files doesn't look stalled.
  */
 public final class ChatExportHelper {
 
@@ -104,15 +116,16 @@ public final class ChatExportHelper {
     }
 
     /** Runs the export on a background thread and shares the resulting ZIP when done. */
-    public static void exportChat(Context ctx, String conversationId, String partnerUid,
+    public static void exportChat(Activity activity, String conversationId, String partnerUid,
                                    boolean includeMedia, boolean isGroup) {
-        Context appCtx = ctx.getApplicationContext();
-        Toast.makeText(ctx, "Preparing export…", Toast.LENGTH_SHORT).show();
+        Context appCtx = activity.getApplicationContext();
+        ExportProgressUi progress = ExportProgressUi.show(activity);
         new Thread(() -> {
             try {
-                doExport(appCtx, conversationId, partnerUid, includeMedia, isGroup);
+                doExport(appCtx, conversationId, partnerUid, includeMedia, isGroup, progress);
             } catch (Exception e) {
                 Log.e(TAG, "Chat export failed for conv=" + conversationId, e);
+                progress.dismiss();
                 new Handler(Looper.getMainLooper()).post(() ->
                     Toast.makeText(appCtx, "Export failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
@@ -122,7 +135,8 @@ public final class ChatExportHelper {
     // ── Core export ──────────────────────────────────────────────────────────
 
     private static void doExport(Context ctx, String conversationId, String partnerUid,
-                                  boolean includeMedia, boolean isGroup) throws IOException {
+                                  boolean includeMedia, boolean isGroup,
+                                  ExportProgressUi progress) throws IOException {
         AppDatabase db = AppDatabase.getInstance(ctx);
         List<Message> msgs = db.messageDao().getMessages(conversationId);
 
@@ -135,11 +149,19 @@ public final class ChatExportHelper {
         deleteRecursive(workDir);
         if (!workDir.mkdirs()) throw new IOException("Could not create export working directory");
 
+        progress.update("Writing transcript…", 0, 0);
         writeTranscript(new File(workDir, "Chat.txt"), msgs, senderLabel);
 
         int saved = 0, failed = 0;
         if (includeMedia) {
+            int total = msgs.size();
+            int idx = 0;
             for (Message m : msgs) {
+                idx++;
+                progress.update("Exporting media — message " + idx + " of " + total
+                    + " (" + saved + " saved" + (failed > 0 ? ", " + failed + " failed" : "") + ")",
+                    idx, total);
+
                 if (m.isDeleted()) continue;
                 String sender = senderLabel.get(m.getSender());
                 if (sender == null) sender = sanitize(shortUid(m.getSender()));
@@ -176,10 +198,12 @@ public final class ChatExportHelper {
             }
         }
 
+        progress.update("Compressing archive…", 0, 0);
         File zipFile = new File(ctx.getCacheDir(), "DuoShield_Export_" + System.currentTimeMillis() + ".zip");
-        zipDirectory(workDir, zipFile);
+        zipDirectory(workDir, zipFile, progress);
         deleteRecursive(workDir);
 
+        progress.dismiss();
         int finalSaved = saved, finalFailed = failed;
         new Handler(Looper.getMainLooper()).post(() -> {
             shareZip(ctx, zipFile);
@@ -257,25 +281,33 @@ public final class ChatExportHelper {
     // ── Media download + save ───────────────────────────────────────────────
 
     /**
-     * Downloads (or reuses the in-memory cache for) one encrypted media item and
-     * writes the decrypted bytes to {@code workDir/category/sender/fileName}.
-     * Returns {@code false} without throwing on any failure so a single bad file
-     * never aborts the whole export.
+     * Saves one encrypted media item, decrypted, to {@code workDir/category/sender/fileName}.
+     *
+     * <p>When the plaintext is already sitting in {@link B2StorageHelper}'s in-memory cache
+     * (small recently-viewed files), it's written out directly. Otherwise the file is
+     * streamed from B2 straight to disk and decrypted in place via
+     * {@link B2StorageHelper#downloadAndDecryptToFile} — the full plaintext of a large
+     * video is never materialized as a single in-memory {@code byte[]}, so a group chat
+     * with several large videos can't OOM the export.
+     *
+     * <p>Returns {@code false} without throwing on any failure so a single bad file never
+     * aborts the whole export.
      */
     private static boolean saveMediaFile(File workDir, String category, String sender,
                                           String b2Path, String keyBase64, String fileName) {
         if (b2Path == null || b2Path.isEmpty() || !B2StorageHelper.isB2Path(b2Path)) return false;
         try {
-            byte[] bytes = B2StorageHelper.getCached(b2Path);
-            if (bytes == null) {
-                byte[] raw = B2StorageHelper.downloadFile(b2Path);
-                bytes = B2StorageHelper.decryptAfterDownload(raw, keyBase64);
-            }
             File dir = new File(new File(workDir, category), sender);
             if (!dir.exists() && !dir.mkdirs()) return false;
             File out = new File(dir, fileName);
-            try (FileOutputStream fos = new FileOutputStream(out)) {
-                fos.write(bytes);
+
+            byte[] cached = B2StorageHelper.getCached(b2Path);
+            if (cached != null) {
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    fos.write(cached);
+                }
+            } else {
+                B2StorageHelper.downloadAndDecryptToFile(b2Path, keyBase64, out);
             }
             return true;
         } catch (Exception e) {
@@ -286,18 +318,32 @@ public final class ChatExportHelper {
 
     // ── Zip + share ──────────────────────────────────────────────────────────
 
-    private static void zipDirectory(File sourceDir, File zipFile) throws IOException {
+    private static void zipDirectory(File sourceDir, File zipFile,
+                                      ExportProgressUi progress) throws IOException {
+        int totalFiles = countFiles(sourceDir);
+        int[] done = {0};
         try (ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(zipFile)))) {
-            zipRecursive(sourceDir, sourceDir, zos);
+            zipRecursive(sourceDir, sourceDir, zos, progress, done, totalFiles);
         }
     }
 
-    private static void zipRecursive(File root, File current, ZipOutputStream zos) throws IOException {
+    private static int countFiles(File dir) {
+        File[] children = dir.listFiles();
+        if (children == null) return 0;
+        int count = 0;
+        for (File f : children) {
+            count += f.isDirectory() ? countFiles(f) : 1;
+        }
+        return count;
+    }
+
+    private static void zipRecursive(File root, File current, ZipOutputStream zos,
+                                      ExportProgressUi progress, int[] done, int total) throws IOException {
         File[] children = current.listFiles();
         if (children == null) return;
         for (File f : children) {
             if (f.isDirectory()) {
-                zipRecursive(root, f, zos);
+                zipRecursive(root, f, zos, progress, done, total);
                 continue;
             }
             String relPath = root.toURI().relativize(f.toURI()).getPath();
@@ -308,6 +354,11 @@ public final class ChatExportHelper {
                 while ((n = fis.read(buf)) != -1) zos.write(buf, 0, n);
             }
             zos.closeEntry();
+            done[0]++;
+            if (total > 0) {
+                progress.update("Compressing archive — " + done[0] + " of " + total + " files",
+                    done[0], total);
+            }
         }
     }
 
@@ -332,6 +383,94 @@ public final class ChatExportHelper {
         } catch (Exception e) {
             Log.e(TAG, "Share intent failed for " + zipFile, e);
             Toast.makeText(ctx, "Export saved but couldn't open the share sheet.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ── Progress UI ──────────────────────────────────────────────────────────
+
+    /**
+     * Thin wrapper around a non-cancelable {@link AlertDialog} with a status line and a
+     * progress bar, safe to update from a background thread. Holds only a
+     * {@link WeakReference} to the {@link Activity} and no-ops once it's finishing/destroyed,
+     * so a slow export can never crash or leak a window if the user navigates away.
+     *
+     * <p>A "Run in background" button lets the user dismiss the dialog without cancelling
+     * the export — it keeps running and shares the ZIP via the share sheet when done.
+     */
+    private static final class ExportProgressUi {
+        private final WeakReference<Activity> activityRef;
+        private final AlertDialog dialog;
+        private final ProgressBar bar;
+        private final TextView statusView;
+
+        private ExportProgressUi(Activity activity, AlertDialog dialog,
+                                  ProgressBar bar, TextView statusView) {
+            this.activityRef = new WeakReference<>(activity);
+            this.dialog = dialog;
+            this.bar = bar;
+            this.statusView = statusView;
+        }
+
+        static ExportProgressUi show(Activity activity) {
+            float dp = activity.getResources().getDisplayMetrics().density;
+            LinearLayout container = new LinearLayout(activity);
+            container.setOrientation(LinearLayout.VERTICAL);
+            int padH = (int) (24 * dp);
+            int padV = (int) (8 * dp);
+            container.setPadding(padH, padV, padH, padV);
+
+            TextView statusView = new TextView(activity);
+            statusView.setText("Preparing export…");
+            container.addView(statusView);
+
+            ProgressBar bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
+            bar.setIndeterminate(true);
+            bar.setMax(100);
+            bar.setProgress(0);
+            LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            barParams.topMargin = (int) (16 * dp);
+            container.addView(bar, barParams);
+
+            AlertDialog dialog = new MaterialAlertDialogBuilder(activity)
+                .setTitle("Exporting Chat")
+                .setView(container)
+                .setCancelable(false)
+                .setNegativeButton("Run in background", null)
+                .create();
+            dialog.show();
+            return new ExportProgressUi(activity, dialog, bar, statusView);
+        }
+
+        /** {@code max == 0} shows an indeterminate spinner; otherwise a determinate bar. */
+        void update(String status, int current, int max) {
+            runOnMain(() -> {
+                if (!isAlive()) return;
+                statusView.setText(status);
+                if (max > 0) {
+                    bar.setIndeterminate(false);
+                    bar.setMax(max);
+                    bar.setProgress(Math.min(current, max));
+                } else {
+                    bar.setIndeterminate(true);
+                }
+            });
+        }
+
+        void dismiss() {
+            runOnMain(() -> {
+                if (isAlive() && dialog.isShowing()) dialog.dismiss();
+            });
+        }
+
+        private boolean isAlive() {
+            Activity a = activityRef.get();
+            return a != null && !a.isFinishing() && !a.isDestroyed() && dialog.isShowing();
+        }
+
+        private void runOnMain(Runnable r) {
+            if (Looper.myLooper() == Looper.getMainLooper()) r.run();
+            else new Handler(Looper.getMainLooper()).post(r);
         }
     }
 }
