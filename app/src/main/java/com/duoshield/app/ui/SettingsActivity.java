@@ -18,7 +18,9 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.widget.Toolbar;
 import com.bumptech.glide.Glide;
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.bumptech.glide.load.resource.bitmap.CircleCrop;
+import com.bumptech.glide.signature.ObjectKey;
 import com.duoshield.app.BaseActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.call.TurnBandwidthTracker;
@@ -266,6 +268,11 @@ public class SettingsActivity extends BaseActivity {
                     if (tvProfileDisplayName != null) tvProfileDisplayName.setText(name);
                     // Persist to Firestore so other users/devices see the new name
                     saveNameToFirestore(name);
+                    // ConversationListActivity reads the denormalized partnerName_{uid}
+                    // field on each chat doc rather than users/{uid}.displayName, so
+                    // existing conversations must be updated directly or they keep
+                    // showing the old name.
+                    propagateNameToConversations(name);
                     Toast.makeText(this, "Name updated.", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancel", null)
@@ -295,6 +302,34 @@ public class SettingsActivity extends BaseActivity {
                 })
                 .addOnFailureListener(e ->
                         android.util.Log.w("Settings", "propagatePhoto query failed (non-critical): " + e.getMessage()));
+    }
+
+    private void propagateNameToConversations(String myName) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+        String myUid = user.getUid();
+        FirebaseFirestore.getInstance()
+                .collection("chats")
+                .whereArrayContains("participants", myUid)
+                .get()
+                .addOnSuccessListener(snap -> {
+                    for (com.google.firebase.firestore.DocumentSnapshot doc : snap.getDocuments()) {
+                        java.util.List<String> participants =
+                                (java.util.List<String>) doc.get("participants");
+                        if (participants == null) continue;
+                        String partnerUid = null;
+                        for (String p : participants) {
+                            if (p != null && !p.equals(myUid)) { partnerUid = p; break; }
+                        }
+                        if (partnerUid == null) continue;
+                        doc.getReference()
+                           .update("partnerName_" + partnerUid, myName)
+                           .addOnFailureListener(e ->
+                               android.util.Log.w("Settings", "propagateName non-critical: " + e.getMessage()));
+                    }
+                })
+                .addOnFailureListener(e ->
+                        android.util.Log.w("Settings", "propagateName query failed (non-critical): " + e.getMessage()));
     }
 
     private void saveNameToFirestore(String name) {
@@ -339,7 +374,16 @@ public class SettingsActivity extends BaseActivity {
         // 1. Instant local load from disk cache (written on every successful upload).
         java.io.File localAvatar = new java.io.File(getFilesDir(), "own_avatar.jpg");
         if (localAvatar.exists()) {
+            // "own_avatar.jpg" is overwritten in place on every new upload, but Glide
+            // keys its memory/disk cache off the File path alone — it has no way to
+            // know the content changed, so a stale bitmap from a previous session kept
+            // being served ("profile picture not updating"). Signature on lastModified
+            // busts the cache whenever the file is rewritten, and skipping Glide's own
+            // cache layers is safe since the file itself already IS our persistent cache.
             Glide.with(this).load(localAvatar)
+                    .signature(new ObjectKey(String.valueOf(localAvatar.lastModified())))
+                    .diskCacheStrategy(DiskCacheStrategy.NONE)
+                    .skipMemoryCache(true)
                     .placeholder(R.drawable.ic_person)
                     .error(R.drawable.ic_person)
                     .transform(new CircleCrop())
@@ -388,6 +432,8 @@ public class SettingsActivity extends BaseActivity {
             // new photo "update for other users" (who load it later, once it has
             // settled) but never visibly refresh here in the uploader's own app.
             Glide.with(this).load(plainBytes)
+                    .diskCacheStrategy(DiskCacheStrategy.NONE)
+                    .skipMemoryCache(true)
                     .placeholder(R.drawable.ic_person)
                     .error(R.drawable.ic_person)
                     .transform(new CircleCrop())
