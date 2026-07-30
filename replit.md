@@ -85,7 +85,7 @@ Set `WORKER_SECRET` via `wrangler secret put WORKER_SECRET` before deploying.
 - **libsignal-client must be `implementation`** — it is NOT `compileOnly`; see `app/build.gradle` for the three-line dependency structure and the stripped JAR explanation
 - **HKDF off-limits** — use `SeedPhraseHelper.hkdfSha256()` (public, 3 args); never import `org.signal.libsignal.protocol.kdf.HKDF`
 - **No Cloud Functions** — all server logic lives in `server/index.js` on Render
-- **Room DB current version: 21** — always add a migration when bumping; SQLCipher passphrase derived in `DatabaseKeyProvider`
+- **Room DB current version: 22** — always add a migration when bumping; SQLCipher passphrase is a random key managed (not seed-derived) in `DatabaseKeyProvider`
 - **lastMessage is plaintext** — `ConversationMetaUpdater` writes a ≤80-char preview; never encrypt it again
 - **Message status downgrade guard** — any `status` write must be transacted to prevent `read → delivered` regression
 

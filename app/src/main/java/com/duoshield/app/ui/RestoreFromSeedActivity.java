@@ -21,6 +21,8 @@ import com.duoshield.app.backup.MediaRestoreHelper;
 import com.duoshield.app.crypto.BackupCryptoHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
+import com.duoshield.app.db.AppDatabase;
+import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
@@ -71,6 +73,8 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private static final String KEY_IS_PAIRED      = "is_paired";
     private static final String KEY_CONV_ID        = "conversation_id";
     private static final String KEY_PARTNER_UID    = "partner_uid";
+    private static final String KEY_ECDH_SHARED    = "ecdh_shared_key";
+    private static final String KEY_DISAPPEAR_MS   = "disappear_ms";
 
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
@@ -255,10 +259,23 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         if (!identityStored) {
             throw new IllegalStateException("Unable to save the recovered identity on this device.");
         }
+        // BUG-D-RESTORE01 fix: never let a previous account's pairing state
+        // (conversation/partner) survive onto the newly restored identity. If the
+        // device still holds is_paired/conversation_id/partner_uid from an account
+        // that was merely auto-signed-out (not wiped), and the account being restored
+        // here happens to have no chat of its own yet, Step I below would find nothing
+        // to overwrite them with — leaving this identity looking "paired" with someone
+        // else's partner. Clearing unconditionally means Step I's Firestore lookup is
+        // the sole source of truth for pairing state after every restore.
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_USER_ID, derivedUserId)
                 .putString(KEY_MY_UID,  currentUid)
                 .remove("explicit_signout")
+                .remove(KEY_IS_PAIRED)
+                .remove(KEY_CONV_ID)
+                .remove(KEY_PARTNER_UID)
+                .remove(KEY_ECDH_SHARED)
+                .remove(KEY_DISAPPEAR_MS)
                 .commit();
 
         // ── Step G — Upload fresh Signal public key bundle ────────────────────
@@ -269,11 +286,20 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         final Exception[] keyErr = {null};
         SignalKeyManager.generateFromSeedDerivedKey(this,
                 () -> { synchronized (keyLock) { keyDone[0] = true; keyLock.notifyAll(); } },
-                () -> { synchronized (keyLock) { keyErr[0]  = new Exception("Key upload failed"); keyLock.notifyAll(); } });
+                () -> { synchronized (keyLock) { keyErr[0]  = new Exception("Key upload failed"); keyLock.notifyAll(); } },
+                () -> setStep("Uploading Signal keys to server…"));
         synchronized (keyLock) {
             if (!keyDone[0] && keyErr[0] == null) keyLock.wait(60_000);
         }
         if (keyErr[0] != null) throw keyErr[0];
+
+        // ── Step G2 — Wipe any previous account's local data before restoring ──
+        //
+        // Placed after the key upload succeeds (so we only destroy anything once
+        // we're confident this restore attempt is going through) and before any
+        // message/contact restore runs (so nothing from a previous identity can
+        // still be sitting in Room when the new data is written).
+        wipeStaleLocalIdentityIfSwitching(derivedUserId);
 
         // ── Step H — Derive backup key and restore message history ────────────
         runOnUiThread(() -> setStep("Restoring message history…"));
@@ -483,6 +509,56 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * BUG-D-RESTORE01 fix: if this device still holds another account's local
+     * data — Room DB rows, cached decrypted media — from before this restore,
+     * wipe it now, before the incoming identity's messages/contacts are restored
+     * on top of it.
+     *
+     * <p>This matters because none of the local Room tables (messages, contacts,
+     * groups, group_members, signal_sessions, call_history) are scoped by owner
+     * UID — {@code ContactDao}/{@code MessageDao} queries have no WHERE clause on
+     * any owner column. The schema assumes only one identity is ever active on a
+     * device at a time, an assumption that {@link com.duoshield.app.util.WipeHelper}
+     * and {@link com.duoshield.app.security.DuressManager} correctly enforce for
+     * their own exit paths — but nothing enforced it here. The inactivity auto
+     * sign-out in {@code BaseActivity} intentionally leaves Room DB and the
+     * identity key pair in place (so the same user's session resumes quickly),
+     * which means a device can legitimately reach this screen with a previous
+     * account's local data still present. Restoring a DIFFERENT identity without
+     * this wipe would leave that previous account's messages and contacts mixed
+     * into the new account's conversation list.
+     *
+     * <p>No-op when restoring the SAME account that was last active on this
+     * device (an ordinary re-restore after auto sign-out must not discard
+     * local-only messages that had not yet been backed up), and no-op on a
+     * clean device with no prior identity.
+     */
+    private void wipeStaleLocalIdentityIfSwitching(String incomingUserId) {
+        String existingUserId = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_USER_ID, null);
+        if (existingUserId == null || existingUserId.equals(incomingUserId)) {
+            return; // fresh device, or restoring the account already active here
+        }
+        android.util.Log.i("RestoreFromSeed", "Switching local identity ("
+                + existingUserId + " -> " + incomingUserId
+                + "); wiping this device's local data for the previous account.");
+        try {
+            // clearInstance() BEFORE deleteDatabase() — releases Room's cached
+            // connection first, matching the WipeHelper/DuressManager wipe order.
+            AppDatabase.clearInstance();
+            deleteDatabase("duoshield_db");
+        } catch (Exception e) {
+            android.util.Log.e("RestoreFromSeed",
+                    "Failed to clear previous account's local database", e);
+        }
+        try {
+            B2StorageHelper.clearDiskCache(this);
+        } catch (Exception e) {
+            android.util.Log.w("RestoreFromSeed", "clearDiskCache() failed (non-fatal)", e);
+        }
+    }
 
     private void clearOldPrekeys() {
         SharedPreferences sp = SecurePrefs.get(this);

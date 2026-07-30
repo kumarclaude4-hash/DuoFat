@@ -70,7 +70,10 @@ Pre-key management:
 
 ### Database
 
-- SQLCipher database key: `SeedPhraseHelper.hkdfSha256(seed, "db_key", 32)` — unique per UID
+- SQLCipher database key: a random 32-byte key generated on first launch and stored in
+  `EncryptedSharedPreferences` via `DatabaseKeyProvider` — NOT derived from the seed. It
+  protects the on-device file at rest only; a fresh empty database always gets a fresh
+  key, so nothing about restoring an identity depends on it being deterministic.
 - Stored in `EncryptedSharedPreferences`; `SecurePrefs.get()` is a cached singleton
 - Room schema version 12; all migrations are explicit (no destructive fallback)
 
