@@ -630,6 +630,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         ? formatDuration(msg.getDurationMs())
                         : "0:00");
             }
+            h.voiceDuration.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                    com.duoshield.app.util.ChatCustomizationHelper.getMetaFontSizeSp(bubblePrefs));
             // Load waveform bars for display (sender has them from recording; receiver from Firestore).
             // Messages loaded from Room cache before this fix (or truly legacy messages sent
             // before amplitudes were persisted) lack amplitudes — fall back to a deterministic
@@ -761,6 +763,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             String cap = msg.getCaption();
             if (cap != null && !cap.isEmpty()) {
                 h.mediaCaptionText.setText(cap);
+                h.mediaCaptionText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                        com.duoshield.app.util.ChatCustomizationHelper.getCaptionFontSizeSp(bubblePrefs));
                 h.mediaCaptionText.setVisibility(View.VISIBLE);
                 // Restore horizontal padding so caption text has breathing room
                 if (h.bubble.getPaddingStart() == 0) {
@@ -781,6 +785,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             h.timestampView.setText(new java.text.SimpleDateFormat("HH:mm",
                 java.util.Locale.getDefault()).format(new java.util.Date(ts)));
         }
+        h.timestampView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                com.duoshield.app.util.ChatCustomizationHelper.getMetaFontSizeSp(bubblePrefs));
 
         // ── Delivery ticks ──────────────────────────────────────────
         com.duoshield.app.util.MessageStatusHelper.bind(h.tickIcon, msg,

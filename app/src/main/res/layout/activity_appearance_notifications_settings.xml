@@ -90,6 +90,59 @@
                 style="@style/SectionHeader"
                 android:paddingStart="20dp"/>
 
+            <!-- ── Live bubble preview ──────────────────────────────────────── -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="88dp"
+                android:background="@color/ds_background"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp">
+
+                <!-- Theirs bubble — left-aligned -->
+                <LinearLayout
+                    android:id="@+id/previewTheirsBubble"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="start|center_vertical"
+                    android:minWidth="90dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Hey there! 👋"
+                        android:textColor="#DDDDDD"
+                        android:textSize="14sp"
+                        android:importantForAccessibility="no"/>
+                </LinearLayout>
+
+                <!-- Mine bubble — right-aligned -->
+                <LinearLayout
+                    android:id="@+id/previewMineBubble"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end|center_vertical"
+                    android:minWidth="90dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Hello! 😊"
+                        android:textColor="#DDDDDD"
+                        android:textSize="14sp"
+                        android:importantForAccessibility="no"/>
+                </LinearLayout>
+            </FrameLayout>
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

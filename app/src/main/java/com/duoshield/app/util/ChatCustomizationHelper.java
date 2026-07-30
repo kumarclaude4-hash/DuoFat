@@ -100,6 +100,30 @@ public final class ChatCustomizationHelper {
         }
     }
 
+    /**
+     * Font size (sp) for compact metadata: timestamps and voice-note duration.
+     * Scales proportionally with the user's chosen message font size.
+     */
+    public static float getMetaFontSizeSp(SharedPreferences p) {
+        switch (p.getString(PREF_MSG_FONT_SIZE, FONT_MEDIUM)) {
+            case FONT_SMALL: return 9.5f;
+            case FONT_LARGE: return 12f;
+            default:         return 10.5f;
+        }
+    }
+
+    /**
+     * Font size (sp) for media/voice captions (photo, video, album).
+     * Scales proportionally with the user's chosen message font size.
+     */
+    public static float getCaptionFontSizeSp(SharedPreferences p) {
+        switch (p.getString(PREF_MSG_FONT_SIZE, FONT_MEDIUM)) {
+            case FONT_SMALL: return 12.5f;
+            case FONT_LARGE: return 16.5f;
+            default:         return 14.5f;
+        }
+    }
+
     // ── Drawable builders ────────────────────────────────────────────────────
 
     /**

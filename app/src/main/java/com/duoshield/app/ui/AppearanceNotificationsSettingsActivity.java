@@ -18,6 +18,8 @@ import com.duoshield.app.BaseActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.util.ChatCustomizationHelper;
 import com.duoshield.app.util.ChatThemeHelper;
+import java.util.ArrayList;
+import java.util.List;
 
 public class AppearanceNotificationsSettingsActivity extends BaseActivity {
 
@@ -33,6 +35,14 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
     private FrameLayout selectedMineRing;
     /** Ring view for the currently-selected theirs-bubble colour swatch. */
     private FrameLayout selectedTheirsRing;
+
+    /** Live-preview bubble views (updated on every colour/style change). */
+    private LinearLayout previewMineBubble;
+    private LinearLayout previewTheirsBubble;
+
+    /** All ring FrameLayouts in each colour row (presets + custom). */
+    private final List<FrameLayout> mineRings   = new ArrayList<>();
+    private final List<FrameLayout> theirsRings = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,6 +71,11 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
         setupBubbleStylePicker();
         setupBubbleColorPicker();
         setupTextSizePicker();
+
+        // ── Live bubble preview ───────────────────────────────────────────────
+        previewMineBubble   = findViewById(R.id.previewMineBubble);
+        previewTheirsBubble = findViewById(R.id.previewTheirsBubble);
+        refreshBubblePreview();
 
         // ── Notifications switch ──────────────────────────────────────────────
         switchNotifications.setOnCheckedChangeListener((b, c) ->
@@ -156,7 +171,8 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
         String[] labels = { "Rounded", "Classic", "Sharp" };
 
         setupChipRow(row, ids, labels,
-                ChatCustomizationHelper.PREF_BUBBLE_STYLE, current, dp);
+                ChatCustomizationHelper.PREF_BUBBLE_STYLE, current, dp,
+                this::refreshBubblePreview);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -165,6 +181,9 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
 
     private void setupBubbleColorPicker() {
         float dp = density();
+
+        mineRings.clear();
+        theirsRings.clear();
 
         // Mine
         int curMine = prefs.getInt(
@@ -177,6 +196,11 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
                 ChatCustomizationHelper.MINE_COLOR_NAMES,
                 curMine,
                 ChatCustomizationHelper.PREF_BUBBLE_MINE_COLOR,
+                true, dp, mineRings);
+        addCustomColorSwatch(mineRow, mineRings,
+                ChatCustomizationHelper.PREF_BUBBLE_MINE_COLOR,
+                ChatCustomizationHelper.DEFAULT_MINE_COLOR,
+                ChatCustomizationHelper.MINE_COLORS,
                 true, dp);
 
         // Theirs
@@ -190,20 +214,26 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
                 ChatCustomizationHelper.THEIRS_COLOR_NAMES,
                 curTheirs,
                 ChatCustomizationHelper.PREF_BUBBLE_THEIRS_COLOR,
+                false, dp, theirsRings);
+        addCustomColorSwatch(theirsRow, theirsRings,
+                ChatCustomizationHelper.PREF_BUBBLE_THEIRS_COLOR,
+                ChatCustomizationHelper.DEFAULT_THEIRS_COLOR,
+                ChatCustomizationHelper.THEIRS_COLORS,
                 false, dp);
     }
 
     /**
-     * Adds colour swatch items to {@code row} and returns the ring FrameLayout
-     * that is initially selected.
+     * Adds colour swatch items to {@code row}, populates {@code ringList}, and
+     * returns the ring FrameLayout that is initially selected (or null if none
+     * of the presets matches the current saved colour).
      */
     private FrameLayout buildColorSwatchRow(LinearLayout row,
             int[] colors, String[] names, int currentColor,
-            String prefKey, boolean isMineRow, float dp) {
+            String prefKey, boolean isMineRow, float dp,
+            List<FrameLayout> ringList) {
 
         int outerSz = (int)(52 * dp);
         int ringPad = (int)( 3 * dp);
-        FrameLayout[] rings = new FrameLayout[colors.length];
         FrameLayout initialSelected = null;
 
         for (int i = 0; i < colors.length; i++) {
@@ -213,17 +243,14 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
             LinearLayout item = makeItemContainer(dp, 10);
 
             FrameLayout ring = makeRingFrame(outerSz, ringPad);
-            // Circular ring: corner radius = half the outer diameter
             GradientDrawable ringDrw = makeRingDrawable(outerSz / 2f, dp);
-            rings[i] = ring;
+            ringList.add(ring);
 
-            // Circle swatch
             android.view.View swatch = new android.view.View(this);
             swatch.setLayoutParams(new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.MATCH_PARENT));
-            swatch.setBackground(
-                    ChatCustomizationHelper.buildSwatchCircle(color, dp));
+            swatch.setBackground(ChatCustomizationHelper.buildSwatchCircle(color, dp));
             ring.addView(swatch);
 
             if (color == currentColor) { ring.setBackground(ringDrw); initialSelected = ring; }
@@ -231,19 +258,121 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
             item.addView(makeLabel(name, dp));
             row.addView(item);
 
-            final int     fColor  = color;
-            final FrameLayout fRing = ring;
-            final GradientDrawable fDrw  = ringDrw;
-            final FrameLayout[] fRings   = rings;
+            final int          fColor = color;
+            final FrameLayout  fRing  = ring;
+            final GradientDrawable fDrw = ringDrw;
             item.setOnClickListener(v -> {
                 prefs.edit().putInt(prefKey, fColor).apply();
-                for (FrameLayout r : fRings) if (r != null) r.setBackground(null);
+                for (FrameLayout r : ringList) r.setBackground(null);
                 fRing.setBackground(fDrw);
-                if (isMineRow)   selectedMineRing   = fRing;
-                else             selectedTheirsRing = fRing;
+                if (isMineRow) selectedMineRing   = fRing;
+                else           selectedTheirsRing = fRing;
+                refreshBubblePreview();
             });
         }
         return initialSelected;
+    }
+
+    /**
+     * Appends a "Custom…" swatch at the end of a colour-picker row.
+     * If the currently saved colour is not in {@code presets}, the swatch shows
+     * that colour and starts selected. Otherwise it shows a "+" placeholder.
+     */
+    private void addCustomColorSwatch(LinearLayout row,
+            List<FrameLayout> ringList,
+            String prefKey, int defaultColor,
+            int[] presets, boolean isMineRow, float dp) {
+
+        int outerSz = (int)(52 * dp);
+        int ringPad = (int)( 3 * dp);
+
+        int savedColor = prefs.getInt(prefKey, defaultColor);
+        boolean isCustom = !isPresetColor(savedColor, presets);
+
+        LinearLayout item = makeItemContainer(dp, 10);
+        FrameLayout ring = makeRingFrame(outerSz, ringPad);
+        GradientDrawable ringDrw = makeRingDrawable(outerSz / 2f, dp);
+        ringList.add(ring);
+
+        // The swatch view — shows saved custom colour or a "+" placeholder.
+        final android.view.View[] swatchRef = { null };
+
+        if (isCustom) {
+            android.view.View colourSwatch = new android.view.View(this);
+            colourSwatch.setLayoutParams(new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+            colourSwatch.setBackground(ChatCustomizationHelper.buildSwatchCircle(savedColor, dp));
+            ring.addView(colourSwatch);
+            ring.setBackground(ringDrw);
+            if (isMineRow) selectedMineRing   = ring;
+            else           selectedTheirsRing = ring;
+            swatchRef[0] = colourSwatch;
+        } else {
+            TextView plus = new TextView(this);
+            plus.setText("+");
+            plus.setTextColor(0xFFAAAAAA);
+            plus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+            plus.setGravity(android.view.Gravity.CENTER);
+            plus.setLayoutParams(new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+            GradientDrawable plusBg = new GradientDrawable();
+            plusBg.setShape(GradientDrawable.OVAL);
+            plusBg.setColor(0xFF2D2038);
+            plusBg.setStroke((int) dp, 0x44FFFFFF);
+            plus.setBackground(plusBg);
+            ring.addView(plus);
+            swatchRef[0] = plus;
+        }
+
+        item.addView(ring);
+        item.addView(makeLabel("Custom", dp));
+        row.addView(item);
+
+        item.setOnClickListener(v -> {
+            int startColor = prefs.getInt(prefKey, defaultColor);
+            new BubbleColorPickerDialog(this, startColor, pickedColor -> {
+                prefs.edit().putInt(prefKey, pickedColor).apply();
+                // Update swatch to show the chosen colour.
+                swatchRef[0].setBackground(
+                        ChatCustomizationHelper.buildSwatchCircle(pickedColor, dp));
+                // Select this ring.
+                for (FrameLayout r : ringList) r.setBackground(null);
+                ring.setBackground(ringDrw);
+                if (isMineRow) selectedMineRing   = ring;
+                else           selectedTheirsRing = ring;
+                refreshBubblePreview();
+            }).show();
+        });
+    }
+
+    private boolean isPresetColor(int color, int[] presets) {
+        for (int p : presets) if (p == color) return true;
+        return false;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // LIVE BUBBLE PREVIEW
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /** Redraws the two preview bubbles from current prefs. */
+    private void refreshBubblePreview() {
+        if (previewMineBubble == null || previewTheirsBubble == null) return;
+        float dp = density();
+        int mineColor = prefs.getInt(
+                ChatCustomizationHelper.PREF_BUBBLE_MINE_COLOR,
+                ChatCustomizationHelper.DEFAULT_MINE_COLOR);
+        int theirsColor = prefs.getInt(
+                ChatCustomizationHelper.PREF_BUBBLE_THEIRS_COLOR,
+                ChatCustomizationHelper.DEFAULT_THEIRS_COLOR);
+        String style = prefs.getString(
+                ChatCustomizationHelper.PREF_BUBBLE_STYLE,
+                ChatCustomizationHelper.STYLE_ROUNDED);
+        previewMineBubble.setBackground(
+                ChatCustomizationHelper.buildBubbleDrawable(mineColor, style, true, dp));
+        previewTheirsBubble.setBackground(
+                ChatCustomizationHelper.buildBubbleDrawable(theirsColor, style, false, dp));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -314,6 +443,13 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
     private void setupChipRow(LinearLayout row,
                                String[] ids, String[] labels,
                                String prefKey, String currentValue, float dp) {
+        setupChipRow(row, ids, labels, prefKey, currentValue, dp, null);
+    }
+
+    private void setupChipRow(LinearLayout row,
+                               String[] ids, String[] labels,
+                               String prefKey, String currentValue, float dp,
+                               Runnable onChanged) {
         final TextView[] chips = new TextView[ids.length];
         for (int i = 0; i < ids.length; i++) {
             final String val = ids[i];
@@ -337,6 +473,7 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
                 for (int j = 0; j < fChips.length; j++) {
                     applyChipState(fChips[j], fIds[j].equals(val), dp);
                 }
+                if (onChanged != null) onChanged.run();
             });
             row.addView(chip);
         }
