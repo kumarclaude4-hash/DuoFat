@@ -167,6 +167,14 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
 
     private void restoreOnBackground(String mnemonic, String enteredAccountId) throws Exception {
 
+        // Captured BEFORE any local state is written below. Step F overwrites
+        // KEY_USER_ID with the identity being restored, so re-reading it afterward
+        // (as wipeStaleLocalIdentityIfSwitching used to do) can never see a mismatch —
+        // this was the actual value of BUG-D-RESTORE01's guard being silently inert.
+        // See wipeStaleLocalIdentityIfSwitching() for why this matters.
+        final String existingUserIdBeforeRestore = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_USER_ID, null);
+
         // ── Step B — Derive seed and identity ────────────────────────────────
         byte[]          seed            = SeedPhraseHelper.mnemonicToSeed(mnemonic);
         IdentityKeyPair identityKeyPair = SeedPhraseHelper.deriveIdentityKeyPair(seed);
@@ -299,7 +307,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         // we're confident this restore attempt is going through) and before any
         // message/contact restore runs (so nothing from a previous identity can
         // still be sitting in Room when the new data is written).
-        wipeStaleLocalIdentityIfSwitching(derivedUserId);
+        wipeStaleLocalIdentityIfSwitching(existingUserIdBeforeRestore, derivedUserId);
 
         // ── Step H — Derive backup key and restore message history ────────────
         runOnUiThread(() -> setStep("Restoring message history…"));
@@ -534,10 +542,16 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
      * device (an ordinary re-restore after auto sign-out must not discard
      * local-only messages that had not yet been backed up), and no-op on a
      * clean device with no prior identity.
+     *
+     * <p><b>{@code existingUserId} must be read by the caller before Step F
+     * overwrites {@code KEY_USER_ID} with the identity being restored.</b> This
+     * method used to re-read {@code KEY_USER_ID} itself at call time, which is
+     * always AFTER that overwrite — so {@code existingUserId} was always already
+     * equal to {@code incomingUserId} and the switch could never be detected. That
+     * left this guard permanently inert: a previous account's Room DB and media
+     * cache silently persisted into a newly restored, different identity.
      */
-    private void wipeStaleLocalIdentityIfSwitching(String incomingUserId) {
-        String existingUserId = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(KEY_USER_ID, null);
+    private void wipeStaleLocalIdentityIfSwitching(String existingUserId, String incomingUserId) {
         if (existingUserId == null || existingUserId.equals(incomingUserId)) {
             return; // fresh device, or restoring the account already active here
         }
