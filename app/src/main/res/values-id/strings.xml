@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Pesan terenkripsi end-to-end</string>
+    <string name="conversations">Pesan</string>
+    <string name="settings">Pengaturan</string>
+    <string name="appearance_notifications">Tampilan dan notifikasi</string>
+    <string name="section_appearance">TAMPILAN</string>
+    <string name="section_notifications">NOTIFIKASI</string>
+    <string name="language">Bahasa</string>
+    <string name="choose_language">Pilih bahasa</string>
+    <string name="system_default">Default sistem</string>
+    <string name="push_notifications">Notifikasi push</string>
+    <string name="send">Kirim</string>
+    <string name="cancel">Batal</string>
+    <string name="save">Simpan</string>
+    <string name="delete">Hapus</string>
+    <string name="close">Tutup</string>
+    <string name="loading">Memuat…</string>
+    <string name="retry">Coba lagi</string>
+    <string name="no_network">Tidak ada koneksi</string>
+    <string name="error_generic">Terjadi kesalahan. Silakan coba lagi.</string>
+</resources>

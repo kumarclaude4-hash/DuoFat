@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Nhắn tin được mã hóa đầu cuối</string>
+    <string name="conversations">Tin nhắn</string>
+    <string name="settings">Cài đặt</string>
+    <string name="appearance_notifications">Giao diện và thông báo</string>
+    <string name="section_appearance">GIAO DIỆN</string>
+    <string name="section_notifications">THÔNG BÁO</string>
+    <string name="language">Ngôn ngữ</string>
+    <string name="choose_language">Chọn ngôn ngữ</string>
+    <string name="system_default">Mặc định hệ thống</string>
+    <string name="push_notifications">Thông báo đẩy</string>
+    <string name="send">Gửi</string>
+    <string name="cancel">Hủy</string>
+    <string name="save">Lưu</string>
+    <string name="delete">Xóa</string>
+    <string name="close">Đóng</string>
+    <string name="loading">Đang tải…</string>
+    <string name="retry">Thử lại</string>
+    <string name="no_network">Không có kết nối</string>
+    <string name="error_generic">Đã xảy ra lỗi. Vui lòng thử lại.</string>
+</resources>

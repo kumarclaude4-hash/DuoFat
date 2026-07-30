@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Uçtan uca şifrelenmiş mesajlaşma</string>
+    <string name="conversations">Mesajlar</string>
+    <string name="settings">Ayarlar</string>
+    <string name="appearance_notifications">Görünüm ve bildirimler</string>
+    <string name="section_appearance">GÖRÜNÜM</string>
+    <string name="section_notifications">BİLDİRİMLER</string>
+    <string name="language">Dil</string>
+    <string name="choose_language">Dil seçin</string>
+    <string name="system_default">Sistem varsayılanı</string>
+    <string name="push_notifications">Anlık bildirimler</string>
+    <string name="send">Gönder</string>
+    <string name="cancel">İptal</string>
+    <string name="save">Kaydet</string>
+    <string name="delete">Sil</string>
+    <string name="close">Kapat</string>
+    <string name="loading">Yükleniyor…</string>
+    <string name="retry">Yeniden dene</string>
+    <string name="no_network">Bağlantı yok</string>
+    <string name="error_generic">Bir sorun oluştu. Lütfen tekrar deneyin.</string>
+</resources>

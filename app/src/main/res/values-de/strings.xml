@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Ende-zu-Ende-verschlüsselte Nachrichten</string>
+    <string name="conversations">Nachrichten</string>
+    <string name="settings">Einstellungen</string>
+    <string name="appearance_notifications">Darstellung und Benachrichtigungen</string>
+    <string name="section_appearance">DARSTELLUNG</string>
+    <string name="section_notifications">BENACHRICHTIGUNGEN</string>
+    <string name="language">Sprache</string>
+    <string name="choose_language">Sprache auswählen</string>
+    <string name="system_default">Systemstandard</string>
+    <string name="push_notifications">Push-Benachrichtigungen</string>
+    <string name="send">Senden</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="save">Speichern</string>
+    <string name="delete">Löschen</string>
+    <string name="close">Schließen</string>
+    <string name="loading">Wird geladen…</string>
+    <string name="retry">Erneut versuchen</string>
+    <string name="no_network">Keine Verbindung</string>
+    <string name="error_generic">Etwas ist schiefgelaufen. Bitte erneut versuchen.</string>
+</resources>

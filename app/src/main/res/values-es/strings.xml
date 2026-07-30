@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Mensajería cifrada de extremo a extremo</string>
+    <string name="conversations">Mensajes</string>
+    <string name="settings">Ajustes</string>
+    <string name="appearance_notifications">Apariencia y notificaciones</string>
+    <string name="section_appearance">APARIENCIA</string>
+    <string name="section_notifications">NOTIFICACIONES</string>
+    <string name="language">Idioma</string>
+    <string name="choose_language">Elegir idioma</string>
+    <string name="system_default">Predeterminado del sistema</string>
+    <string name="push_notifications">Notificaciones push</string>
+    <string name="send">Enviar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="save">Guardar</string>
+    <string name="delete">Eliminar</string>
+    <string name="close">Cerrar</string>
+    <string name="loading">Cargando…</string>
+    <string name="retry">Reintentar</string>
+    <string name="no_network">Sin conexión</string>
+    <string name="error_generic">Algo salió mal. Inténtalo de nuevo.</string>
+</resources>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">مراسلة مشفرة من طرف إلى طرف</string>
+    <string name="conversations">الرسائل</string>
+    <string name="settings">الإعدادات</string>
+    <string name="appearance_notifications">المظهر والإشعارات</string>
+    <string name="section_appearance">المظهر</string>
+    <string name="section_notifications">الإشعارات</string>
+    <string name="language">اللغة</string>
+    <string name="choose_language">اختر اللغة</string>
+    <string name="system_default">إعداد النظام الافتراضي</string>
+    <string name="push_notifications">إشعارات فورية</string>
+    <string name="send">إرسال</string>
+    <string name="cancel">إلغاء</string>
+    <string name="save">حفظ</string>
+    <string name="delete">حذف</string>
+    <string name="close">إغلاق</string>
+    <string name="loading">جارٍ التحميل…</string>
+    <string name="retry">إعادة المحاولة</string>
+    <string name="no_network">لا يوجد اتصال</string>
+    <string name="error_generic">حدث خطأ ما. يرجى المحاولة مرة أخرى.</string>
+</resources>

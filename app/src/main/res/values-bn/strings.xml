@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">প্রান্ত-থেকে-প্রান্ত এনক্রিপ্ট করা মেসেজিং</string>
+    <string name="conversations">বার্তা</string>
+    <string name="settings">সেটিংস</string>
+    <string name="appearance_notifications">চেহারা ও বিজ্ঞপ্তি</string>
+    <string name="section_appearance">চেহারা</string>
+    <string name="section_notifications">বিজ্ঞপ্তি</string>
+    <string name="language">ভাষা</string>
+    <string name="choose_language">ভাষা বেছে নিন</string>
+    <string name="system_default">সিস্টেম ডিফল্ট</string>
+    <string name="push_notifications">পুশ বিজ্ঞপ্তি</string>
+    <string name="send">পাঠান</string>
+    <string name="cancel">বাতিল</string>
+    <string name="save">সংরক্ষণ</string>
+    <string name="delete">মুছুন</string>
+    <string name="close">বন্ধ করুন</string>
+    <string name="loading">লোড হচ্ছে…</string>
+    <string name="retry">আবার চেষ্টা করুন</string>
+    <string name="no_network">কোনো সংযোগ নেই</string>
+    <string name="error_generic">কিছু ভুল হয়েছে। আবার চেষ্টা করুন।</string>
+</resources>

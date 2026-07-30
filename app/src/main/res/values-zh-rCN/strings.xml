@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">端到端加密消息</string>
+    <string name="conversations">消息</string>
+    <string name="settings">设置</string>
+    <string name="appearance_notifications">外观与通知</string>
+    <string name="section_appearance">外观</string>
+    <string name="section_notifications">通知</string>
+    <string name="language">语言</string>
+    <string name="choose_language">选择语言</string>
+    <string name="system_default">系统默认</string>
+    <string name="push_notifications">推送通知</string>
+    <string name="send">发送</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="close">关闭</string>
+    <string name="loading">加载中…</string>
+    <string name="retry">重试</string>
+    <string name="no_network">无网络连接</string>
+    <string name="error_generic">出现问题，请重试。</string>
+</resources>

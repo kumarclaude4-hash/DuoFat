@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Сквозное шифрование сообщений</string>
+    <string name="conversations">Сообщения</string>
+    <string name="settings">Настройки</string>
+    <string name="appearance_notifications">Оформление и уведомления</string>
+    <string name="section_appearance">ОФОРМЛЕНИЕ</string>
+    <string name="section_notifications">УВЕДОМЛЕНИЯ</string>
+    <string name="language">Язык</string>
+    <string name="choose_language">Выберите язык</string>
+    <string name="system_default">Системный язык</string>
+    <string name="push_notifications">Push-уведомления</string>
+    <string name="send">Отправить</string>
+    <string name="cancel">Отмена</string>
+    <string name="save">Сохранить</string>
+    <string name="delete">Удалить</string>
+    <string name="close">Закрыть</string>
+    <string name="loading">Загрузка…</string>
+    <string name="retry">Повторить</string>
+    <string name="no_network">Нет соединения</string>
+    <string name="error_generic">Что-то пошло не так. Попробуйте ещё раз.</string>
+</resources>

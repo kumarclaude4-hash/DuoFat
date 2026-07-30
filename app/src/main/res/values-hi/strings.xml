@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">एंड-टू-एंड एन्क्रिप्टेड मैसेजिंग</string>
+    <string name="conversations">संदेश</string>
+    <string name="settings">सेटिंग</string>
+    <string name="appearance_notifications">दिखावट और सूचनाएँ</string>
+    <string name="section_appearance">दिखावट</string>
+    <string name="section_notifications">सूचनाएँ</string>
+    <string name="language">भाषा</string>
+    <string name="choose_language">भाषा चुनें</string>
+    <string name="system_default">सिस्टम डिफ़ॉल्ट</string>
+    <string name="push_notifications">पुश सूचनाएँ</string>
+    <string name="send">भेजें</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="save">सहेजें</string>
+    <string name="delete">हटाएँ</string>
+    <string name="close">बंद करें</string>
+    <string name="loading">लोड हो रहा है…</string>
+    <string name="retry">फिर कोशिश करें</string>
+    <string name="no_network">कोई कनेक्शन नहीं</string>
+    <string name="error_generic">कुछ गलत हो गया। कृपया फिर कोशिश करें।</string>
+</resources>

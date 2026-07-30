@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_tagline">Mensagens criptografadas de ponta a ponta</string>
+    <string name="conversations">Mensagens</string>
+    <string name="settings">Configurações</string>
+    <string name="appearance_notifications">Aparência e notificações</string>
+    <string name="section_appearance">APARÊNCIA</string>
+    <string name="section_notifications">NOTIFICAÇÕES</string>
+    <string name="language">Idioma</string>
+    <string name="choose_language">Escolher idioma</string>
+    <string name="system_default">Padrão do sistema</string>
+    <string name="push_notifications">Notificações push</string>
+    <string name="send">Enviar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="save">Salvar</string>
+    <string name="delete">Excluir</string>
+    <string name="close">Fechar</string>
+    <string name="loading">Carregando…</string>
+    <string name="retry">Tentar novamente</string>
+    <string name="no_network">Sem conexão</string>
+    <string name="error_generic">Algo deu errado. Tente novamente.</string>
+</resources>
