@@ -77,3 +77,4 @@
 - [DuoShield Cloudflare account ID mismatch](duoshield-cloudflare-account-mismatch.md) — wrangler auth error 10000 can mean CLOUDFLARE_ACCOUNT_ID secret ≠ token's real account, not just a scope issue; check `wrangler whoami` first
 - [DuoShield biometric lock removed](duoshield-biometric-removed.md) — biometric unlock fully deleted from app+UI+deps 2026-07-29; PIN is the only unlock method now, don't reintroduce without explicit ask
 - [DuoShield chat export](duoshield-chat-export.md) — ChatExportHelper zips Chat.txt + per-sender Photos/Videos/Voice Messages folders (1:1 and groups); no streaming for large media yet, no progress UI
+- [DuoShield restore wipe-guard fix](duoshield-restore-wipe-guard-fix.md) — identity-switch wipe guard was inert (compared a value against itself after an earlier step overwrote it); fixed by capturing "before" state first
