@@ -528,9 +528,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             if (com.duoshield.app.util.B2StorageHelper.isB2Path(vidRef)) {
                 // B2 encrypted video — tap opens MediaViewerActivity (ExoPlayer).
                 // Real thumbnails require downloading + decrypting the video, so show a
-                // neutral placeholder immediately and swap in the extracted frame once ready.
+                // clean dark preview immediately and swap in the extracted frame once ready.
                 h.videoThumbnail.setTag(vidRef);
-                Glide.with(ctx).load(R.drawable.ic_play_video).into(h.videoThumbnail);
+                Glide.with(ctx).clear(h.videoThumbnail);
+                h.videoThumbnail.setImageDrawable(null);
+                h.videoThumbnail.setBackgroundColor(0xFF0D1825);
                 byte[] cachedThumb = com.duoshield.app.util.B2StorageHelper.getCachedThumb(vidRef);
                 if (cachedThumb != null) {
                     Glide.with(ctx).load(cachedThumb).centerCrop().into(h.videoThumbnail);
@@ -556,8 +558,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
             } else {
                 // Legacy Firebase Storage URL
-                Glide.with(ctx).load(vidRef)
-                     .placeholder(R.drawable.ic_play_video).centerCrop().into(h.videoThumbnail);
+                Glide.with(ctx).asBitmap().load(vidRef)
+                     .placeholder(R.drawable.bg_media_rounded)
+                     .error(R.drawable.bg_media_rounded).centerCrop().into(h.videoThumbnail);
                 h.videoContainer.setOnClickListener(v -> {
                     Intent i = new Intent(ctx, com.duoshield.app.MediaViewerActivity.class);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_URL, vidRef);
@@ -893,7 +896,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 slots[i].setVisibility(View.VISIBLE);
                 org.json.JSONObject item = arr.getJSONObject(i);
                 String url  = item.optString("url", null);
+                // Album senders store private B2 paths under "path"; older
+                // clients used "url". Accept both so albums render after upload
+                // and after a Room restore.
+                if (url == null || url.isEmpty()) url = item.optString("path", null);
                 String key  = item.optString("key", null);
+                String itemType = item.optString("type", "image");
                 final ImageView slot = slots[i];
                 slot.setTag(url);
 
@@ -911,33 +919,68 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(slot);
                         final String finalUrl = url;
                         final String finalKey = key;
-                        com.duoshield.app.util.B2StorageHelper.loadMedia(ctx, url, key,
-                            new com.duoshield.app.util.B2StorageHelper.MediaCallback() {
-                                @Override public void onLoaded(byte[] plainBytes) {
-                                    if (finalUrl.equals(slot.getTag())) {
-                                        Glide.with(ctx).load(plainBytes).centerCrop().into(slot);
+                        if ("video".equals(itemType)) {
+                            byte[] cachedThumb =
+                                    com.duoshield.app.util.B2StorageHelper.getCachedThumb(url);
+                            if (cachedThumb != null) {
+                                Glide.with(ctx).load(cachedThumb).centerCrop().into(slot);
+                            } else {
+                                com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(
+                                        ctx, url, key,
+                                        new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {
+                                    @Override public void onLoaded(byte[] jpegBytes) {
+                                        if (finalUrl.equals(slot.getTag())) {
+                                            Glide.with(ctx).load(jpegBytes).centerCrop().into(slot);
+                                        }
                                     }
-                                }
-                                @Override public void onError(Exception e) {}
-                            });
+                                    @Override public void onError(Exception e) {}
+                                });
+                            }
+                        } else {
+                            com.duoshield.app.util.B2StorageHelper.loadMedia(ctx, url, key,
+                                new com.duoshield.app.util.B2StorageHelper.MediaCallback() {
+                                    @Override public void onLoaded(byte[] plainBytes) {
+                                        if (finalUrl.equals(slot.getTag())) {
+                                            Glide.with(ctx).load(plainBytes).centerCrop().into(slot);
+                                        }
+                                    }
+                                    @Override public void onError(Exception e) {}
+                                });
+                        }
                     }
                 } else {
-                    Glide.with(ctx).load(url).placeholder(R.drawable.ic_image)
-                         .centerCrop().into(slot);
+                    if ("video".equals(itemType)) {
+                        Glide.with(ctx).asBitmap().load(Uri.parse(url))
+                                .placeholder(R.drawable.ic_image).centerCrop().into(slot);
+                    } else {
+                        Glide.with(ctx).load(url).placeholder(R.drawable.ic_image)
+                                .centerCrop().into(slot);
+                    }
                 }
             }
 
             // Tap any slot → open gallery (first image for simplicity)
-            String firstUrl = arr.getJSONObject(0).optString("url", null);
-            String firstKey = arr.getJSONObject(0).optString("key", null);
             for (int i = 0; i < Math.min(count, 4); i++) {
                 int fi = i;
-                String iUrl = arr.getJSONObject(fi).optString("url", null);
+                org.json.JSONObject item = arr.getJSONObject(fi);
+                String iUrl = item.optString("url", null);
+                if (iUrl == null || iUrl.isEmpty()) iUrl = item.optString("path", null);
                 String iKey = arr.getJSONObject(fi).optString("key", null);
+                String iType = item.optString("type", "image");
+                final String finalUrl = iUrl;
+                final String finalKey = iKey;
+                final String finalType = iType;
                 slots[i].setOnClickListener(v -> {
-                    Intent intent = new Intent(ctx, com.duoshield.app.FullScreenImageActivity.class);
-                    intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, iUrl);
-                    intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MEDIA_KEY, iKey);
+                    Intent intent;
+                    if ("video".equals(finalType)) {
+                        intent = new Intent(ctx, com.duoshield.app.MediaViewerActivity.class);
+                        intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_URL, finalUrl);
+                        intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_MEDIA_KEY, finalKey);
+                    } else {
+                        intent = new Intent(ctx, com.duoshield.app.FullScreenImageActivity.class);
+                        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, finalUrl);
+                        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MEDIA_KEY, finalKey);
+                    }
                     ctx.startActivity(intent);
                 });
             }

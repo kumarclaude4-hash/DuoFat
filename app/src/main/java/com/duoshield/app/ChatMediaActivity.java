@@ -254,10 +254,22 @@ public class ChatMediaActivity extends BaseActivity {
         registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
             if (result.getResultCode() == RESULT_OK && result.getData() != null) {
                 String uriStr  = result.getData().getStringExtra(MediaSendPreviewActivity.EXTRA_URI);
+                java.util.ArrayList<String> uriStrings =
+                        result.getData().getStringArrayListExtra(MediaSendPreviewActivity.EXTRA_URIS);
+                String mediaType = result.getData().getStringExtra(
+                        MediaSendPreviewActivity.EXTRA_MEDIA_TYPE);
                 String caption = result.getData().getStringExtra(MediaSendPreviewActivity.EXTRA_CAPTION);
                 if (uriStr != null) {
-                    pendingImageCaption = (caption != null && !caption.isEmpty()) ? caption : null;
-                    uploadMedia(Uri.parse(uriStr), "image");
+                    if (mediaType == null || mediaType.isEmpty()) mediaType = "image";
+                    if (uriStrings != null && uriStrings.size() > 1) {
+                        startAlbumUpload(
+                                new java.util.ArrayList<>(toUris(uriStrings)),
+                                mediaType,
+                                (caption != null && !caption.isEmpty()) ? caption : null);
+                    } else {
+                        pendingImageCaption = (caption != null && !caption.isEmpty()) ? caption : null;
+                        uploadMedia(Uri.parse(uriStr), mediaType);
+                    }
                 }
             }
         });
@@ -270,22 +282,19 @@ public class ChatMediaActivity extends BaseActivity {
                 // Single pick: show caption/crop preview before uploading.
                 Intent preview = new Intent(ChatMediaActivity.this, MediaSendPreviewActivity.class);
                 preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, uris.get(0).toString());
+                preview.putExtra(MediaSendPreviewActivity.EXTRA_MEDIA_TYPE, "image");
                 mediaSendPreviewLauncher.launch(preview);
             } else {
                 // Multiple picks: group as a single album message.
-                showAlbumSendDialog(new java.util.ArrayList<>(uris), "image");
+                launchMediaPreview(new java.util.ArrayList<>(uris), "image");
             }
         });
 
-    /** Multi-select video picker — groups multiple videos as a single album message. */
+    /** Multi-select video picker — previews media and keeps the caption with the send. */
     private final ActivityResultLauncher<String> pickVideoLauncher =
         registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
             if (uris == null || uris.isEmpty()) return;
-            if (uris.size() == 1) {
-                uploadMedia(uris.get(0), "video");
-            } else {
-                showAlbumSendDialog(new java.util.ArrayList<>(uris), "video");
-            }
+            launchMediaPreview(new java.util.ArrayList<>(uris), "video");
         });
 
     /** Camera still-capture — photo saved to a FileProvider URI, then sent through preview. */
@@ -294,6 +303,7 @@ public class ChatMediaActivity extends BaseActivity {
             if (success != null && success && cameraPhotoUri != null) {
                 Intent preview = new Intent(ChatMediaActivity.this, MediaSendPreviewActivity.class);
                 preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, cameraPhotoUri.toString());
+                preview.putExtra(MediaSendPreviewActivity.EXTRA_MEDIA_TYPE, "image");
                 mediaSendPreviewLauncher.launch(preview);
             }
         });
@@ -2399,6 +2409,26 @@ public class ChatMediaActivity extends BaseActivity {
         sheet.show();
     }
 
+    private void launchMediaPreview(java.util.ArrayList<Uri> uris, String mediaType) {
+        if (uris == null || uris.isEmpty()) return;
+        Intent preview = new Intent(this, MediaSendPreviewActivity.class);
+        java.util.ArrayList<String> values = new java.util.ArrayList<>();
+        for (Uri uri : uris) values.add(uri.toString());
+        preview.putStringArrayListExtra(MediaSendPreviewActivity.EXTRA_URIS, values);
+        preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, values.get(0));
+        preview.putExtra(MediaSendPreviewActivity.EXTRA_MEDIA_TYPE, mediaType);
+        mediaSendPreviewLauncher.launch(preview);
+    }
+
+    private java.util.List<Uri> toUris(java.util.ArrayList<String> values) {
+        java.util.ArrayList<Uri> result = new java.util.ArrayList<>();
+        if (values == null) return result;
+        for (String value : values) {
+            if (value != null && !value.isEmpty()) result.add(Uri.parse(value));
+        }
+        return result;
+    }
+
     /**
      * Requests CAMERA permission if needed, creates a FileProvider-backed temp file,
      * and launches the system camera via {@link #takePictureLauncher}.
@@ -2432,15 +2462,14 @@ public class ChatMediaActivity extends BaseActivity {
     private void showUploadProgress(Uri previewUri, String mediaType) {
         if (isFinishing() || isDestroyed()) return;
         uploadProgressContainer.setVisibility(View.VISIBLE);
+        if (tvUploadPct != null) {
+            tvUploadPct.setText("Preparing…");
+        }
         if (ivUploadThumb != null && previewUri != null) {
             ivUploadThumb.setVisibility(View.VISIBLE);
             if (uploadThumbDim  != null) uploadThumbDim.setVisibility(View.VISIBLE);
             if (uploadPlainBg   != null) uploadPlainBg.setVisibility(View.GONE);
-            com.bumptech.glide.Glide.with(this)
-                .load(previewUri)
-                .centerCrop()
-                .placeholder(R.drawable.bg_media_rounded)
-                .into(ivUploadThumb);
+            loadUploadPreview(previewUri, mediaType, ivUploadThumb);
         }
     }
 
@@ -2452,6 +2481,18 @@ public class ChatMediaActivity extends BaseActivity {
             ivUploadThumb.setVisibility(View.GONE);
             if (uploadThumbDim != null) uploadThumbDim.setVisibility(View.GONE);
             if (uploadPlainBg  != null) uploadPlainBg.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void loadUploadPreview(Uri uri, String mediaType, ImageView target) {
+        if (uri == null || target == null) return;
+        if ("video".equals(mediaType)) {
+            Glide.with(this).asBitmap().load(uri)
+                    .placeholder(R.drawable.bg_media_rounded)
+                    .error(R.drawable.bg_media_rounded)
+                    .centerCrop().into(target);
+        } else {
+            Glide.with(this).load(uri).centerCrop().into(target);
         }
     }
 
@@ -2622,6 +2663,10 @@ public class ChatMediaActivity extends BaseActivity {
               m.setStatus("sent");
               adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
               saveToRoom(m);
+              ConversationMetaUpdater.update(ChatMediaActivity.this, conversationId, myUid,
+                  partnerUid, caption != null && !caption.isEmpty()
+                      ? previewFor(caption)
+                      : "📷 " + items.size() + " media items");
               String noun = items.get(0)[1].equals("video") ? "videos 🎬" : "photos 🖼";
               notifyPartner("DuoShield", "Sent " + items.size() + " " + noun, msgId);
           })
@@ -2934,6 +2979,10 @@ public class ChatMediaActivity extends BaseActivity {
               m.setStatus("sent");
               adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
               saveToRoom(m);
+              ConversationMetaUpdater.update(ChatMediaActivity.this, conversationId, myUid,
+                  partnerUid, caption != null && !caption.isEmpty()
+                      ? previewFor(caption)
+                      : ("video".equals(mediaType) ? "Video 🎬" : "Photo 🖼"));
               notifyPartner("DuoShield", "video".equals(mediaType) ? "Sent a video 🎬" : "Sent a photo 🖼", msgId);
               // Schedule B2 file deletion 24 hours after upload
               if (B2StorageHelper.isB2Path(storagePath)) {

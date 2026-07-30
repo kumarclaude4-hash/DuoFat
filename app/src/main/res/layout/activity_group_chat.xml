@@ -106,11 +106,20 @@
         <ProgressBar
             android:id="@+id/groupUploadProgress"
             style="@android:style/Widget.ProgressBar.Horizontal"
-            android:layout_width="0dp"
+            android:layout_width="72dp"
             android:layout_height="4dp"
-            android:layout_weight="1"
             android:progressTint="@color/accent"
             android:indeterminate="true"/>
+
+        <ImageView
+            android:id="@+id/groupUploadThumb"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginEnd="10dp"
+            android:scaleType="centerCrop"
+            android:background="@drawable/bg_media_rounded"
+            android:visibility="gone"
+            android:contentDescription="Media being uploaded"/>
 
         <TextView
             android:id="@+id/tvGroupUploadPct"
@@ -178,6 +187,25 @@
                 android:inputType="textMultiLine|textCapSentences"
                 android:imeOptions="actionNone"/>
 
+            <!-- Camera stays inside the compose field, like WhatsApp -->
+            <FrameLayout
+                android:id="@+id/group_camera_container"
+                android:layout_width="40dp"
+                android:layout_height="40dp">
+
+                <ImageView
+                    android:id="@+id/btn_group_camera_inline"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:padding="10dp"
+                    android:src="@drawable/ic_camera"
+                    app:tint="@color/ds_text_secondary"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Camera"/>
+            </FrameLayout>
+
             <!-- Attach (right of field) -->
             <ImageView
                 android:id="@+id/btn_group_attach"
@@ -191,28 +219,6 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Attach media"/>
         </LinearLayout>
-
-        <!-- Camera shortcut — hides when typing, shows with send -->
-        <FrameLayout
-            android:id="@+id/group_camera_container"
-            android:layout_width="46dp"
-            android:layout_height="50dp"
-            android:layout_marginStart="4dp"
-            android:gravity="center">
-
-            <ImageView
-                android:id="@+id/btn_group_camera_inline"
-                android:layout_width="46dp"
-                android:layout_height="46dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_camera"
-                android:padding="11dp"
-                app:tint="@color/ds_text_secondary"
-                android:clickable="true"
-                android:focusable="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Camera"/>
-        </FrameLayout>
 
         <!-- Send FAB -->
         <FrameLayout

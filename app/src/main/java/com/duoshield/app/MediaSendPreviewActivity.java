@@ -9,19 +9,26 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.bumptech.glide.Glide;
 
+import java.util.ArrayList;
+
 /**
- * Full-screen image preview before sending.
- * Receives: "uri" String extra (Uri of the image to preview).
- * Returns:  RESULT_OK with "uri" + "caption" String extras.
+ * Full-screen media preview before sending.
+ *
+ * <p>The same preview is used for one photo/video and for a multi-selection.
+ * Keeping the caption on this screen is important: it makes the caption part of
+ * the media message rather than a separate text message.</p>
  */
 public class MediaSendPreviewActivity extends AppCompatActivity {
 
     public static final String EXTRA_URI     = "uri";
+    public static final String EXTRA_URIS    = "uris";
+    public static final String EXTRA_MEDIA_TYPE = "media_type";
     public static final String EXTRA_CAPTION = "caption";
 
     @Override
@@ -32,13 +39,21 @@ public class MediaSendPreviewActivity extends AppCompatActivity {
             WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_media_send_preview);
 
-        String uriStr = getIntent().getStringExtra(EXTRA_URI);
-        if (uriStr == null) { finish(); return; }
+        Intent incoming = getIntent();
+        String uriStr = incoming.getStringExtra(EXTRA_URI);
+        ArrayList<String> uriStrings = incoming.getStringArrayListExtra(EXTRA_URIS);
+        if (uriStrings == null || uriStrings.isEmpty()) {
+            uriStrings = new ArrayList<>();
+            if (uriStr != null) uriStrings.add(uriStr);
+        }
+        if (uriStrings.isEmpty()) { finish(); return; }
 
-        Uri uri = Uri.parse(uriStr);
+        String mediaType = incoming.getStringExtra(EXTRA_MEDIA_TYPE);
+        if (mediaType == null || mediaType.isEmpty()) mediaType = "image";
 
         ImageView previewImage = findViewById(R.id.previewImage);
         EditText  captionInput = findViewById(R.id.captionInput);
+        LinearLayout thumbnailContainer = findViewById(R.id.thumbnailContainer);
         ImageButton btnClose   = findViewById(R.id.btnClose);
         FrameLayout btnSendWrap = findViewById(R.id.btnSend).getParent() instanceof FrameLayout
                 ? (FrameLayout) findViewById(R.id.btnSend).getParent()
@@ -47,7 +62,10 @@ public class MediaSendPreviewActivity extends AppCompatActivity {
 
         captionInput.setHintTextColor(0x88FFFFFF);
 
-        Glide.with(this).load(uri).into(previewImage);
+        final ArrayList<String> selectedUris = uriStrings;
+        final String selectedMediaType = mediaType;
+        showPreview(previewImage, Uri.parse(selectedUris.get(0)), selectedMediaType);
+        populateThumbnails(thumbnailContainer, previewImage, selectedUris, selectedMediaType);
 
         btnClose.setOnClickListener(v -> { setResult(RESULT_CANCELED); finish(); });
 
@@ -55,7 +73,9 @@ public class MediaSendPreviewActivity extends AppCompatActivity {
             String caption = captionInput.getText() != null
                     ? captionInput.getText().toString().trim() : "";
             Intent result = new Intent();
-            result.putExtra(EXTRA_URI, uriStr);
+            result.putExtra(EXTRA_URI, selectedUris.get(0));
+            result.putStringArrayListExtra(EXTRA_URIS, selectedUris);
+            result.putExtra(EXTRA_MEDIA_TYPE, selectedMediaType);
             result.putExtra(EXTRA_CAPTION, caption);
             setResult(RESULT_OK, result);
             finish();
@@ -63,5 +83,47 @@ public class MediaSendPreviewActivity extends AppCompatActivity {
 
         btnSend.setOnClickListener(sendListener);
         if (btnSendWrap != null) btnSendWrap.setOnClickListener(sendListener);
+    }
+
+    private void populateThumbnails(LinearLayout container, ImageView preview,
+                                    ArrayList<String> uris, String mediaType) {
+        if (container == null) return;
+        container.removeAllViews();
+        if (uris.size() < 2) {
+            container.setVisibility(View.GONE);
+            return;
+        }
+        container.setVisibility(View.VISIBLE);
+        for (int i = 0; i < uris.size(); i++) {
+            final Uri itemUri = Uri.parse(uris.get(i));
+            ImageView thumb = new ImageView(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(58), dp(58));
+            lp.setMargins(dp(4), 0, dp(4), 0);
+            thumb.setLayoutParams(lp);
+            thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            thumb.setPadding(dp(2), dp(2), dp(2), dp(2));
+            thumb.setBackgroundResource(i == 0
+                    ? R.drawable.bg_media_rounded : R.drawable.bg_caption_input);
+            showPreview(thumb, itemUri, mediaType);
+            thumb.setOnClickListener(v -> showPreview(preview, itemUri, mediaType));
+            container.addView(thumb);
+        }
+    }
+
+    private void showPreview(ImageView target, Uri uri, String mediaType) {
+        if ("video".equals(mediaType)) {
+            // Glide's video decoder extracts the first frame without blocking
+            // the preview screen on a MediaMetadataRetriever call.
+            Glide.with(this).asBitmap().load(uri)
+                    .placeholder(R.drawable.bg_media_rounded)
+                    .error(R.drawable.bg_media_rounded)
+                    .centerCrop().into(target);
+        } else {
+            Glide.with(this).load(uri).centerCrop().into(target);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

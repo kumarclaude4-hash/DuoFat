@@ -114,28 +114,64 @@ public class GroupChatActivity extends BaseActivity {
     private View              uploadGroupProgressContainer;
     private TextView          tvGroupUploadPct;
     private ImageView         btnGroupAttach;
+    private ImageView         groupUploadThumb;
+    private com.duoshield.app.ui.EmojiKeyboardHelper groupEmojiHelper;
+    private String             pendingGroupCaption;
+    private final Object       groupMultiUploadLock = new Object();
+    private final java.util.concurrent.atomic.AtomicInteger groupMultiCompleted =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.List<String[]> pendingGroupItems = new java.util.ArrayList<>();
+    private int    pendingGroupTotal = 0;
+    private String pendingGroupAlbumCaption;
 
-    /** Multi-select image picker — uploads each image as a separate group message. */
+    /** Multi-select image picker — one WhatsApp-style album message. */
     private final ActivityResultLauncher<String> pickGroupImageLauncher =
         registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
             if (uris == null || uris.isEmpty()) return;
-            for (Uri uri : uris) uploadGroupMedia(uri, "image");
+            launchGroupMediaPreview(new java.util.ArrayList<>(uris), "image");
         });
 
-    /** Multi-select video picker — uploads each video as a separate group message. */
+    /** Multi-select video picker — one WhatsApp-style album message. */
     private final ActivityResultLauncher<String> pickGroupVideoLauncher =
         registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
             if (uris == null || uris.isEmpty()) return;
-            for (Uri uri : uris) uploadGroupMedia(uri, "video");
+            launchGroupMediaPreview(new java.util.ArrayList<>(uris), "video");
         });
 
     /** Camera still-capture for group chat. */
     private final ActivityResultLauncher<Uri> takeGroupPictureLauncher =
         registerForActivityResult(new ActivityResultContracts.TakePicture(), success -> {
             if (success != null && success && cameraGroupPhotoUri != null) {
-                uploadGroupMedia(cameraGroupPhotoUri, "image");
+                launchGroupMediaPreview(
+                        java.util.Collections.singletonList(cameraGroupPhotoUri), "image");
             }
             cameraGroupPhotoUri = null;
+        });
+
+    private final ActivityResultLauncher<Intent> groupMediaSendPreviewLauncher =
+        registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+            Intent data = result.getData();
+            java.util.ArrayList<String> values =
+                    data.getStringArrayListExtra(MediaSendPreviewActivity.EXTRA_URIS);
+            if (values == null || values.isEmpty()) {
+                String one = data.getStringExtra(MediaSendPreviewActivity.EXTRA_URI);
+                if (one != null) values = new java.util.ArrayList<>(
+                        java.util.Collections.singletonList(one));
+            }
+            if (values == null || values.isEmpty()) return;
+            String type = data.getStringExtra(MediaSendPreviewActivity.EXTRA_MEDIA_TYPE);
+            if (type == null || type.isEmpty()) type = "image";
+            String caption = data.getStringExtra(MediaSendPreviewActivity.EXTRA_CAPTION);
+            java.util.ArrayList<Uri> uris = new java.util.ArrayList<>();
+            for (String value : values) uris.add(Uri.parse(value));
+            if (uris.size() > 1) {
+                startGroupAlbumUpload(uris, type, caption);
+            } else {
+                pendingGroupCaption = caption == null || caption.trim().isEmpty()
+                        ? null : caption.trim();
+                uploadGroupMedia(uris.get(0), type);
+            }
         });
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -175,6 +211,9 @@ public class GroupChatActivity extends BaseActivity {
         android.view.View groupCameraContainer = findViewById(R.id.group_camera_container);
         uploadGroupProgressContainer  = findViewById(R.id.groupUploadProgressContainer);
         tvGroupUploadPct              = findViewById(R.id.tvGroupUploadPct);
+        groupUploadThumb              = findViewById(R.id.groupUploadThumb);
+        groupEmojiHelper              =
+                new com.duoshield.app.ui.EmojiKeyboardHelper(this, etMessage);
 
         btnBack.setOnClickListener(v -> finish());
         // Tap the group header to view/manage members (admin can remove)
@@ -184,10 +223,7 @@ public class GroupChatActivity extends BaseActivity {
             btnGroupAttach.setOnClickListener(v -> showGroupMediaPickerSheet());
         }
         if (groupEmojiButton != null) groupEmojiButton.setOnClickListener(v -> {
-            etMessage.requestFocus();
-            android.view.inputmethod.InputMethodManager imm =
-                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-            if (imm != null) imm.showSoftInput(etMessage, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+            if (groupEmojiHelper != null) groupEmojiHelper.toggle();
         });
         if (btnGroupCameraInline != null) btnGroupCameraInline.setOnClickListener(v -> launchGroupCameraCapture());
         btnSend.setOnClickListener(v -> {
@@ -379,10 +415,14 @@ public class GroupChatActivity extends BaseActivity {
                 String  mediaPath = doc.getString("path");
                 String  mediaKey  = doc.getString("mediaKey");
                 String  docType   = doc.getString("type");
+                String mediaItems = doc.getString("mediaItems");
+                String caption    = doc.getString("caption");
                 Boolean fwdFlag   = doc.getBoolean("forwarded");
                 // mediaType: "image" | "video" | null (text message)
-                String mType = (mediaPath != null && !mediaPath.isEmpty())
-                        ? (docType != null ? docType : "image") : null;
+                String mType = (mediaItems != null && !mediaItems.isEmpty())
+                        ? "album"
+                        : ((mediaPath != null && !mediaPath.isEmpty())
+                            ? (docType != null ? docType : "image") : null);
 
                 if (id == null || sender == null) continue;
                 if (cipher == null) cipher = ""; // media messages may have empty/null text
@@ -409,21 +449,27 @@ public class GroupChatActivity extends BaseActivity {
                 String plain;
                 try {
                     Boolean isEncrypted = doc.getBoolean("isEncrypted");
-                    plain = (Boolean.TRUE.equals(isEncrypted))
+                    // Media messages intentionally carry an empty text body.
+                    // Captions and mediaItems are separate plaintext metadata,
+                    // so do not attempt to decrypt an empty cipher.
+                    plain = (Boolean.TRUE.equals(isEncrypted) && !cipher.isEmpty())
                         ? GroupCipherHelper.decrypt(cipher, groupKey)
                         : cipher;
                 } catch (Exception ex) {
                     Log.e(TAG, "Decrypt failed for msg " + id, ex);
                     plain = "[Decryption failed]";
                 }
+                final String displayPlain = plain;
 
                 // Build Message — include media fields when present
                 final Message msg;
                 if (mType != null) {
-                    msg = new Message(id, groupId, sender, plain, tsMs, false, mediaPath, mType);
+                    msg = new Message(id, groupId, sender, displayPlain, tsMs, false, mediaPath, mType);
                     msg.setMediaKey(mediaKey);
+                    if (mediaItems != null && !mediaItems.isEmpty()) msg.setMediaItems(mediaItems);
+                    if (caption != null && !caption.isEmpty()) msg.setCaption(caption);
                 } else {
-                    msg = new Message(id, groupId, sender, plain, tsMs, false);
+                    msg = new Message(id, groupId, sender, displayPlain, tsMs, false);
                 }
                 msg.forwarded = Boolean.TRUE.equals(fwdFlag);
                 adapter.appendMessage(msg);
@@ -432,15 +478,26 @@ public class GroupChatActivity extends BaseActivity {
                 // Persist decrypted message to Room
                 final Message toRoom;
                 if (mType != null) {
-                    toRoom = new Message(id, groupId, sender, plain, tsMs, false, mediaPath, mType);
+                    toRoom = new Message(id, groupId, sender, displayPlain, tsMs, false, mediaPath, mType);
                     toRoom.setMediaKey(mediaKey);
+                    if (mediaItems != null && !mediaItems.isEmpty()) toRoom.setMediaItems(mediaItems);
+                    if (caption != null && !caption.isEmpty()) toRoom.setCaption(caption);
                 } else {
-                    toRoom = new Message(id, groupId, sender, plain, tsMs, false);
+                    toRoom = new Message(id, groupId, sender, displayPlain, tsMs, false);
                 }
                 toRoom.forwarded = Boolean.TRUE.equals(fwdFlag);
                 executor.execute(() -> {
                     try { localDb.messageDao().insert(toRoom); }
                     catch (Exception ex) { Log.w(TAG, "Room insert conflict for " + id); }
+                    String preview = caption != null && !caption.isEmpty()
+                            ? caption
+                            : (mediaItems != null && !mediaItems.isEmpty()
+                                ? "📷 Media album"
+                                : (mType != null
+                                    ? ("video".equals(mType) ? "Video 🎬" : "Photo 🖼")
+                                    : (displayPlain.length() > 80
+                                        ? displayPlain.substring(0, 80) : displayPlain)));
+                    localDb.groupDao().updateLastMessage(groupId, preview, tsMs);
                 });
             }
         });
@@ -584,6 +641,120 @@ public class GroupChatActivity extends BaseActivity {
     // Media / camera support
     // ═════════════════════════════════════════════════════════════════════════
 
+    private void launchGroupMediaPreview(java.util.List<Uri> uris, String mediaType) {
+        if (uris == null || uris.isEmpty()) return;
+        Intent preview = new Intent(this, MediaSendPreviewActivity.class);
+        java.util.ArrayList<String> values = new java.util.ArrayList<>();
+        for (Uri uri : uris) values.add(uri.toString());
+        preview.putStringArrayListExtra(MediaSendPreviewActivity.EXTRA_URIS, values);
+        preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, values.get(0));
+        preview.putExtra(MediaSendPreviewActivity.EXTRA_MEDIA_TYPE, mediaType);
+        groupMediaSendPreviewLauncher.launch(preview);
+    }
+
+    private void startGroupAlbumUpload(java.util.List<Uri> uris, String mediaType,
+                                       String caption) {
+        synchronized (groupMultiUploadLock) {
+            pendingGroupItems.clear();
+            groupMultiCompleted.set(0);
+            pendingGroupTotal = uris.size();
+            pendingGroupAlbumCaption = caption == null || caption.trim().isEmpty()
+                    ? null : caption.trim();
+        }
+        runOnUiThread(() -> showGroupUploadPreview(uris.get(0), mediaType));
+        for (Uri uri : uris) uploadGroupMedia(uri, mediaType);
+    }
+
+    private void showGroupUploadPreview(Uri uri, String mediaType) {
+        if (isFinishing() || isDestroyed()) return;
+        if (uploadGroupProgressContainer != null)
+            uploadGroupProgressContainer.setVisibility(View.VISIBLE);
+        if (tvGroupUploadPct != null) tvGroupUploadPct.setText("Preparing…");
+        if (groupUploadThumb != null) {
+            groupUploadThumb.setVisibility(View.VISIBLE);
+            if ("video".equals(mediaType)) {
+                com.bumptech.glide.Glide.with(this).asBitmap().load(uri)
+                        .placeholder(R.drawable.bg_media_rounded)
+                        .error(R.drawable.bg_media_rounded)
+                        .centerCrop().into(groupUploadThumb);
+            } else {
+                com.bumptech.glide.Glide.with(this).load(uri)
+                        .placeholder(R.drawable.bg_media_rounded)
+                        .centerCrop().into(groupUploadThumb);
+            }
+        }
+    }
+
+    private boolean isGroupAlbumUpload() {
+        synchronized (groupMultiUploadLock) {
+            return pendingGroupTotal > 0;
+        }
+    }
+
+    private void onGroupUploadComplete(String storagePath, String mediaType,
+                                       String mediaKey) {
+        final java.util.List<String[]> completeItems;
+        final String completeCaption;
+        synchronized (groupMultiUploadLock) {
+            if (pendingGroupTotal <= 0) {
+                final String singleCaption = pendingGroupCaption;
+                pendingGroupCaption = null;
+                runOnUiThread(() -> sendGroupMediaMessage(
+                        storagePath, mediaType, mediaKey, singleCaption));
+                return;
+            }
+            pendingGroupItems.add(new String[]{storagePath, mediaType, mediaKey});
+            int done = groupMultiCompleted.incrementAndGet();
+            if (done < pendingGroupTotal) return;
+            completeItems = new java.util.ArrayList<>(pendingGroupItems);
+            completeCaption = pendingGroupAlbumCaption;
+            pendingGroupItems.clear();
+            pendingGroupTotal = 0;
+            pendingGroupAlbumCaption = null;
+        }
+        runOnUiThread(() -> {
+            hideGroupUploadPreview();
+            sendGroupAlbumMessage(completeItems, completeCaption);
+        });
+    }
+
+    private void onGroupUploadFailed() {
+        boolean albumFinished = false;
+        boolean singleFailed = false;
+        synchronized (groupMultiUploadLock) {
+            if (pendingGroupTotal > 0) {
+                albumFinished = groupMultiCompleted.incrementAndGet() >= pendingGroupTotal;
+                if (albumFinished) {
+                    pendingGroupItems.clear();
+                    pendingGroupTotal = 0;
+                    pendingGroupAlbumCaption = null;
+                }
+            } else {
+                pendingGroupCaption = null;
+                singleFailed = true;
+            }
+        }
+        final boolean completedAlbum = albumFinished;
+        if (completedAlbum || singleFailed) {
+            runOnUiThread(() -> {
+                hideGroupUploadPreview();
+                Toast.makeText(this, completedAlbum
+                                ? "Some items failed to upload."
+                                : "Upload failed after multiple attempts.",
+                        Toast.LENGTH_LONG).show();
+            });
+        }
+    }
+
+    private void hideGroupUploadPreview() {
+        if (uploadGroupProgressContainer != null)
+            uploadGroupProgressContainer.setVisibility(View.GONE);
+        if (groupUploadThumb != null) {
+            groupUploadThumb.setVisibility(View.GONE);
+            groupUploadThumb.setImageDrawable(null);
+        }
+    }
+
     /** Shows the media-type picker bottom sheet (image / video / camera). */
     private void showGroupMediaPickerSheet() {
         if (groupKey == null) {
@@ -716,9 +887,7 @@ public class GroupChatActivity extends BaseActivity {
                         final String finalMediaKey = mediaKey;
                         runOnUiThread(() -> {
                             if (isFinishing() || isDestroyed()) return;
-                            if (uploadGroupProgressContainer != null)
-                                uploadGroupProgressContainer.setVisibility(View.GONE);
-                            sendGroupMediaMessage(storagePath, mediaType, finalMediaKey);
+                            onGroupUploadComplete(storagePath, mediaType, finalMediaKey);
                         });
                     } finally {
                         //noinspection ResultOfMethodCallIgnored
@@ -755,13 +924,15 @@ public class GroupChatActivity extends BaseActivity {
                     final String mediaKey = enc.keyBase64;
                     runOnUiThread(() -> {
                         if (isFinishing() || isDestroyed()) return;
-                        if (uploadGroupProgressContainer != null)
-                            uploadGroupProgressContainer.setVisibility(View.GONE);
-                        sendGroupMediaMessage(storagePath, mediaType, mediaKey);
+                        onGroupUploadComplete(storagePath, mediaType, mediaKey);
                     });
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Group media upload failed (attempt " + retryCount + ")", e);
+                if (retryCount >= 3) {
+                    runOnUiThread(this::onGroupUploadFailed);
+                    return;
+                }
                 long delayMs = (long) (1000 * Math.pow(2, retryCount));
                 new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
                         () -> uploadGroupMediaWithRetry(fileUri, mediaType, retryCount + 1),
@@ -775,7 +946,8 @@ public class GroupChatActivity extends BaseActivity {
      * The message carries the B2 path and per-file AES key; the group AES key
      * decrypts the B2 ciphertext on each recipient's device.
      */
-    private void sendGroupMediaMessage(String storagePath, String mediaType, String mediaKey) {
+    private void sendGroupMediaMessage(String storagePath, String mediaType,
+                                       String mediaKey, String caption) {
         if (groupKey == null) return;
         String msgId = UUID.randomUUID().toString();
         long   now   = System.currentTimeMillis();
@@ -783,6 +955,7 @@ public class GroupChatActivity extends BaseActivity {
         // Optimistic UI
         Message optimistic = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
         optimistic.setMediaKey(mediaKey);
+        if (caption != null && !caption.isEmpty()) optimistic.setCaption(caption);
         optimistic.setStatus("pending");
         adapter.appendMessage(optimistic);
         knownIds.add(msgId);
@@ -799,6 +972,7 @@ public class GroupChatActivity extends BaseActivity {
         doc.put("mediaKey",    mediaKey);
         doc.put("status",      "sent");
         doc.put("timestamp",   FieldValue.serverTimestamp());
+        if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
 
         FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
         if (!guard.canWrite(1)) {
@@ -815,8 +989,12 @@ public class GroupChatActivity extends BaseActivity {
               // Persist to Room
               Message stored = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
               stored.setMediaKey(mediaKey);
+              if (caption != null && !caption.isEmpty()) stored.setCaption(caption);
               stored.setStatus("sent");
               executor.execute(() -> localDb.messageDao().insert(stored));
+              String preview = caption != null && !caption.isEmpty()
+                      ? caption : ("video".equals(mediaType) ? "Video 🎬" : "Photo 🖼");
+              executor.execute(() -> localDb.groupDao().updateLastMessage(groupId, preview, now));
               // Nudge group doc for FCM
               db.collection("groups").document(groupId)
                 .update("lastActivity", FieldValue.serverTimestamp())
@@ -834,6 +1012,77 @@ public class GroupChatActivity extends BaseActivity {
               }
               Toast.makeText(this, "Failed to send media.", Toast.LENGTH_SHORT).show();
           });
+    }
+
+    /** Sends all selected media as one group message, keeping one shared caption. */
+    private void sendGroupAlbumMessage(java.util.List<String[]> items, String caption) {
+        if (groupKey == null || items == null || items.isEmpty()) return;
+        String msgId = UUID.randomUUID().toString();
+        long now = System.currentTimeMillis();
+        org.json.JSONArray array = new org.json.JSONArray();
+        for (String[] item : items) {
+            try {
+                org.json.JSONObject value = new org.json.JSONObject();
+                value.put("path", item[0]);
+                value.put("type", item[1]);
+                value.put("key", item[2]);
+                array.put(value);
+            } catch (org.json.JSONException ignored) {}
+        }
+        String mediaItems = array.toString();
+
+        Message optimistic = new Message(msgId, groupId, myUid, "", now, false,
+                null, "album");
+        optimistic.setMediaItems(mediaItems);
+        if (caption != null && !caption.isEmpty()) optimistic.setCaption(caption);
+        optimistic.setStatus("pending");
+        adapter.appendMessage(optimistic);
+        knownIds.add(msgId);
+        scrollToBottom();
+
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("id", msgId);
+        doc.put("sender", myUid);
+        doc.put("text", "");
+        doc.put("isEncrypted", true);
+        doc.put("type", "album");
+        doc.put("mediaType", "album");
+        doc.put("mediaItems", mediaItems);
+        doc.put("status", "sent");
+        doc.put("timestamp", FieldValue.serverTimestamp());
+        if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
+
+        FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
+        if (!guard.canWrite(1)) {
+            adapter.updateMessage(msgId, m -> m.setStatus("failed"));
+            return;
+        }
+        db.collection("groups").document(groupId)
+                .collection("messages").document(msgId)
+                .set(doc)
+                .addOnSuccessListener(v -> {
+                    guard.recordWrites(1);
+                    adapter.updateMessage(msgId, m -> m.setStatus("sent"));
+                    Message stored = new Message(msgId, groupId, myUid, "", now, false,
+                            null, "album");
+                    stored.setMediaItems(mediaItems);
+                    if (caption != null && !caption.isEmpty()) stored.setCaption(caption);
+                    stored.setStatus("sent");
+                    executor.execute(() -> {
+                        localDb.messageDao().insert(stored);
+                        String preview = caption != null && !caption.isEmpty()
+                                ? caption : "📷 " + items.size() + " media items";
+                        localDb.groupDao().updateLastMessage(groupId, preview, now);
+                    });
+                    db.collection("groups").document(groupId)
+                            .update("lastActivity", FieldValue.serverTimestamp())
+                            .addOnFailureListener(ex ->
+                                    Log.w(TAG, "nudge failed (non-critical): " + ex.getMessage()));
+                })
+                .addOnFailureListener(ex -> {
+                    adapter.updateMessage(msgId, m -> m.setStatus("failed"));
+                    Toast.makeText(this, "Failed to send album.", Toast.LENGTH_SHORT).show();
+                });
     }
 
     /** Returns the file size in bytes from ContentResolver, or 0 if unavailable. */
