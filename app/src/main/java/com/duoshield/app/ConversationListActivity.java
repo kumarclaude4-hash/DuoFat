@@ -229,12 +229,27 @@ public class ConversationListActivity extends BaseActivity {
             popup.show();
         });
 
-        // FAB → Add Contact
+        // FAB → bottom sheet with New Chat / New Group
         com.google.android.material.floatingactionbutton.FloatingActionButton fabNewChat =
                 findViewById(R.id.fabNewChat);
         if (fabNewChat != null) {
-            fabNewChat.setOnClickListener(v ->
-                    startActivity(new Intent(this, com.duoshield.app.ui.AddContactActivity.class)));
+            fabNewChat.setOnClickListener(v -> {
+                com.google.android.material.bottomsheet.BottomSheetDialog sheet =
+                    new com.google.android.material.bottomsheet.BottomSheetDialog(
+                        this, R.style.Theme_DuoShield_BottomSheet);
+                android.view.View sheetView = getLayoutInflater()
+                    .inflate(R.layout.bottom_sheet_new_conversation, null);
+                sheet.setContentView(sheetView);
+                sheetView.findViewById(R.id.btnNewChat).setOnClickListener(b -> {
+                    sheet.dismiss();
+                    startActivity(new Intent(this, com.duoshield.app.ui.AddContactActivity.class));
+                });
+                sheetView.findViewById(R.id.btnNewGroup).setOnClickListener(b -> {
+                    sheet.dismiss();
+                    startActivity(new Intent(this, CreateGroupActivity.class));
+                });
+                sheet.show();
+            });
         }
 
         setupSwipeActions();

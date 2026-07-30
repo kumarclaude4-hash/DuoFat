@@ -262,7 +262,7 @@ public class ChatMediaActivity extends BaseActivity {
             }
         });
 
-    /** Multi-select image picker — shows preview for single picks; bulk-uploads multiples. */
+    /** Multi-select image picker — shows preview for single picks; groups multiples as album. */
     private final ActivityResultLauncher<String> pickImageLauncher =
         registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
             if (uris == null || uris.isEmpty()) return;
@@ -272,19 +272,19 @@ public class ChatMediaActivity extends BaseActivity {
                 preview.putExtra(MediaSendPreviewActivity.EXTRA_URI, uris.get(0).toString());
                 mediaSendPreviewLauncher.launch(preview);
             } else {
-                // Multiple picks: upload all immediately, each as a separate message.
-                for (Uri uri : uris) {
-                    uploadMedia(uri, "image");
-                }
+                // Multiple picks: group as a single album message.
+                showAlbumSendDialog(new java.util.ArrayList<>(uris), "image");
             }
         });
 
-    /** Multi-select video picker — uploads each selected video as a separate message. */
+    /** Multi-select video picker — groups multiple videos as a single album message. */
     private final ActivityResultLauncher<String> pickVideoLauncher =
         registerForActivityResult(new ActivityResultContracts.GetMultipleContents(), uris -> {
             if (uris == null || uris.isEmpty()) return;
-            for (Uri uri : uris) {
-                uploadMedia(uri, "video");
+            if (uris.size() == 1) {
+                uploadMedia(uris.get(0), "video");
+            } else {
+                showAlbumSendDialog(new java.util.ArrayList<>(uris), "video");
             }
         });
 
@@ -1729,6 +1729,11 @@ public class ChatMediaActivity extends BaseActivity {
                     if (mKey      != null) m.setMediaKey(mKey);
                     if (statusFromFs != null) m.setStatus(statusFromFs);
                     m.forwarded = Boolean.TRUE.equals(fwdFlag);
+                    // Read album + caption fields (never encrypted, safe to read directly)
+                    String fsMediaItems = dc.getDocument().getString("mediaItems");
+                    if (fsMediaItems != null && !fsMediaItems.isEmpty()) m.setMediaItems(fsMediaItems);
+                    String fsCaption = dc.getDocument().getString("caption");
+                    if (fsCaption != null && !fsCaption.isEmpty()) m.setCaption(fsCaption);
                     // Populate waveform bars for voice messages from Firestore amplitudes field
                     if ("voice".equals(mType)) {
                         Object rawAmps = dc.getDocument().get("amplitudes");
@@ -2419,6 +2424,216 @@ public class ChatMediaActivity extends BaseActivity {
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Upload progress helpers (WhatsApp-style thumbnail preview)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Shows the upload progress container with a thumbnail preview of what's being sent. */
+    private void showUploadProgress(Uri previewUri, String mediaType) {
+        if (isFinishing() || isDestroyed()) return;
+        uploadProgressContainer.setVisibility(View.VISIBLE);
+        if (ivUploadThumb != null && previewUri != null) {
+            ivUploadThumb.setVisibility(View.VISIBLE);
+            if (uploadThumbDim  != null) uploadThumbDim.setVisibility(View.VISIBLE);
+            if (uploadPlainBg   != null) uploadPlainBg.setVisibility(View.GONE);
+            com.bumptech.glide.Glide.with(this)
+                .load(previewUri)
+                .centerCrop()
+                .placeholder(R.drawable.bg_media_rounded)
+                .into(ivUploadThumb);
+        }
+    }
+
+    /** Hides the upload progress container and resets thumbnail state. */
+    private void hideUploadContainer() {
+        if (isFinishing() || isDestroyed()) return;
+        uploadProgressContainer.setVisibility(View.GONE);
+        if (ivUploadThumb != null) {
+            ivUploadThumb.setVisibility(View.GONE);
+            if (uploadThumbDim != null) uploadThumbDim.setVisibility(View.GONE);
+            if (uploadPlainBg  != null) uploadPlainBg.setVisibility(View.VISIBLE);
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Album (multi-media) send — groups multiple photos/videos into one message
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Shows a caption-input dialog, then uploads all URIs and sends a single
+     * album message so all photos/videos appear grouped like WhatsApp/Telegram.
+     */
+    private void showAlbumSendDialog(java.util.List<Uri> uris, String mediaType) {
+        android.widget.EditText captionInput = new android.widget.EditText(this);
+        captionInput.setHint("Add a caption (optional)");
+        captionInput.setMaxLines(3);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        captionInput.setPadding(pad, pad / 2, pad, pad / 2);
+        captionInput.setTextColor(0xFFFFFFFF);
+        captionInput.setHintTextColor(0xFF888888);
+        int label = "image".equals(mediaType) ? uris.size() : uris.size();
+        String noun  = "image".equals(mediaType) ? "photos" : "videos";
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Send " + label + " " + noun)
+            .setView(captionInput)
+            .setPositiveButton("Send", (d, w) -> {
+                String cap = captionInput.getText().toString().trim();
+                startAlbumUpload(uris, mediaType, cap.isEmpty() ? null : cap);
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    /** Uploads each URI; once all complete fires a single album message. */
+    private void startAlbumUpload(java.util.List<Uri> uris, String mediaType, String caption) {
+        synchronized (multiUploadLock) {
+            pendingMultiItems.clear();
+            pendingMultiCompleted.set(0);
+            pendingMultiTotal   = uris.size();
+            pendingMultiCaption = caption;
+        }
+        // Show thumbnail of the first item while uploading
+        runOnUiThread(() -> showUploadProgress(uris.get(0), mediaType));
+        for (Uri uri : uris) {
+            uploadAlbumItemWithRetry(uri, mediaType, 0);
+        }
+    }
+
+    private void uploadAlbumItemWithRetry(Uri fileUri, String mediaType, int retryCount) {
+        if (isFinishing() || isDestroyed()) return;
+        if (retryCount > 3) { onAlbumItemFailed(); return; }
+        if (retryCount == 0 && getFileSize(fileUri) > 500 * 1024 * 1024L) {
+            Toast.makeText(this, "One file is too large (max 500 MB).", Toast.LENGTH_SHORT).show();
+            onAlbumItemFailed();
+            return;
+        }
+        String ext  = "video".equals(mediaType) ? ".mp4" : ".jpg";
+        String mime = "video".equals(mediaType) ? "video/mp4" : "image/jpeg";
+        String path = "media/" + conversationId + "/" + UUID.randomUUID() + ext;
+        if (executor.isShutdown()) return;
+        executor.execute(() -> {
+            try {
+                byte[] plain = readUriBytes(fileUri);
+                if (plain == null || plain.length == 0) throw new java.io.IOException("Empty file");
+                if ("image".equals(mediaType)) plain = compressImage(plain);
+                B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+                String storagePath = B2StorageHelper.uploadFile(enc.data, path, mime,
+                    pct -> runOnUiThread(() -> {
+                        if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
+                    }));
+                synchronized (multiUploadLock) {
+                    pendingMultiItems.add(new String[]{ storagePath, mediaType, enc.keyBase64 });
+                }
+                onAlbumItemComplete();
+            } catch (Exception e) {
+                Log.e(TAG, "Album item upload failed (attempt " + (retryCount + 1) + "): " + e.getMessage());
+                if (retryCount >= 3) { onAlbumItemFailed(); return; }
+                long delay = (long) (2000 * Math.pow(2, retryCount));
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (!isFinishing() && !isDestroyed()) uploadAlbumItemWithRetry(fileUri, mediaType, retryCount + 1);
+                }, delay);
+            }
+        });
+    }
+
+    private void onAlbumItemComplete() {
+        int done = pendingMultiCompleted.incrementAndGet();
+        if (done >= pendingMultiTotal) {
+            java.util.List<String[]> items;
+            String caption;
+            synchronized (multiUploadLock) {
+                items   = new java.util.ArrayList<>(pendingMultiItems);
+                caption = pendingMultiCaption;
+                pendingMultiItems.clear();
+                pendingMultiTotal   = 0;
+                pendingMultiCaption = null;
+            }
+            final java.util.List<String[]> finalItems = items;
+            final String finalCap = caption;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                hideUploadContainer();
+                sendAlbumMessage(finalItems, finalCap);
+            });
+        }
+    }
+
+    private void onAlbumItemFailed() {
+        int done = pendingMultiCompleted.incrementAndGet();
+        if (done >= pendingMultiTotal) {
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                hideUploadContainer();
+                Toast.makeText(this, "Some items failed to upload.", Toast.LENGTH_LONG).show();
+            });
+        }
+    }
+
+    /**
+     * Sends a single Firestore message with all uploaded items in the mediaItems JSON array.
+     * The receiver's MessageAdapter will display them as a 2×2 grid (WhatsApp/Telegram style).
+     */
+    private void sendAlbumMessage(java.util.List<String[]> items, String caption) {
+        if (items.isEmpty()) return;
+        org.json.JSONArray jsonArray = new org.json.JSONArray();
+        for (String[] item : items) {
+            try {
+                org.json.JSONObject obj = new org.json.JSONObject();
+                obj.put("path", item[0]);
+                obj.put("type", item[1]);
+                obj.put("key",  item[2]);
+                jsonArray.put(obj);
+            } catch (org.json.JSONException ignored) {}
+        }
+        String mediaItemsJson = jsonArray.toString();
+
+        String msgId = UUID.randomUUID().toString();
+        long now = System.currentTimeMillis();
+        long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
+
+        Message m = new Message(msgId, conversationId, myUid, "", now, false, null, "album");
+        m.setExpiresAt(exp);
+        m.setMediaItems(mediaItemsJson);
+        if (caption != null && !caption.isEmpty()) m.setCaption(caption);
+        m.setStatus("pending");
+        adapter.appendMessage(m);
+        knownIds.add(msgId);
+        recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("id", msgId);
+        doc.put("conversationId", conversationId);
+        doc.put("sender", myUid);
+        doc.put("text", "");
+        doc.put("mediaType", "album");
+        doc.put("type", "album");
+        doc.put("mediaItems", mediaItemsJson);
+        if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
+        doc.put("isEncrypted", true);
+        doc.put("expiresAt", exp);
+        doc.put("timestamp", FieldValue.serverTimestamp());
+        doc.put("status", "sent");
+
+        db.collection("chats").document(conversationId)
+          .collection("messages").document(msgId).set(doc)
+          .addOnSuccessListener(v -> {
+              FirebaseCostGuard.getInstance(this).recordWrites(1);
+              m.setStatus("sent");
+              adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
+              saveToRoom(m);
+              String noun = items.get(0)[1].equals("video") ? "videos 🎬" : "photos 🖼";
+              notifyPartner("DuoShield", "Sent " + items.size() + " " + noun, msgId);
+          })
+          .addOnFailureListener(e -> {
+              Log.e(TAG, "Failed to send album message: " + e.getMessage());
+              adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
+              m.setStatus("failed");
+              saveToRoom(m);
+              Toast.makeText(this, "Failed to send album. Please try again.", Toast.LENGTH_LONG).show();
+          });
+    }
+
     private void uploadMedia(Uri fileUri, String mediaType) {
         uploadMediaWithRetry(fileUri, mediaType, 0);
     }
@@ -2429,7 +2644,7 @@ public class ChatMediaActivity extends BaseActivity {
         if (retryCount > 3) {
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                uploadProgressContainer.setVisibility(View.GONE);
+                hideUploadContainer();
                 Toast.makeText(ChatMediaActivity.this, "Upload failed after multiple attempts. Please check your connection.", Toast.LENGTH_LONG).show();
             });
             return;
@@ -2447,9 +2662,11 @@ public class ChatMediaActivity extends BaseActivity {
             }
         }
 
+        final Uri thumbUri = fileUri;
+        final String thumbType = mediaType;
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
-            uploadProgressContainer.setVisibility(View.VISIBLE);
+            showUploadProgress(thumbUri, thumbType);
             tvUploadPct.setText("Preparing…");
         });
 
@@ -2485,8 +2702,8 @@ public class ChatMediaActivity extends BaseActivity {
                         final String finalMediaKey = mediaKey;
                         runOnUiThread(() -> {
                             if (isFinishing() || isDestroyed()) return;
-                            uploadProgressContainer.setVisibility(View.GONE);
-                            sendMediaMessage(storagePath, mediaType, finalMediaKey);
+                            hideUploadContainer();
+                            sendMediaMessage(storagePath, mediaType, finalMediaKey, null);
                         });
                     } finally {
                         //noinspection ResultOfMethodCallIgnored
@@ -2522,11 +2739,9 @@ public class ChatMediaActivity extends BaseActivity {
                     pendingImageCaption = null;
                     runOnUiThread(() -> {
                         if (isFinishing() || isDestroyed()) return;
-                        uploadProgressContainer.setVisibility(View.GONE);
-                        sendMediaMessage(storagePath, mediaType, mediaKey);
-                        if (captionToSend != null && !captionToSend.isEmpty()) {
-                            sendMessage(captionToSend);
-                        }
+                        hideUploadContainer();
+                        // Caption goes in the same message bubble, not as a separate message
+                        sendMediaMessage(storagePath, mediaType, mediaKey, captionToSend);
                     });
                 }
             } catch (Exception e) {
@@ -2535,7 +2750,7 @@ public class ChatMediaActivity extends BaseActivity {
                 if (retryCount >= 3) {
                     runOnUiThread(() -> {
                         if (isFinishing() || isDestroyed()) return;
-                        uploadProgressContainer.setVisibility(View.GONE);
+                        hideUploadContainer();
                         showB2ErrorDialog("Media upload failed.", errMsg);
                     });
                     return;
@@ -2682,7 +2897,7 @@ public class ChatMediaActivity extends BaseActivity {
         }
     }
 
-    private void sendMediaMessage(String storagePath, String mediaType, String mediaKey) {
+    private void sendMediaMessage(String storagePath, String mediaType, String mediaKey, String caption) {
         String msgId = UUID.randomUUID().toString(); 
         long now = System.currentTimeMillis();
         long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
@@ -2691,6 +2906,7 @@ public class ChatMediaActivity extends BaseActivity {
         Message m = new Message(msgId, conversationId, myUid, "", now, false, storagePath, mediaType);
         m.setExpiresAt(exp);
         m.setMediaKey(mediaKey);
+        if (caption != null && !caption.isEmpty()) m.setCaption(caption);
         m.setStatus("pending");
         adapter.appendMessage(m);
         knownIds.add(msgId);
@@ -2709,6 +2925,7 @@ public class ChatMediaActivity extends BaseActivity {
         doc.put("expiresAt", exp); 
         doc.put("timestamp", FieldValue.serverTimestamp());
         doc.put("status", "sent");
+        if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
 
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
@@ -2802,7 +3019,7 @@ public class ChatMediaActivity extends BaseActivity {
         if ("image".equals(msg.getMediaType()) || "video".equals(msg.getMediaType())) {
             // If it failed at the Firestore step, we still have the B2 path.
             if (msg.getMediaUrl() != null && !msg.getMediaUrl().isEmpty()) {
-                sendMediaMessage(msg.getMediaUrl(), msg.getMediaType(), msg.getMediaKey());
+                sendMediaMessage(msg.getMediaUrl(), msg.getMediaType(), msg.getMediaKey(), msg.getCaption());
             } else {
                 Toast.makeText(this, "Please re-select the media to retry.", Toast.LENGTH_LONG).show();
             }
