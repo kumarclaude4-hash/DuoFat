@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lavender — deep violet mist, companion to the app accent -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#0E0C1C"
+        android:centerColor="#181430"
+        android:endColor="#201A3C"
+        android:type="linear"/>
+</shape>

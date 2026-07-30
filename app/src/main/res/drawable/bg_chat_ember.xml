@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ember — warm amber-dark, like dying embers in charcoal -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#100904"
+        android:centerColor="#1A1008"
+        android:endColor="#201608"
+        android:type="linear"/>
+</shape>

@@ -16,8 +16,8 @@ import com.duoshield.app.R;
  * <ol>
  *   <li>A gradient drawable named {@code bg_chat_<id>.xml} in res/drawable.</li>
  *   <li>A new {@code THEME_*} constant here.</li>
- *   <li>A new {@code case} in {@link #apply}.</li>
- *   <li>A new card in the Appearance settings layout.</li>
+ *   <li>A new {@code case} in {@link #apply} and {@link #drawableRes}.</li>
+ *   <li>A new entry in the themes array in AppearanceNotificationsSettingsActivity.</li>
  * </ol>
  */
 public final class ChatThemeHelper {
@@ -34,6 +34,10 @@ public final class ChatThemeHelper {
     public static final String THEME_STEEL    = "steel";     // cold blue-steel
     public static final String THEME_ASH      = "ash";       // carbon near-black
     public static final String THEME_NOIR     = "noir";      // pure black
+    public static final String THEME_AURORA   = "aurora";    // deep arctic teal
+    public static final String THEME_EMBER    = "ember";     // warm amber charcoal
+    public static final String THEME_LAVENDER = "lavender";  // deep violet mist
+    public static final String THEME_SLATE    = "slate";     // cool blue-grey
 
     private ChatThemeHelper() {}
 
@@ -59,6 +63,10 @@ public final class ChatThemeHelper {
             case THEME_STEEL:    chatBackground.setBackgroundResource(R.drawable.bg_chat_steel);    break;
             case THEME_ASH:      chatBackground.setBackgroundResource(R.drawable.bg_chat_ash);      break;
             case THEME_NOIR:     chatBackground.setBackgroundResource(R.drawable.bg_chat_noir);     break;
+            case THEME_AURORA:   chatBackground.setBackgroundResource(R.drawable.bg_chat_aurora);   break;
+            case THEME_EMBER:    chatBackground.setBackgroundResource(R.drawable.bg_chat_ember);    break;
+            case THEME_LAVENDER: chatBackground.setBackgroundResource(R.drawable.bg_chat_lavender); break;
+            case THEME_SLATE:    chatBackground.setBackgroundResource(R.drawable.bg_chat_slate);    break;
             default:             chatBackground.setBackground(null);                                break;
         }
     }
@@ -73,6 +81,10 @@ public final class ChatThemeHelper {
             case THEME_STEEL:    return R.drawable.bg_chat_steel;
             case THEME_ASH:      return R.drawable.bg_chat_ash;
             case THEME_NOIR:     return R.drawable.bg_chat_noir;
+            case THEME_AURORA:   return R.drawable.bg_chat_aurora;
+            case THEME_EMBER:    return R.drawable.bg_chat_ember;
+            case THEME_LAVENDER: return R.drawable.bg_chat_lavender;
+            case THEME_SLATE:    return R.drawable.bg_chat_slate;
             default:             return R.drawable.bg_chat_default_solid;
         }
     }

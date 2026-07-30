@@ -2343,6 +2343,16 @@ public class ChatMediaActivity extends BaseActivity {
     private void applyWallpaper() {
         if (recyclerView == null) return;
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
+
+        // ChatThemeHelper takes precedence over the legacy colour/image wallpaper.
+        // Only fall through to the old system when the theme is "default".
+        String theme = prefs.getString(com.duoshield.app.util.ChatThemeHelper.PREF_KEY,
+                com.duoshield.app.util.ChatThemeHelper.THEME_DEFAULT);
+        if (!theme.equals(com.duoshield.app.util.ChatThemeHelper.THEME_DEFAULT)) {
+            com.duoshield.app.util.ChatThemeHelper.apply(recyclerView, prefs);
+            return;
+        }
+
         switch (prefs.getString("wallpaper_type", "none")) {
             case "color":
                 recyclerView.setBackgroundColor(prefs.getInt("wallpaper_color", Color.TRANSPARENT)); break;

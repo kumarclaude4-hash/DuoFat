@@ -31,6 +31,7 @@ import com.duoshield.app.models.GroupMember;
 import com.duoshield.app.models.Message;
 import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.util.B2StorageHelper;
+import com.duoshield.app.util.ChatThemeHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.FieldValue;
@@ -250,6 +251,7 @@ public class GroupChatActivity extends BaseActivity {
         recyclerView.setHasFixedSize(true);
         recyclerView.setItemViewCacheSize(20);
         recyclerView.setAdapter(adapter);
+        ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
 
         // ── Load group from Room, init group key ───────────────────────────
         executor.execute(() -> {
@@ -274,6 +276,15 @@ public class GroupChatActivity extends BaseActivity {
                 seedFromRoom();
             }
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Re-apply the chat theme in case the user changed it in Appearance settings.
+        if (recyclerView != null) {
+            ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
+        }
     }
 
     @Override
