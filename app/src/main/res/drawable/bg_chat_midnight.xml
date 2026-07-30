@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Midnight — deep space indigo to soft violet-black -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#0B0C18"
+        android:centerColor="#12103A"
+        android:endColor="#1C1240"
+        android:type="linear"/>
+</shape>

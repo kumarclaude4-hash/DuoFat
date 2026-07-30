@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ocean — abyssal navy to deep teal-black -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#040E1C"
+        android:centerColor="#071828"
+        android:endColor="#0A2032"
+        android:type="linear"/>
+</shape>

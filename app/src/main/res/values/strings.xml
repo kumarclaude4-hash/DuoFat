@@ -83,6 +83,17 @@
     <string name="system_default">System default</string>
     <string name="push_notifications">Push notifications</string>
 
+    <!-- Chat background themes -->
+    <string name="section_chat_background">CHAT BACKGROUND</string>
+    <string name="chat_bg_default">Default</string>
+    <string name="chat_bg_midnight">Midnight</string>
+    <string name="chat_bg_ocean">Ocean</string>
+    <string name="chat_bg_forest">Forest</string>
+    <string name="chat_bg_dusk">Dusk</string>
+    <string name="chat_bg_steel">Steel</string>
+    <string name="chat_bg_ash">Ash</string>
+    <string name="chat_bg_noir">Noir</string>
+
     <!-- App language selector. Urdu is intentionally not included. -->
     <string-array name="language_tags">
         <item></item>

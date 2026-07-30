@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Steel — cold blue-steel, slate to midnight blue -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#080D1A"
+        android:centerColor="#0E1828"
+        android:endColor="#122032"
+        android:type="linear"/>
+</shape>

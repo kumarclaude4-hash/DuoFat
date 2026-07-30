@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dusk — velvet rose-noir, deep plum to charcoal-black -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="135"
+        android:startColor="#120810"
+        android:centerColor="#1A0E18"
+        android:endColor="#200E1E"
+        android:type="linear"/>
+</shape>

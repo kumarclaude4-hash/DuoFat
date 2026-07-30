@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chat background theme picker card.
+  Used inline inside the horizontal scroller in activity_appearance_notifications_settings.xml.
+  Each card is 72 × 100 dp with 14dp rounded corners, a gradient preview, and a name label.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="72dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:layout_marginEnd="12dp">
+
+    <!-- Gradient preview card -->
+    <FrameLayout
+        android:id="@+id/cardPreview"
+        android:layout_width="72dp"
+        android:layout_height="100dp"
+        android:clipToOutline="true"
+        android:outlineProvider="background">
+
+        <!-- filled by theme drawable at runtime -->
+        <View
+            android:id="@+id/viewGradient"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_chat_default_solid"/>
+
+        <!-- accent border overlay — visible only when selected -->
+        <View
+            android:id="@+id/viewBorder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_theme_card_selected"
+            android:visibility="gone"/>
+
+        <!-- check badge — bottom-right corner -->
+        <FrameLayout
+            android:id="@+id/badgeCheck"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="6dp"
+            android:background="@drawable/bg_theme_check"
+            android:visibility="gone">
+            <ImageView
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_check"
+                android:importantForAccessibility="no"/>
+        </FrameLayout>
+
+    </FrameLayout>
+
+    <!-- Theme name -->
+    <TextView
+        android:id="@+id/textThemeName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="12sp"
+        android:textColor="@color/ds_text_secondary"
+        android:gravity="center"
+        android:maxLines="1"/>
+
+</LinearLayout>
