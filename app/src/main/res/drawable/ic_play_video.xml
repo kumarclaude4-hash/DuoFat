@@ -1,6 +1,8 @@
+<!-- WhatsApp-style play glyph: a plain solid white triangle, no outer ring —
+     the semi-transparent circular backdrop is provided by bg_video_play_circle_lg. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-      android:width="56dp" android:height="56dp"
+      android:width="24dp" android:height="24dp"
       android:viewportWidth="24" android:viewportHeight="24">
       <path android:fillColor="#FFFFFFFF"
-          android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM10,16.5v-9l6,4.5 -6,4.5z"/>
+          android:pathData="M8,5.14v13.72c0,0.79 0.87,1.27 1.54,0.84l10.75,-6.86c0.62,-0.39 0.62,-1.29 0,-1.68L9.54,4.3C8.87,3.87 8,4.35 8,5.14z"/>
   </vector>

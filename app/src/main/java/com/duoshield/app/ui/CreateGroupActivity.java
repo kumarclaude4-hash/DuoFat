@@ -102,9 +102,15 @@ public class CreateGroupActivity extends BaseActivity {
 
         findViewById(R.id.btn_create).setOnClickListener(v -> attemptCreate());
 
+        android.widget.TextView tvNoContacts = findViewById(R.id.tv_no_contacts);
         executor.execute(() -> {
             List<Contact> contacts = localDb.contactDao().getAll();
-            runOnUiThread(() -> contactAdapter.setContacts(contacts));
+            runOnUiThread(() -> {
+                contactAdapter.setContacts(contacts);
+                if (tvNoContacts != null) {
+                    tvNoContacts.setVisibility(contacts.isEmpty() ? View.VISIBLE : View.GONE);
+                }
+            });
         });
     }
 

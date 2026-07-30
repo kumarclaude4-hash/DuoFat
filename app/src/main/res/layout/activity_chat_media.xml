@@ -538,6 +538,19 @@
                 android:maxLines="6"
                 android:inputType="textCapSentences|textMultiLine"/>
 
+            <!-- Attach / more (WhatsApp order: paperclip before camera) -->
+            <ImageView
+                android:id="@+id/uploadButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_attach"
+                android:padding="10dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Attach"/>
+
             <!-- Camera shortcut — inside pill, hidden when typing -->
             <ImageView
                 android:id="@+id/btnCameraInline"
@@ -550,19 +563,6 @@
                 android:focusable="true"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Camera"/>
-
-            <!-- Attach / more (right side of field) -->
-            <ImageView
-                android:id="@+id/uploadButton"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:src="@drawable/ic_attach"
-                android:padding="10dp"
-                app:tint="@color/ds_text_secondary"
-                android:clickable="true"
-                android:focusable="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Attach"/>
         </LinearLayout>
 
         <!-- Send / mic FAB button -->

@@ -56,13 +56,32 @@
         android:letterSpacing="0.1"
         android:padding="16dp"/>
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recycler_contacts"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:paddingBottom="80dp"/>
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recycler_contacts"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingBottom="80dp"/>
+
+        <!-- Shown when the user has no contacts yet — group members can only be
+             picked from existing contacts, so this points them to add one first. -->
+        <TextView
+            android:id="@+id/tv_no_contacts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="32dp"
+            android:text="You have no contacts yet.\nAdd a contact from the chats list first, then come back to create a group."
+            android:textColor="@color/text_hint"
+            android:textSize="14sp"
+            android:visibility="gone"/>
+    </FrameLayout>
 
     <!-- Floating create button area -->
     <LinearLayout

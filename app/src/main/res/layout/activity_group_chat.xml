@@ -187,6 +187,19 @@
                 android:inputType="textMultiLine|textCapSentences"
                 android:imeOptions="actionNone"/>
 
+            <!-- Attach (WhatsApp order: paperclip before camera) -->
+            <ImageView
+                android:id="@+id/btn_group_attach"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_attach"
+                android:padding="10dp"
+                app:tint="@color/ds_text_secondary"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Attach media"/>
+
             <!-- Camera stays inside the compose field, like WhatsApp -->
             <FrameLayout
                 android:id="@+id/group_camera_container"
@@ -205,19 +218,6 @@
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:contentDescription="Camera"/>
             </FrameLayout>
-
-            <!-- Attach (right of field) -->
-            <ImageView
-                android:id="@+id/btn_group_attach"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:src="@drawable/ic_attach"
-                android:padding="10dp"
-                app:tint="@color/ds_text_secondary"
-                android:clickable="true"
-                android:focusable="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Attach media"/>
         </LinearLayout>
 
         <!-- Send FAB -->
