@@ -267,7 +267,12 @@ public final class SignalKeyManager {
         // isAvailable()==false produces a permanent "Continue → back to Sign In" loop
         // (MainActivity routes to SignInActivity because isInitialized() says false even
         // though keys exist in the plaintext store).
-        return SecurePrefs.get(ctx).getString(KEY_IDENTITY_KEY_PAIR, null) != null;
+        SharedPreferences prefs = SecurePrefs.get(ctx);
+        String preKeyIds = prefs.getString(KEY_PREKEY_IDS, "");
+        return prefs.getString(KEY_IDENTITY_KEY_PAIR, null) != null
+                && prefs.getString(KEY_REGISTRATION_ID, null) != null
+                && prefs.getString(KEY_SIGNED_PREKEY, null) != null
+                && !preKeyIds.trim().isEmpty();
     }
 
     /**

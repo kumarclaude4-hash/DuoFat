@@ -247,20 +247,21 @@ service cloud.firestore {
       }
     }
 
-    // User ID → Firebase UID mapping (used for pairing by DS-XXXXXXXX).
-    // Write is restricted to the document owner — the `uid` field in the written
-    // document must match the authenticated user's UID.  This prevents any
-    // authenticated user from redirecting a victim's identity to their own UID
-    // (BUG-S06 / BUG-F03 / BUG-F06 / BUG-ID01).
+    // User ID → Firebase UID mapping. New records are atomically claimed by the
+    // token-minting server. A client can only complete an existing legacy record
+    // for its own deterministic Firebase UID; it cannot retarget another account.
     match /identities/{userId} {
-      allow read:  if request.auth != null;
-      // userId is the DuoShield user ID (XXXXX-XXXXX-XXX base32), NOT the Firebase UID.
-      // We cannot check request.auth.uid == userId because they are different ID spaces.
-      // Security is enforced by requiring the uid field in the document to match the
-      // authenticated Firebase UID — only the real owner knows their own DuoShield ID
-      // (it is derived from their seed phrase) so they are the only one who can claim it.
-      allow write: if request.auth != null
-                   && request.resource.data.uid == request.auth.uid;
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.uid == userId;
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && resource.data.uid == userId
+                    && request.resource.data.uid == userId
+                    && request.resource.data.identityPubKeyHash
+                       == resource.data.identityPubKeyHash;
+      allow delete: if false;
     }
 
     // Passphrase recovery blob: AES-GCM({email, passphrase}, PBKDF2(recoveryCode)).
@@ -296,6 +297,15 @@ service cloud.firestore {
 
       // Contact backups (display name + conversationId) — owner read/write.
       match /contacts/{contactId} {
+        allow read:   if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId;
+        allow update: if request.auth != null && request.auth.uid == userId;
+        allow delete: if false;
+      }
+
+      // Group backup metadata is restored with contacts and must be available to
+      // the same account that encrypted and uploaded it.
+      match /groups/{groupId} {
         allow read:   if request.auth != null && request.auth.uid == userId;
         allow create: if request.auth != null && request.auth.uid == userId;
         allow update: if request.auth != null && request.auth.uid == userId;

@@ -577,9 +577,10 @@ http.createServer((req, res) => {
   // differs from their permanent seed-derived userId.  Uses Admin SDK
   // (bypasses Firestore client rules) to:
   //   1. Copy users/{oldUid}  → users/{newUid}  (FCM token, display name, etc.)
-  //   2. Delete users/{oldUid}
+  //   2. Copy backups/{oldUid} and its direct subcollections → new UID
   //   3. Rewrite chat participants: replace oldUid with newUid
   //   4. Rewrite group members:    replace oldUid with newUid
+  //   5. Mark identities/{userId} as migrated only after all required work succeeds
   //
   // Security model:
   //   • Verifies the Firebase ID token (auth.uid must equal userId).
@@ -661,66 +662,86 @@ http.createServer((req, res) => {
 
         // Only reaches here when storedUid === oldUid — legitimate first-time migration.
 
-        const results = { chatsMigrated: 0, groupsMigrated: 0, userDocCopied: false };
+        const results = {
+          chatsMigrated: 0,
+          groupsMigrated: 0,
+          userDocCopied: false,
+          backupDocsCopied: 0,
+        };
 
-        // 1. Copy users/{oldUid} → users/{userId}
-        try {
-          const oldUserSnap = await db.collection("users").doc(oldUid).get();
-          if (oldUserSnap.exists) {
-            const data = oldUserSnap.data();
-            if (data) {
-              await db.collection("users").doc(userId).set(data);
-              await db.collection("users").doc(oldUid).delete();
-              results.userDocCopied = true;
-            }
+        // 1. Copy users/{oldUid} → users/{userId}. The old document is not
+        // deleted: a failed later step must leave the migration retryable without
+        // destroying the legacy account's visible profile.
+        const oldUserSnap = await db.collection("users").doc(oldUid).get();
+        if (oldUserSnap.exists) {
+          const data = oldUserSnap.data();
+          if (data) {
+            await db.collection("users").doc(userId).set(data);
+            results.userDocCopied = true;
           }
-        } catch (e) {
-          console.warn(`migrateUid: users copy failed (non-fatal): ${e.message}`);
         }
 
-        // 2. Rewrite chat participants arrays
-        try {
-          const chatsSnap = await db.collection("chats")
-            .where("participants", "array-contains", oldUid).get();
-          for (const chatDoc of chatsSnap.docs) {
-            try {
-              await chatDoc.ref.update({
-                participants: FieldValue.arrayRemove(oldUid),
-              });
-              await chatDoc.ref.update({
-                participants: FieldValue.arrayUnion(userId),
-              });
-              results.chatsMigrated++;
-            } catch (e) {
-              console.warn(`migrateUid: chat patch failed for ${chatDoc.id}: ${e.message}`);
-            }
+        // 2. Copy all backup content. Restore reads under the deterministic UID, so
+        // missing this step makes an otherwise valid recovery phrase appear empty.
+        const oldBackupRef = db.collection("backups").doc(oldUid);
+        const newBackupRef = db.collection("backups").doc(userId);
+        const oldBackupSnap = await oldBackupRef.get();
+        if (oldBackupSnap.exists) {
+          await newBackupRef.set(oldBackupSnap.data(), { merge: true });
+          results.backupDocsCopied++;
+        }
+        for (const subcollection of ["messages", "contacts", "groups"]) {
+          const snap = await oldBackupRef.collection(subcollection).get();
+          for (const doc of snap.docs) {
+            await newBackupRef.collection(subcollection).doc(doc.id).set(doc.data());
+            results.backupDocsCopied++;
           }
-        } catch (e) {
-          console.warn(`migrateUid: chats query failed (non-fatal): ${e.message}`);
         }
 
-        // 3. Rewrite group members arrays
-        try {
-          const groupsSnap = await db.collection("groups")
-            .where("members", "array-contains", oldUid).get();
-          for (const groupDoc of groupsSnap.docs) {
-            try {
-              await groupDoc.ref.update({
-                members: FieldValue.arrayRemove(oldUid),
-              });
-              await groupDoc.ref.update({
-                members: FieldValue.arrayUnion(userId),
-              });
-              results.groupsMigrated++;
-            } catch (e) {
-              console.warn(`migrateUid: group patch failed for ${groupDoc.id}: ${e.message}`);
-            }
-          }
-        } catch (e) {
-          console.warn(`migrateUid: groups query failed (non-fatal): ${e.message}`);
+        // 3. Rewrite chat participants arrays.
+        const chatsSnap = await db.collection("chats")
+          .where("participants", "array-contains", oldUid).get();
+        for (const chatDoc of chatsSnap.docs) {
+          await chatDoc.ref.update({
+            participants: FieldValue.arrayRemove(oldUid),
+          });
+          await chatDoc.ref.update({
+            participants: FieldValue.arrayUnion(userId),
+          });
+          results.chatsMigrated++;
         }
 
-        console.log(`migrateUid: userId=${userId} oldUid=${oldUid} chats=${results.chatsMigrated} groups=${results.groupsMigrated}`);
+        // 4. Rewrite group members arrays.
+        const groupsSnap = await db.collection("groups")
+          .where("members", "array-contains", oldUid).get();
+        for (const groupDoc of groupsSnap.docs) {
+          await groupDoc.ref.update({
+            members: FieldValue.arrayRemove(oldUid),
+          });
+          await groupDoc.ref.update({
+            members: FieldValue.arrayUnion(userId),
+          });
+          results.groupsMigrated++;
+        }
+
+        // The identity UID is the migration completion marker. It is intentionally
+        // written last so a retry remains authorized after any failed copy/patch.
+        await idDoc.ref.update({
+          uid: userId,
+          migratedAt: FieldValue.serverTimestamp(),
+        });
+
+        // Clean up only after the completion marker is written. Backups are copied
+        // rather than moved so an interrupted cleanup can never hide history from
+        // a restore retry.
+        if (oldUserSnap.exists) {
+          await db.collection("users").doc(oldUid).delete();
+        }
+
+        console.log(
+          `migrateUid: userId=${userId} oldUid=${oldUid} chats=${results.chatsMigrated} `
+          + `groups=${results.groupsMigrated} backupDocs=${results.backupDocsCopied}`
+        );
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ migrated: true, ...results }));

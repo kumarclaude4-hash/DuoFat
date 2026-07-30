@@ -66,11 +66,15 @@ public final class BackupCryptoHelper {
     public static void storeKey(Context ctx, String mnemonic) {
         try {
             byte[] key = deriveBackupKey(mnemonic);
-            SecurePrefs.get(ctx).edit()
+            boolean stored = SecurePrefs.get(ctx).edit()
                     .putString(PREF_KEY, Base64.encodeToString(key, Base64.NO_WRAP))
-                    .apply();
+                    .commit();
+            if (!stored) {
+                throw new IllegalStateException("Unable to persist backup key");
+            }
         } catch (Exception e) {
             Log.e(TAG, "storeKey: derivation failed", e);
+            throw new IllegalStateException("Unable to prepare encrypted backup restore", e);
         }
     }
 

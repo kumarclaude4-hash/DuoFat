@@ -2,6 +2,15 @@
 <resources>
     <string name="app_name">DuoShield</string>
     <string name="app_tagline">End-to-end encrypted messaging</string>
+    <string name="back">Back</string>
+    <string name="recovery_walkthrough_title">Your account starts with a recovery phrase</string>
+    <string name="recovery_walkthrough_subtitle">DuoShield does not use a phone number to create your account.</string>
+    <string name="recovery_walkthrough_credential_title">A private 12-word credential</string>
+    <string name="recovery_walkthrough_credential_body">We will show you a 12-word recovery phrase next. It is the only way to prove this account is yours on a new device.</string>
+    <string name="recovery_walkthrough_keep_title">Keep it offline and private</string>
+    <string name="recovery_walkthrough_keep_body">Write the phrase down and store it somewhere safe. Never share it, screenshot it, or send it in a message. DuoShield does not store a copy.</string>
+    <string name="recovery_walkthrough_warning">If you lose this phrase, you permanently lose access to this account. It cannot be reset or recovered.</string>
+    <string name="recovery_walkthrough_continue">I understand — continue</string>
 
     <!-- Conversations -->
     <string name="conversations">Messages</string>

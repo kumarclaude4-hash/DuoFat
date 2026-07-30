@@ -79,6 +79,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private MaterialButton            btnRestore;
     private LinearProgressIndicator   progressRestore;
     private LinearProgressIndicator   progressMediaCacheBar;
+    private volatile boolean          restoreSessionEstablished;
 
     // Restore loader views
     private View                      restoreLoaderFrame;
@@ -147,6 +148,9 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             try {
                 restoreOnBackground(finalMnemonic, finalAccountId);
             } catch (Throwable e) {
+                if (restoreSessionEstablished) {
+                    rollbackFailedRestore();
+                }
                 runOnUiThread(() -> {
                     setLoading(false);
                     showError(friendlyError(e));
@@ -199,11 +203,12 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         if (authErr[0] != null) throw authErr[0];
         if (uidHolder[0] == null) throw new Exception("Authentication timed out.");
 
-        final String currentUid = uidHolder[0]; // always equals derivedUserId
-
-        // Clear explicit sign-out flag — this is now a valid session
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit().remove("explicit_signout").apply();
+        final String currentUid = uidHolder[0];
+        if (!derivedUserId.equals(currentUid)) {
+            FirebaseAuth.getInstance().signOut();
+            throw new SecurityException("Authenticated UID does not match the recovery phrase account.");
+        }
+        restoreSessionEstablished = true;
 
         String identityPubKeyHash = sha256Hex(pubKeyBytes);
 
@@ -212,13 +217,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         DocumentSnapshot idDoc  = awaitGet(db.collection("identities").document(derivedUserId).get());
 
         String oldUid = null; // the previous anonymous UID, if any
-        if (!idDoc.exists()) {
-            // Brand-new account or first restore — write the identity record.
-            Map<String, Object> newDoc = new HashMap<>();
-            newDoc.put("uid", currentUid);
-            newDoc.put("identityPubKeyHash", identityPubKeyHash);
-            awaitVoid(db.collection("identities").document(derivedUserId).set(newDoc));
-        } else {
+        if (idDoc.exists()) {
             // Existing identity record.
             String storedHash = idDoc.getString("identityPubKeyHash");
             // Note: the server already verified storedHash == sha256(pubKey) before minting
@@ -232,12 +231,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             if (storedUid != null && !storedUid.equals(currentUid)) {
                 oldUid = storedUid;
             }
-
-            // Update the identity doc: uid is now the permanent deterministic UID.
-            Map<String, Object> update = new HashMap<>();
-            update.put("uid", currentUid);
-            if (storedHash == null) update.put("identityPubKeyHash", identityPubKeyHash);
-            awaitVoid(db.collection("identities").document(derivedUserId).update(update));
         }
 
         // ── Step E — One-time Firestore migration (old anonymous UID → userId) ──
@@ -252,15 +245,21 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             migrateOldUidViaServer(currentUid, oldUid);
         }
 
+        // /mintToken normally claims this record before authentication. This write is
+        // retained only for legacy records that predate the server-side identity claim.
         // ── Step F — Store identity locally ──────────────────────────────────
-        SecurePrefs.get(this).edit()
+        boolean identityStored = SecurePrefs.get(this).edit()
                 .putString(SignalKeyManager.KEY_IDENTITY_KEY_PAIR,
                         Base64.encodeToString(identityKeyPair.serialize(), Base64.NO_WRAP))
-                .apply();
+                .commit();
+        if (!identityStored) {
+            throw new IllegalStateException("Unable to save the recovered identity on this device.");
+        }
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_USER_ID, derivedUserId)
                 .putString(KEY_MY_UID,  currentUid)
-                .apply();
+                .remove("explicit_signout")
+                .commit();
 
         // ── Step G — Upload fresh Signal public key bundle ────────────────────
         runOnUiThread(() -> setStep("Uploading Signal keys…"));
@@ -268,7 +267,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         final Object    keyLock  = new Object();
         final boolean[] keyDone  = {false};
         final Exception[] keyErr = {null};
-        SignalKeyManager.ensureKeysInitialized(this,
+        SignalKeyManager.generateFromSeedDerivedKey(this,
                 () -> { synchronized (keyLock) { keyDone[0] = true; keyLock.notifyAll(); } },
                 () -> { synchronized (keyLock) { keyErr[0]  = new Exception("Key upload failed"); keyLock.notifyAll(); } });
         synchronized (keyLock) {
@@ -388,6 +387,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             startActivity(intent);
             finish();
         });
+        restoreSessionEstablished = false;
     }
 
     // ── One-time migration: old anonymous UID → permanent userId UID ──────────
@@ -410,7 +410,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
      *
      * <p>Safe to call multiple times — the server endpoint is idempotent.</p>
      */
-    private void migrateOldUidViaServer(String userId, String oldUid) {
+    private void migrateOldUidViaServer(String userId, String oldUid) throws Exception {
         try {
             // Fetch current Firebase ID token to authenticate the server call
             final String[]    tokenHolder = {null};
@@ -419,8 +419,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             com.google.firebase.auth.FirebaseUser user =
                     com.google.firebase.auth.FirebaseAuth.getInstance().getCurrentUser();
             if (user == null) {
-                android.util.Log.w("RestoreFromSeed", "migrateOldUid: no current user (non-fatal)");
-                return;
+                throw new IllegalStateException("Migration requires an authenticated session.");
             }
             user.getIdToken(false)
                     .addOnSuccessListener(result -> {
@@ -433,13 +432,11 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
                 if (tokenHolder[0] == null && tokenErr[0] == null) tokenLock.wait(15_000);
             }
             if (tokenErr[0] != null) {
-                android.util.Log.w("RestoreFromSeed", "migrateOldUid: token fetch failed (non-fatal)", tokenErr[0]);
-                return;
+                throw new Exception("Could not authenticate account migration.", tokenErr[0]);
             }
             String idToken = tokenHolder[0];
             if (idToken == null) {
-                android.util.Log.w("RestoreFromSeed", "migrateOldUid: token null (non-fatal)");
-                return;
+                throw new Exception("Could not authenticate account migration.");
             }
 
             // Call POST /migrateUid on the push server
@@ -464,11 +461,24 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             }
 
             int code = conn.getResponseCode();
+            String response = "";
+            java.io.InputStream responseStream = code >= 200 && code < 300
+                    ? conn.getInputStream() : conn.getErrorStream();
+            if (responseStream != null) {
+                try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(responseStream, "UTF-8"))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) response += line;
+                }
+            }
             android.util.Log.d("RestoreFromSeed", "migrateOldUid server response: HTTP " + code);
             conn.disconnect();
-
+            if (code < 200 || code >= 300) {
+                throw new java.io.IOException("Account migration failed (HTTP " + code + "): " + response);
+            }
         } catch (Exception e) {
-            android.util.Log.w("RestoreFromSeed", "migrateOldUid: server call failed (non-fatal)", e);
+            android.util.Log.w("RestoreFromSeed", "migrateOldUid failed", e);
+            throw e;
         }
     }
 
@@ -486,7 +496,37 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         }
         ed.remove(SignalKeyManager.KEY_PREKEY_IDS);
         ed.remove(SignalKeyManager.KEY_REGISTRATION_ID);
-        ed.apply();
+        ed.remove(SignalKeyManager.KEY_PREKEY_NEXT_ID);
+        ed.remove(SignalKeyManager.KEY_SIGNED_PREKEY_NEXT_ID);
+        ed.remove(SignalKeyManager.KEY_SIGNED_PREKEY_PREV);
+        ed.remove(SignalKeyManager.KEY_KYBER_PREKEY_CURRENT_ID);
+        ed.commit();
+    }
+
+    /**
+     * Do not leave a partially recovered identity on a device after any post-auth
+     * failure. Remote data is untouched; the user can retry with the same phrase.
+     */
+    private void rollbackFailedRestore() {
+        try {
+            clearOldPrekeys();
+            SecurePrefs.get(this).edit()
+                    .remove(SignalKeyManager.KEY_IDENTITY_KEY_PAIR)
+                    .remove(BackupCryptoHelper.PREF_KEY)
+                    .commit();
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .remove(KEY_USER_ID)
+                    .remove(KEY_MY_UID)
+                    .remove(KEY_IS_PAIRED)
+                    .remove(KEY_CONV_ID)
+                    .remove(KEY_PARTNER_UID)
+                    .commit();
+            FirebaseAuth.getInstance().signOut();
+        } catch (Exception rollbackError) {
+            android.util.Log.e("RestoreFromSeed", "Failed to fully roll back restore state", rollbackError);
+        } finally {
+            restoreSessionEstablished = false;
+        }
     }
 
     private DocumentSnapshot awaitGet(

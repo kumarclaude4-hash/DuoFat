@@ -18,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.ui.AddContactActivity;
+import com.duoshield.app.ui.RecoveryPhraseWalkthroughActivity;
 import com.duoshield.app.ui.RestoreFromSeedActivity;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
@@ -96,7 +97,7 @@ public class SignInActivity extends AppCompatActivity {
         ButtonPressAnimator.attach(btnRestore);
 
         btnCreate.setOnClickListener(v ->
-                startActivity(new Intent(this, DisplayNameActivity.class)));
+                startActivity(new Intent(this, RecoveryPhraseWalkthroughActivity.class)));
 
         btnRestore.setOnClickListener(v ->
                 startActivity(new Intent(this, RestoreFromSeedActivity.class)));

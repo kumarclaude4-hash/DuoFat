@@ -573,7 +573,7 @@ describe('/identities/{userId}', () => {
 
   beforeEach(async () => {
     await seed(`identities/${USER_ID}`, {
-      uid: 'alice',
+      uid: USER_ID,
       identityPubKeyHash: 'hash_abc',
     });
   });
@@ -586,20 +586,17 @@ describe('/identities/{userId}', () => {
     await assertFails(asAnon().doc(`identities/${USER_ID}`).get());
   });
 
-  test('owner can write their identity when uid field matches auth UID', async () => {
+  test('owner can update their identity without changing its public-key hash', async () => {
     await assertSucceeds(
-      asUser('alice').doc(`identities/${USER_ID}`).set({
-        uid: 'alice',
-        identityPubKeyHash: 'new_hash',
-      })
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({ label: 'legacy' })
     );
   });
 
   test('cannot write identity with a different uid field (identity hijack)', async () => {
     await assertFails(
-      asUser('alice').doc(`identities/${USER_ID}`).set({
+      asUser(USER_ID).doc(`identities/${USER_ID}`).set({
         uid: 'bob',
-        identityPubKeyHash: 'hijack',
+        identityPubKeyHash: 'hash_abc',
       })
     );
   });
@@ -607,8 +604,25 @@ describe('/identities/{userId}', () => {
   test('cannot overwrite someone else identity even with correct uid field mismatch', async () => {
     await assertFails(
       asUser('eve').doc(`identities/${USER_ID}`).set({
-        uid: 'alice',
+        uid: USER_ID,
         identityPubKeyHash: 'eve_hijack',
+      })
+    );
+  });
+
+  test('cannot overwrite another deterministic identity path (recovery takeover)', async () => {
+    await assertFails(
+      asUser('eve').doc(`identities/${USER_ID}`).set({
+        uid: USER_ID,
+        identityPubKeyHash: 'eve_hash',
+      })
+    );
+  });
+
+  test('owner cannot replace the bound public-key hash', async () => {
+    await assertFails(
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({
+        identityPubKeyHash: 'different_key',
       })
     );
   });
@@ -737,6 +751,27 @@ describe('/backups/{userId}/contacts/{contactId}', () => {
   test('backup contact delete is always denied', async () => {
     await assertFails(
       asUser('alice').doc('backups/alice/contacts/contact_1').delete()
+    );
+  });
+});
+
+describe('/backups/{userId}/groups/{groupId}', () => {
+  beforeEach(async () => {
+    await seed('backups/alice', { lastBackupTs: 1000 });
+    await seed('backups/alice/groups/group_1', { id: 'group_1', name: 'Encrypted group' });
+  });
+
+  test('owner can read their group backup', async () => {
+    await assertSucceeds(asUser('alice').doc('backups/alice/groups/group_1').get());
+  });
+
+  test('other user cannot read a group backup', async () => {
+    await assertFails(asUser('bob').doc('backups/alice/groups/group_1').get());
+  });
+
+  test('owner can write their group backup', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('backups/alice/groups/group_2').set({ id: 'group_2', name: 'Encrypted group' })
     );
   });
 });

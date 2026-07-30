@@ -98,6 +98,11 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".ui.RecoveryPhraseWalkthroughActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".ui.SeedPhraseDisplayActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
