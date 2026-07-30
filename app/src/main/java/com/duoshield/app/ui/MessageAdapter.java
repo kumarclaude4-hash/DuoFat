@@ -493,6 +493,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         lp.gravity = mine ? Gravity.END : Gravity.START;
         h.bubble.setLayoutParams(lp);
 
+        // ── Bubble width cap (80 % of screen width) ───────────────────
+        // LinearLayout ignores android:maxWidth; enforce it here so long
+        // messages never stretch the bubble to the full screen width.
+        h.bubble.setMaxWidth(
+                (int) (ctx.getResources().getDisplayMetrics().widthPixels * 0.80f));
+
         // ── Bubble background (customisable style + colour) ──────────
         android.content.SharedPreferences bubblePrefs =
                 ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE);
@@ -1089,7 +1095,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                      tickIcon, starIcon, voicePlayPauseBtn, linkPreviewImage, voiceAvatarImg;
         /** Four slots for multi-media album grid (2×2). */
         ImageView    gridImg1, gridImg2, gridImg3, gridImg4;
-        LinearLayout bubble, voiceNoteContainer, pinIndicatorRow, linkPreviewCard;
+        MaxWidthLinearLayout bubble;
+        LinearLayout voiceNoteContainer, pinIndicatorRow, linkPreviewCard;
         /** Container for the 2×2 album grid. */
         LinearLayout mediaGridContainer;
         FrameLayout  bubbleWrapper, voiceTrailingSlot;

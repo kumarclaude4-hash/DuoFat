@@ -47,7 +47,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
-        <LinearLayout
+        <com.duoshield.app.ui.MaxWidthLinearLayout
             android:id="@+id/messageBubble"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -55,8 +55,7 @@
             android:paddingStart="13dp"
             android:paddingEnd="13dp"
             android:paddingTop="9dp"
-            android:paddingBottom="7dp"
-            android:maxWidth="290dp">
+            android:paddingBottom="7dp">
 
             <!-- Forwarded label — shown when message.isForwarded == true -->
             <LinearLayout
@@ -566,7 +565,7 @@
                 android:letterSpacing="0.02"
                 android:layout_marginTop="1dp"
                 android:visibility="gone"/>
-        </LinearLayout>
+        </com.duoshield.app.ui.MaxWidthLinearLayout>
     </FrameLayout>
 
     <!-- Reaction pill -->
