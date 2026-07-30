@@ -205,6 +205,7 @@ public class GroupChatActivity extends BaseActivity {
         etMessage              = findViewById(R.id.et_message);
         ImageView btnBack      = findViewById(R.id.btn_back);
         ImageView btnSend      = findViewById(R.id.btn_send);
+        ImageView btnOverflow  = findViewById(R.id.btn_group_overflow);
 
         btnGroupAttach                = findViewById(R.id.btn_group_attach);
         ImageView groupEmojiButton    = findViewById(R.id.group_emoji_button);
@@ -220,6 +221,21 @@ public class GroupChatActivity extends BaseActivity {
         // Tap the group header to view/manage members (admin can remove)
         tvGroupName.setOnClickListener(v -> showGroupInfoSheet());
         tvMemberCount.setOnClickListener(v -> showGroupInfoSheet());
+        if (btnOverflow != null) {
+            btnOverflow.setOnClickListener(v -> {
+                android.widget.PopupMenu popup = new android.widget.PopupMenu(this, v);
+                popup.getMenu().add(0, 1, 0, "Export Chat");
+                popup.setOnMenuItemClickListener(item -> {
+                    if (item.getItemId() == 1) {
+                        com.duoshield.app.util.ChatExportHelper.showExportDialog(
+                            this, groupId, null, true);
+                        return true;
+                    }
+                    return false;
+                });
+                popup.show();
+            });
+        }
         if (btnGroupAttach != null) {
             btnGroupAttach.setOnClickListener(v -> showGroupMediaPickerSheet());
         }

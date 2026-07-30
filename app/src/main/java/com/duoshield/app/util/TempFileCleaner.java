@@ -34,6 +34,10 @@ public class TempFileCleaner extends Worker {
     private static final String TAG          = "TempFileCleaner";
     private static final String WORK_TAG     = "duoshield_temp_cleanup";
     private static final long   MAX_AGE_MS   = 5L * 60 * 1000;   // 5 minutes
+    // ChatExportHelper zips can sit in a share target's queue (e.g. "save to
+    // Drive") longer than the 5-minute plaintext-playback window, so they get
+    // a longer grace period before being swept.
+    private static final long   MAX_AGE_EXPORT_ZIP_MS = 24L * 60 * 60 * 1000; // 24 hours
     private static final int    INTERVAL_MIN = 15;                // WorkManager minimum
 
     public TempFileCleaner(@NonNull Context context, @NonNull WorkerParameters params) {
@@ -53,8 +57,31 @@ public class TempFileCleaner extends Worker {
         int  deleted = 0;
 
         for (File f : files) {
-            if (!isTempMediaFile(f.getName())) continue;
             long ageMs = now - f.lastModified();
+
+            // Orphaned ChatExportHelper working directory (only survives a crash
+            // mid-export; the helper deletes it itself on the normal success path).
+            if (f.isDirectory() && f.getName().startsWith("chat_export_")) {
+                if (ageMs >= MAX_AGE_MS) {
+                    deleteRecursive(f);
+                    deleted++;
+                    Log.d(TAG, "Deleted orphaned export working dir: " + f.getName());
+                }
+                continue;
+            }
+
+            if (isExportZip(f.getName())) {
+                if (ageMs >= MAX_AGE_EXPORT_ZIP_MS) {
+                    if (f.delete()) {
+                        deleted++;
+                        Log.d(TAG, "Deleted export zip: " + f.getName()
+                                + " (age " + (ageMs / 1000) + "s)");
+                    }
+                }
+                continue;
+            }
+
+            if (!isTempMediaFile(f.getName())) continue;
             if (ageMs >= MAX_AGE_MS) {
                 if (f.delete()) {
                     deleted++;
@@ -97,9 +124,22 @@ public class TempFileCleaner extends Worker {
             || (name.startsWith("voice_")           && name.endsWith(".m4a"))  // F25 fix: recorder uses .m4a
             || (name.startsWith("vid_")             && name.endsWith(".mp4"))
             || (name.startsWith("share_")           && name.endsWith(".jpg"))
-            // F15 fix: ExportHelper now writes .txt (PDF export was removed); .pdf kept
-            // for any stale files left over from the previous export format.
+            // Legacy single-file export formats (superseded by ChatExportHelper's
+            // ZIP archives) — kept so any stale files are still swept up.
             || (name.startsWith("duoshield_export_") && name.endsWith(".pdf"))
             || (name.startsWith("duoshield_export_") && name.endsWith(".txt"));
+    }
+
+    /** ChatExportHelper's full chat-export archives, e.g. "DuoShield_Export_1234.zip". */
+    private static boolean isExportZip(String name) {
+        return name.startsWith("DuoShield_Export_") && name.endsWith(".zip");
+    }
+
+    private static void deleteRecursive(File f) {
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteRecursive(k);
+        }
+        f.delete();
     }
 }

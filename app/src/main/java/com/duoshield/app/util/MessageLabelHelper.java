@@ -23,6 +23,7 @@ public final class MessageLabelHelper {
             case "voice":   return "🎤 Voice message";
             case "image":   return "📷 Photo";
             case "video":   return "🎬 Video";
+            case "album":   return "🖼 Album";
             case "contact": return "📇 Contact card";
             case "file":    return "📄 File";
             default:        return "Message";
@@ -42,6 +43,7 @@ public final class MessageLabelHelper {
             case "voice":   return "[Voice message]";
             case "image":   return "[Photo]";
             case "video":   return "[Video]";
+            case "album":   return "[Album]";
             case "contact": return "[Contact card]";
             case "file":    return "[File]";
             default:        return "[Message]";

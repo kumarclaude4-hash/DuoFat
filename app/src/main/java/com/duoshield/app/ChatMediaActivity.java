@@ -402,7 +402,7 @@ public class ChatMediaActivity extends BaseActivity {
             popup.getMenu().add(0, 4, 0, "Disappearing Messages");
             // F-17 fix: ExportHelper was complete but had no UI entry point.
             // Wired here where conversationId is always in scope.
-            popup.getMenu().add(0, 5, 0, "Export Chat (PDF)");
+            popup.getMenu().add(0, 5, 0, "Export Chat");
             // UX audit item #7: per-chat entry point for fingerprint verification,
             // using THIS conversation's partnerUid rather than a global "last active" guess.
             popup.getMenu().add(0, 6, 0, "Encryption");
@@ -413,7 +413,8 @@ public class ChatMediaActivity extends BaseActivity {
                 if (id == 3) { searchLauncher.launch(new Intent(this, MessageSearchActivity.class)); return true; }
                 if (id == 4) { showDisappearPicker(); return true; }
                 if (id == 5) {
-                    com.duoshield.app.util.ExportHelper.exportToPdf(this, conversationId);
+                    com.duoshield.app.util.ChatExportHelper.showExportDialog(
+                        this, conversationId, partnerUid, false);
                     return true;
                 }
                 if (id == 6) {
