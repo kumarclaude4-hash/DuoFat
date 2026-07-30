@@ -1349,6 +1349,8 @@ public class ChatMediaActivity extends BaseActivity {
         markMessagesAsReadAndSeen();
         clearBadge();
         applyWallpaper();
+        // Refresh bubble style/colour and font size in case the user changed them in Settings.
+        if (adapter != null) adapter.notifyBubbleStyleChanged();
         // Restart Firestore listeners that were detached in onStop (e.g. after opening Settings)
         if (conversationId != null) {
             if (msgListener  == null) ensureSignalSession(); // ensures session then starts listener

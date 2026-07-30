@@ -131,6 +131,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         rebuildDisplay();
     }
 
+    /**
+     * Call after the user changes any bubble style/colour or font-size preference so all
+     * currently-visible rows are rebound with the new look.
+     */
+    public void notifyBubbleStyleChanged() {
+        notifyDataSetChanged();
+    }
+
     /** Called from ChatMediaActivity once the partner's display name is loaded from Firestore. */
     public void setPartnerName(String name) {
         this.partnerName = name;
@@ -485,10 +493,13 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         lp.gravity = mine ? Gravity.END : Gravity.START;
         h.bubble.setLayoutParams(lp);
 
-        // ── Bubble background ────────────────────────────────────────
-        h.bubble.setBackgroundResource(mine
-                ? R.drawable.bg_bubble_mine_classic
-                : R.drawable.bg_bubble_theirs_classic);
+        // ── Bubble background (customisable style + colour) ──────────
+        android.content.SharedPreferences bubblePrefs =
+                ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE);
+        h.bubble.setBackground(
+                com.duoshield.app.util.ChatCustomizationHelper.buildBubble(
+                        mine, bubblePrefs,
+                        ctx.getResources().getDisplayMetrics().density));
 
         // ── Partner sender label ────────────────────────────────────
         if (!mine) {
@@ -739,6 +750,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // Plain text — show text and check for link preview
             h.textView.setVisibility(View.VISIBLE);
             h.textView.setText(msg.getText());
+            h.textView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
+                    com.duoshield.app.util.ChatCustomizationHelper.getMsgFontSizeSp(
+                            ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE)));
             bindLinkPreview(h, msg, ctx);
         }
 

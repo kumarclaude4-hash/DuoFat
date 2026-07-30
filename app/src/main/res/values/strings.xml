@@ -85,6 +85,11 @@
 
     <!-- Chat background themes -->
     <string name="section_chat_background">CHAT BACKGROUND</string>
+    <string name="section_bubble_style">BUBBLE STYLE</string>
+    <string name="section_bubble_colors">BUBBLE COLORS</string>
+    <string name="bubble_mine_label">My messages</string>
+    <string name="bubble_theirs_label">Their messages</string>
+    <string name="section_text_size">TEXT SIZE</string>
     <string name="chat_bg_default">Default</string>
     <string name="chat_bg_midnight">Midnight</string>
     <string name="chat_bg_ocean">Ocean</string>

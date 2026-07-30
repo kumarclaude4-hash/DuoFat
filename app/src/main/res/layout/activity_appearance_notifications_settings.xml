@@ -57,6 +57,128 @@
 
             </HorizontalScrollView>
 
+            <!-- ══ BUBBLE STYLE ══════════════════════════════════════════════ -->
+            <TextView
+                android:text="@string/section_bubble_style"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="12dp"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:background="@color/ds_surface">
+
+                <LinearLayout
+                    android:id="@+id/rowBubbleStylePicker"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="12dp"
+                    android:paddingBottom="8dp"
+                    android:gravity="center_vertical"/>
+            </HorizontalScrollView>
+
+            <!-- ══ BUBBLE COLORS ═════════════════════════════════════════════ -->
+            <TextView
+                android:text="@string/section_bubble_colors"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/bubble_mine_label"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="2dp"
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="12sp"
+                android:background="@color/ds_surface"/>
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingBottom="8dp"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:background="@color/ds_surface">
+
+                <LinearLayout
+                    android:id="@+id/rowMineBubblePicker"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="8dp"
+                    android:gravity="center_vertical"/>
+            </HorizontalScrollView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/bubble_theirs_label"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="2dp"
+                android:textColor="@color/ds_text_secondary"
+                android:textSize="12sp"
+                android:background="@color/ds_surface"/>
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingBottom="14dp"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:background="@color/ds_surface">
+
+                <LinearLayout
+                    android:id="@+id/rowTheirsBubblePicker"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="8dp"
+                    android:gravity="center_vertical"/>
+            </HorizontalScrollView>
+
+            <!-- ══ TEXT SIZE ══════════════════════════════════════════════════ -->
+            <TextView
+                android:text="@string/section_text_size"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="12dp"
+                android:scrollbars="none"
+                android:overScrollMode="never"
+                android:background="@color/ds_surface">
+
+                <LinearLayout
+                    android:id="@+id/rowTextSizePicker"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingTop="12dp"
+                    android:paddingBottom="8dp"
+                    android:gravity="center_vertical"/>
+            </HorizontalScrollView>
+
             <!-- ══ LANGUAGE ═══════════════════════════════════════════════════ -->
             <TextView
                 android:text="@string/section_appearance"

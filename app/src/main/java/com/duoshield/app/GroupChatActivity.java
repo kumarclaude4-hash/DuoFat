@@ -281,10 +281,11 @@ public class GroupChatActivity extends BaseActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        // Re-apply the chat theme in case the user changed it in Appearance settings.
+        // Re-apply the chat theme and bubble style in case the user changed them in Settings.
         if (recyclerView != null) {
             ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
         }
+        if (adapter != null) adapter.notifyBubbleStyleChanged();
     }
 
     @Override
