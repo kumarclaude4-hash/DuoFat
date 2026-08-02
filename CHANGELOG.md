@@ -73,7 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Conversation archiving (hidden from list, retrievable)
 - Self-destruct sweep via scheduled Cloud Function (purges Firestore + B2 media)
 - Settings split into four sub-screens (Account, Privacy, Notifications, Appearance)
-- Duress PIN two-state UI with guard preventing accidental clear before duress PIN is removed
+- Secondary unlock code two-state UI with guard preventing accidental clear before removal
 
 ### Fixed
 - Cold-start auto sign-out bypass via force-quit (removed `coldStart` guard from `shouldAutoSignOut`)

@@ -216,7 +216,6 @@ Vulnerability disclosures → **[SECURITY.md](SECURITY.md)**
 | Zero-knowledge DB | SQLCipher key = `HKDF-SHA256(UID)`; inaccessible without the seed phrase |
 | `FirebaseCostGuard` singleton | All Firestore reads/writes gated; prevents runaway listener cost |
 | `AppLockManager` ref-count | `AtomicInteger` lifecycle prevents lock bypass on rapid resume/background |
-| Duress PIN two-phase wipe | Guard flag committed to prefs before starting intent; survives force-quit |
 | Status downgrade guard | Any `status` write transactions against `read → delivered` regression |
 
 ---
