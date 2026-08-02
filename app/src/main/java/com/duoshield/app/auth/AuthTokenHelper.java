@@ -64,11 +64,27 @@ public final class AuthTokenHelper {
     public static void signInWithSeed(String userId,
                                       byte[] identityPubKeyBytes,
                                       Callback cb) {
+        signInWithSeed(userId, identityPubKeyBytes, null, cb);
+    }
+
+    /**
+     * Same as {@link #signInWithSeed(String, byte[], Callback)}, but also passes
+     * a waitlist request id. Only meaningful for brand-new accounts — the server
+     * ignores it entirely for accounts that already have an identity record, so
+     * restoring an existing account should pass {@code null}.
+     *
+     * @param waitlistRequestId approved access-request token from
+     *                          {@code RequestAccessActivity}, or null
+     */
+    public static void signInWithSeed(String userId,
+                                      byte[] identityPubKeyBytes,
+                                      String waitlistRequestId,
+                                      Callback cb) {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             try {
                 Log.i(TAG, "signInWithSeed: fetching custom token…");
-                String customToken = fetchCustomToken(userId, toHex(identityPubKeyBytes));
+                String customToken = fetchCustomToken(userId, toHex(identityPubKeyBytes), waitlistRequestId);
                 Log.i(TAG, "signInWithSeed: token received, signing in with Firebase…");
                 String uid = doSignIn(customToken);
                 Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS");
@@ -82,7 +98,7 @@ public final class AuthTokenHelper {
 
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private static String fetchCustomToken(String userId, String pubKeyHex) throws Exception {
+    private static String fetchCustomToken(String userId, String pubKeyHex, String waitlistRequestId) throws Exception {
         String serverUrl = BuildConfig.PUSH_SERVER_URL;
         if (serverUrl == null || serverUrl.isEmpty()) {
             throw new Exception("PUSH_SERVER_URL is not configured. "
@@ -97,6 +113,9 @@ public final class AuthTokenHelper {
         JSONObject body = new JSONObject();
         body.put("userId",            userId);
         body.put("identityPubKeyHex", pubKeyHex);
+        if (waitlistRequestId != null && !waitlistRequestId.isEmpty()) {
+            body.put("waitlistRequestId", waitlistRequestId);
+        }
         byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
 
         URL url = new URL(endpoint);
@@ -118,9 +137,18 @@ public final class AuthTokenHelper {
 
             if (code == 429) throw new Exception(
                     "Too many sign-in attempts. Please wait a moment and try again.");
-            if (code == 403) throw new Exception(
-                    "Recovery phrase does not match this Account ID. "
-                    + "Please check both and try again.");
+            if (code == 403) {
+                String serverMsg = readErrorBody(conn);
+                // The server returns a specific reason string; new-account creation
+                // gates on waitlist approval, restores gate on key mismatch — surface
+                // whichever actually happened instead of assuming one or the other.
+                if (serverMsg != null && serverMsg.toLowerCase(java.util.Locale.US).contains("access request")) {
+                    throw new Exception(serverMsg);
+                }
+                throw new Exception(
+                        "Recovery phrase does not match this Account ID. "
+                        + "Please check both and try again.");
+            }
             if (code != 200) throw new Exception("Auth server returned HTTP " + code);
 
             // Use manual byte-by-byte read for full API-level compatibility.
@@ -137,6 +165,15 @@ public final class AuthTokenHelper {
             }
         } finally {
             conn.disconnect();
+        }
+    }
+
+    /** Best-effort read of the plain-text error body; returns null if unavailable. */
+    private static String readErrorBody(HttpURLConnection conn) {
+        try (InputStream es = conn.getErrorStream()) {
+            return es != null ? readFully(es) : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 

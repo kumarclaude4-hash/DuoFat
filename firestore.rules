@@ -313,6 +313,25 @@ service cloud.firestore {
       }
     }
 
+    // Duress-PIN eligibility: whether an account may configure a secondary
+    // (duress) code at all. Enrollment is manual and out-of-band (the operator
+    // writes this doc via the Firebase console / Admin SDK) — no client, not
+    // even the account owner, may create, modify, or delete it. An account may
+    // only read its own doc, so eligibility can never be enumerated or probed
+    // for other accounts.
+    match /duressEligibility/{accountId} {
+      allow read:  if request.auth != null && request.auth.uid == accountId;
+      allow write: if false;
+    }
+
+    // Invite waitlist: request-access tokens for new-account signups.
+    // Entirely server-managed via the push server's Admin SDK (/requestAccess,
+    // /waitlistStatus) — no client reads or writes this collection directly,
+    // so a request's approval state can never be probed or forged from the app.
+    match /waitlist/{requestId} {
+      allow read, write: if false;
+    }
+
     // Backup event log: write-only for the owning user; no client-side reads.
     // Logs backup_started / backup_complete / backup_failed events for
     // server-side monitoring.  Clients never need to read these back.

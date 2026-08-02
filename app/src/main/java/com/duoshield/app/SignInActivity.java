@@ -17,8 +17,10 @@ import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.duoshield.app.crypto.signal.SignalKeyManager;
+import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.ui.RecoveryPhraseWalkthroughActivity;
+import com.duoshield.app.ui.RequestAccessActivity;
 import com.duoshield.app.ui.RestoreFromSeedActivity;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
@@ -96,8 +98,11 @@ public class SignInActivity extends AppCompatActivity {
         ButtonPressAnimator.attach(btnCreate);
         ButtonPressAnimator.attach(btnRestore);
 
+        // Account creation is invite-only — gate on RequestAccessActivity first.
+        // RecoveryPhraseWalkthroughActivity is only ever reached from there now,
+        // once a waitlist request has been approved.
         btnCreate.setOnClickListener(v ->
-                startActivity(new Intent(this, RecoveryPhraseWalkthroughActivity.class)));
+                startActivity(new Intent(this, RequestAccessActivity.class)));
 
         btnRestore.setOnClickListener(v ->
                 startActivity(new Intent(this, RestoreFromSeedActivity.class)));
@@ -167,6 +172,11 @@ public class SignInActivity extends AppCompatActivity {
         // BUG-F-12 fix: Register FCM token immediately. Even if the app is locked,
         // we must ensure the server has a valid token to deliver notifications.
         FcmTokenHelper.register(this);
+
+        // Refresh whether this account is enrolled for the secondary/duress code
+        // feature. Cheap single-doc read, safe to call on every route(); no-ops
+        // silently offline and leaves the last cached value in place.
+        DuressManager.refreshEligibility(this);
 
         Log.i(TAG, "route: → ConversationListActivity  uid=" + uid);
         Intent intent = new Intent(this, ConversationListActivity.class);

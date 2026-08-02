@@ -31,7 +31,6 @@ No servers read your messages. No metadata sold. No backdoors.
 |---|:---:|:---:|:---:|:---:|
 | Signal Protocol E2EE | ✅ | ✅ | ✅ | ❌ opt-in |
 | Post-Quantum (PQXDH + Kyber-1024) | ✅ | ❌ | ✅ | ❌ |
-| Duress PIN — silent wipe | ✅ | ❌ | ❌ | ❌ |
 | No phone number required | ✅ | ❌ | ❌ | ❌ |
 | Encrypted local DB (SQLCipher) | ✅ | ❌ | ✅ | ❌ |
 | Encrypted media at rest | ✅ | ❌ | ✅ | ❌ |
@@ -67,8 +66,7 @@ No servers read your messages. No metadata sold. No backdoors.
 <td width="50%">
 
 ### 🛡️ Security
-- **Duress PIN** — silently wipes all local data, keys and Firestore
-- **App lock** — biometric or PIN with configurable auto-lock
+- **App lock** — PIN with configurable auto-lock
 - **Safety numbers** — Signal-style identity verification
 - **Delivery & read receipts** — FCM-backed with status downgrade guard
 - **Self-destruct** — scheduled remote wipe via Cloud Function

@@ -28,7 +28,6 @@ import com.google.zxing.BarcodeFormat;
 import com.google.zxing.WriterException;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
-import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.google.firebase.auth.FirebaseAuth;
@@ -311,11 +310,11 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
                             registerIdentity(userId);
                             // BUG-F-12 fix: Register FCM token immediately so notifications work on first install.
                             FcmTokenHelper.register(this);
-                            // Navigate to ConversationList (with "Account Created" flag)
-                            Intent intent = new Intent(this, ConversationListActivity.class);
-                            intent.putExtra(EXTRA_ACCOUNT_CREATED, true);
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                                          | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                            // Every new account must set a PIN before it can use the
+                            // app — SetupPinActivity makes the final hand-off to
+                            // ConversationListActivity once that's done.
+                            Intent intent = new Intent(this, SetupPinActivity.class);
+                            intent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
                             startActivity(intent);
                             finish();
                         },

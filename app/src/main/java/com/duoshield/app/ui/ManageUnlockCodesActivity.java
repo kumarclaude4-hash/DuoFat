@@ -54,7 +54,6 @@ public class ManageUnlockCodesActivity extends BaseActivity {
         etNewCode    = findViewById(R.id.etNewCode);
         etConfirmCode = findViewById(R.id.etConfirmCode);
 
-        View btnRemoveSecondaryCode = findViewById(R.id.btnRemoveSecondaryCode);
         View btnContinueEntry = findViewById(R.id.btnContinueEntry);
         View btnCancelEntry   = findViewById(R.id.btnCancelEntry);
         View btnConfirmExplain = findViewById(R.id.btnConfirmExplain);
@@ -65,17 +64,24 @@ public class ManageUnlockCodesActivity extends BaseActivity {
         btnContinueEntry.setOnClickListener(v -> onContinueEntry());
         btnConfirmExplain.setOnClickListener(v -> onConfirmExplain());
         btnCancelExplain.setOnClickListener(v -> showListPanel());
-        btnRemoveSecondaryCode.setOnClickListener(v -> confirmRemoveSecondaryCode());
 
         refreshListPanel();
     }
 
     private void refreshListPanel() {
         boolean hasSecondary = DuressManager.hasDuressPin(this);
-        rowSecondaryCode.setVisibility(hasSecondary ? View.VISIBLE : View.GONE);
-        // Only one additional code is supported today — hide the add action
-        // once one is configured rather than implying unlimited codes.
-        btnAddCode.setVisibility(hasSecondary ? View.GONE : View.VISIBLE);
+        // No-trace: the secondary-code row is never shown, configured or not.
+        // Once a code exists there is nothing left to browse to on this screen —
+        // removal only happens by clearing the primary code entirely (which
+        // cascades to DuressManager.clearDuressPin()). This avoids a "configured"
+        // indicator that would tell anyone with the primary code that a second
+        // one exists, which defeats the point of it.
+        rowSecondaryCode.setVisibility(View.GONE);
+        // Only accounts explicitly enrolled server-side ever see the option to
+        // add a second code at all — everyone else gets an ordinary single-code
+        // screen with no hint the capability exists.
+        boolean eligible = DuressManager.isDuressEligibleCached(this);
+        btnAddCode.setVisibility((eligible && !hasSecondary) ? View.VISIBLE : View.GONE);
     }
 
     private void showListPanel() {
@@ -141,41 +147,10 @@ public class ManageUnlockCodesActivity extends BaseActivity {
         });
     }
 
-    private void confirmRemoveSecondaryCode() {
-        EditText etCurrent = new EditText(this);
-        etCurrent.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
-                | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        etCurrent.setHint("Primary code");
-        etCurrent.setMaxLines(1);
-
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
-        container.setPadding(pad * 2, pad, pad * 2, 0);
-        container.addView(etCurrent);
-
-        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Remove this code")
-                .setMessage("Enter your primary code to confirm removal.")
-                .setView(container)
-                .setPositiveButton("Remove", (d, w) -> {
-                    String entered = etCurrent.getText().toString().trim();
-                    bgExecutor.execute(() -> {
-                        boolean ok = PinManager.verifyPin(this, entered);
-                        runOnUiThread(() -> {
-                            if (ok) {
-                                DuressManager.clearDuressPin(this);
-                                Toast.makeText(this, "Code removed.", Toast.LENGTH_SHORT).show();
-                                showListPanel();
-                            } else {
-                                Toast.makeText(this, "Incorrect code.", Toast.LENGTH_SHORT).show();
-                            }
-                        });
-                    });
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
+    // Removing an already-configured secondary code is intentionally NOT exposed
+    // here — that would require showing a "configured" affordance, which is the
+    // exact trace this screen exists to avoid. Clearing the primary code in
+    // Settings cascades to DuressManager.clearDuressPin() instead.
 
     @Override
     protected void onDestroy() {

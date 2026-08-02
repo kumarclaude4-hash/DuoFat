@@ -21,11 +21,17 @@ public class RecoveryPhraseWalkthroughActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_recovery_phrase_walkthrough);
 
+        // Approved waitlist request id, threaded through from RequestAccessActivity
+        // and passed on to DisplayNameActivity so it can reach /mintToken.
+        String waitlistRequestId = getIntent().getStringExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID);
+
         findViewById(R.id.btnBack).setOnClickListener(v -> finish());
         MaterialButton continueButton = findViewById(R.id.btnContinue);
         ButtonPressAnimator.attach(continueButton);
         continueButton.setOnClickListener(v -> {
-            startActivity(new Intent(this, DisplayNameActivity.class));
+            Intent intent = new Intent(this, DisplayNameActivity.class);
+            intent.putExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID, waitlistRequestId);
+            startActivity(intent);
             finish();
         });
     }

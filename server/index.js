@@ -347,6 +347,30 @@ db.collection("calls").onSnapshot(
 // Allows at most one token mint per userId per 60 seconds.
 const mintCooldown = new Map();
 
+// ── Waitlist request-access rate limit (separate from mintToken's IP bucket) ──
+const WAITLIST_IP_WINDOW_MS = 15 * 60 * 1000;
+const WAITLIST_IP_MAX_HITS  = 5;
+const waitlistIpHits = new Map();
+
+setInterval(() => {
+  const cutoff = Date.now() - WAITLIST_IP_WINDOW_MS;
+  for (const [ip, rec] of waitlistIpHits) {
+    if (rec.windowStart < cutoff) waitlistIpHits.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
+function checkWaitlistIpRateLimit(ip) {
+  const now = Date.now();
+  const rec = waitlistIpHits.get(ip);
+  if (!rec || now - rec.windowStart >= WAITLIST_IP_WINDOW_MS) {
+    waitlistIpHits.set(ip, { count: 1, windowStart: now });
+    return true;
+  }
+  if (rec.count >= WAITLIST_IP_MAX_HITS) return false;
+  rec.count++;
+  return true;
+}
+
 // ── Per-IP rate limit ─────────────────────────────────────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
 // Render (and most reverse proxies) sets X-Forwarded-For; we take the first
@@ -495,7 +519,7 @@ http.createServer((req, res) => {
           return;
         }
 
-        const { userId, identityPubKeyHex } = JSON.parse(body);
+        const { userId, identityPubKeyHex, waitlistRequestId } = JSON.parse(body);
         if (!userId || typeof userId !== "string" ||
             !identityPubKeyHex || typeof identityPubKeyHex !== "string") {
           res.writeHead(400, { "Content-Type": "text/plain" });
@@ -527,6 +551,25 @@ http.createServer((req, res) => {
         await db.runTransaction(async (tx) => {
           const snap = await tx.get(idRef);
           if (!snap.exists) {
+            // New account — invite-only. Require an approved, not-yet-used
+            // waitlist request and consume it atomically alongside the
+            // identity claim so a token can never mint two accounts.
+            if (!waitlistRequestId || typeof waitlistRequestId !== "string" ||
+                !/^[0-9a-f]{32}$/.test(waitlistRequestId)) {
+              throw Object.assign(new Error("Access request required"), { status: 403 });
+            }
+            const waitlistRef = db.collection("waitlist").doc(waitlistRequestId);
+            const waitlistSnap = await tx.get(waitlistRef);
+            if (!waitlistSnap.exists || waitlistSnap.data().status !== "approved") {
+              throw Object.assign(new Error("Access request not approved"), { status: 403 });
+            }
+
+            tx.update(waitlistRef, {
+              status:       "used",
+              usedByUserId: userId,
+              usedAt:       FieldValue.serverTimestamp(),
+            });
+
             // First claim — atomically write the identity binding
             tx.set(idRef, {
               uid:                userId,
@@ -554,10 +597,11 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ token }));
       } catch (e) {
         if (e.status === 403) {
-          // F2 fix: key mismatch thrown from inside the Firestore transaction
-          console.warn(`mintToken: key mismatch for userId=${JSON.parse(body || "{}").userId}`);
+          // Thrown from inside the Firestore transaction: either a key mismatch
+          // (F2 fix) or a missing/unapproved waitlist request for a new account.
+          console.warn(`mintToken: 403 (${e.message}) for userId=${JSON.parse(body || "{}").userId}`);
           res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Key mismatch");
+          res.end(e.message);
         } else {
           console.error("mintToken error:", e.message);
           res.writeHead(500, { "Content-Type": "text/plain" });
@@ -565,6 +609,84 @@ http.createServer((req, res) => {
         }
       }
     });
+    return;
+  }
+
+  // ── POST /requestAccess ──────────────────────────────────────────────────────
+  //
+  // Body: none required.
+  //
+  // Account creation is invite-only. A fresh install that wants a NEW account
+  // calls this first to get a request token, which sits in Firestore as
+  // "pending" until the operator manually approves it (Firebase console /
+  // admin script — never from the app). The client polls GET /waitlistStatus
+  // with the token and only proceeds to actual account creation once approved.
+  // Restoring an EXISTING account never touches this endpoint.
+  if (req.method === "POST" && req.url === "/requestAccess") {
+    (async () => {
+      try {
+        const clientIp = getClientIp(req);
+        if (!checkWaitlistIpRateLimit(clientIp)) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Too many requests from this IP — wait 15 min and retry");
+          return;
+        }
+
+        // Drain the (empty) body so the connection closes cleanly.
+        await readBody(req, res).catch(() => "");
+
+        const requestId = crypto.randomBytes(16).toString("hex");
+        await db.collection("waitlist").doc(requestId).set({
+          status:    "pending",
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        console.log(`requestAccess: new waitlist entry requestId=${requestId}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ requestId }));
+      } catch (e) {
+        console.error("requestAccess error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal server error");
+      }
+    })();
+    return;
+  }
+
+  // ── GET /waitlistStatus?requestId=... ────────────────────────────────────────
+  //
+  // Returns { status: "pending" | "approved" | "used" | "not_found" }.
+  // No auth required (the requestId itself is an unguessable 128-bit token,
+  // and it reveals nothing beyond one account's own pending/approved state).
+  if (req.method === "GET" && (req.url || "").split("?")[0] === "/waitlistStatus") {
+    (async () => {
+      try {
+        const clientIp = getClientIp(req);
+        if (!checkWaitlistIpRateLimit(clientIp)) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Too many requests from this IP — wait 15 min and retry");
+          return;
+        }
+
+        const requestUrl = new URL(req.url, "http://localhost");
+        const requestId = requestUrl.searchParams.get("requestId") || "";
+        if (!/^[0-9a-f]{32}$/.test(requestId)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid requestId");
+          return;
+        }
+
+        const snap = await db.collection("waitlist").doc(requestId).get();
+        const status = snap.exists ? snap.data().status : "not_found";
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status }));
+      } catch (e) {
+        console.error("waitlistStatus error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal server error");
+      }
+    })();
     return;
   }
 

@@ -16,6 +16,7 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.duoshield.app.auth.AuthTokenHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
+import com.duoshield.app.ui.RequestAccessActivity;
 import com.duoshield.app.ui.SeedPhraseDisplayActivity;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
@@ -81,6 +82,11 @@ public class DisplayNameActivity extends AppCompatActivity {
         btnCont.setText("Creating account…");
         tvError.setVisibility(View.GONE);
 
+        // Approved waitlist request id from RequestAccessActivity — required by
+        // the server for brand-new accounts. Threaded here via
+        // RecoveryPhraseWalkthroughActivity.
+        String waitlistRequestId = getIntent().getStringExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID);
+
         // Eagerly initialise SecurePrefs for diagnostic logging.
         // Never blocks account creation — even the plaintext fallback is MODE_PRIVATE
         // (same protection as WhatsApp/Telegram on devices without hardware TEE).
@@ -120,6 +126,7 @@ public class DisplayNameActivity extends AppCompatActivity {
                 AuthTokenHelper.signInWithSeed(
                         userId,
                         identityKeyPair.getPublicKey().serialize(),
+                        waitlistRequestId,
                         new AuthTokenHelper.Callback() {
                             @Override public void onSuccess(String firebaseUid) {
                                 Log.i(TAG, "[2/3] Firebase sign-in complete");

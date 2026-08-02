@@ -13,6 +13,7 @@ import com.duoshield.app.util.ContactBackupHelper;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.firestore.FirebaseFirestore;
 
 import java.security.SecureRandom;
 import java.security.spec.KeySpec;
@@ -24,6 +25,7 @@ public class DuressManager {
     private static final String PREFS_NAME          = "duoshield_prefs";
     private static final String KEY_DURESS_PREFIX   = "duress_pin_hash_";
     private static final String KEY_DURESS_LEGACY   = "duress_pin_hash";
+    private static final String KEY_ELIGIBLE_PREFIX = "duress_eligible_";
     private static final int    ITERATIONS          = 310_000;
     private static final int    KEY_LEN             = 256;
 
@@ -224,6 +226,58 @@ public class DuressManager {
             } catch (Exception ignored) {}
 
         }, "duress-logout").start();
+    }
+
+    // ── Server-side eligibility gate ──────────────────────────────────────────
+    //
+    // Whether the secondary-code feature is even offered to this account is
+    // controlled server-side, NOT by anything the client can set. A generic
+    // account created by anyone probing the app is never enrolled and never
+    // sees the option. Enrollment happens out-of-band (the operator adds
+    // duressEligibility/{accountId} in the Firebase console) — the client only
+    // ever reads a yes/no flag for its own account, and the PIN itself never
+    // leaves the device either way.
+    //
+    // The result is cached in SecurePrefs so the app keeps working offline and
+    // doesn't need a network round trip on every launch; a later successful
+    // check can still flip the cached value (including revoking it).
+
+    private static String eligibilityCacheKey() {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? KEY_ELIGIBLE_PREFIX + user.getUid() : null;
+    }
+
+    /** Cached (offline-safe) read of whether this account may configure a duress PIN. */
+    public static boolean isDuressEligibleCached(Context context) {
+        String key = eligibilityCacheKey();
+        if (key == null) return false;
+        return SecurePrefs.get(context).getBoolean(key, false);
+    }
+
+    /**
+     * Refreshes the cached eligibility flag from Firestore. Safe to call on
+     * every sign-in / app foreground — reads a single small document via the
+     * account's own UID, which the Firestore rules restrict to that account.
+     * No-ops silently on failure (offline, etc.) — the previously cached value
+     * is left untouched either way.
+     */
+    public static void refreshEligibility(Context context) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+        String uid = user.getUid();
+        String key = eligibilityCacheKey();
+        if (key == null) return;
+        Context appCtx = context.getApplicationContext();
+        FirebaseFirestore.getInstance()
+                .collection("duressEligibility")
+                .document(uid)
+                .get()
+                .addOnSuccessListener(snap -> {
+                    boolean eligible = snap != null && snap.exists()
+                            && Boolean.TRUE.equals(snap.getBoolean("eligible"));
+                    SecurePrefs.get(appCtx).edit().putBoolean(key, eligible).apply();
+                })
+                .addOnFailureListener(e -> { /* keep last-known cached value */ });
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
