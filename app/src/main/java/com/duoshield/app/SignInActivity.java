@@ -22,6 +22,7 @@ import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.ui.RecoveryPhraseWalkthroughActivity;
 import com.duoshield.app.ui.RequestAccessActivity;
 import com.duoshield.app.ui.RestoreFromSeedActivity;
+import com.duoshield.app.ui.SetupPinActivity;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.SecurePrefs;
@@ -177,6 +178,24 @@ public class SignInActivity extends AppCompatActivity {
         // feature. Cheap single-doc read, safe to call on every route(); no-ops
         // silently offline and leaves the last cached value in place.
         DuressManager.refreshEligibility(this);
+
+        // If the app was killed anywhere between account creation and PIN setup
+        // completing, this account was left in a half-created state — Firebase
+        // sign-in and Signal keys exist, but SetupPinActivity never finished.
+        // Route back there instead of ConversationListActivity so the user can
+        // finish, rather than landing on a PIN-less account (or, before this
+        // fix, bouncing to RequestAccessActivity with no way to recover).
+        // Legacy accounts predating this flow never had the flag set, so they
+        // are unaffected.
+        if (prefs.getBoolean("pending_pin_setup_" + uid, false)) {
+            Log.i(TAG, "route: → SetupPinActivity (interrupted mid-setup)  uid=" + uid);
+            Intent setupIntent = new Intent(this, SetupPinActivity.class);
+            setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+            setupIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(setupIntent);
+            finish();
+            return;
+        }
 
         Log.i(TAG, "route: → ConversationListActivity  uid=" + uid);
         Intent intent = new Intent(this, ConversationListActivity.class);

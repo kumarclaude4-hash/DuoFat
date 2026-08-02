@@ -1,6 +1,7 @@
 package com.duoshield.app.ui;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.EditText;
@@ -13,6 +14,8 @@ import com.duoshield.app.R;
 import com.duoshield.app.util.ButtonPressAnimator;
 import com.duoshield.app.util.PinManager;
 import com.google.android.material.button.MaterialButton;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 
 /**
  * Mandatory PIN setup for brand-new accounts. Shown once, right after
@@ -58,6 +61,16 @@ public class SetupPinActivity extends AppCompatActivity {
 
             tvError.setVisibility(View.GONE);
             PinManager.setPin(this, pin);
+
+            // Setup is now complete — clear the "stuck mid-flow" marker so a
+            // future launch routes straight to ConversationListActivity instead
+            // of bouncing back here. See SeedPhraseDisplayActivity for where
+            // this flag is set and SignInActivity.route() for where it's read.
+            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+            if (user != null) {
+                SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
+                prefs.edit().remove("pending_pin_setup_" + user.getUid()).apply();
+            }
 
             Intent intent = new Intent(this, ConversationListActivity.class);
             intent.putExtra(EXTRA_ACCOUNT_CREATED, getIntent().getBooleanExtra(EXTRA_ACCOUNT_CREATED, false));

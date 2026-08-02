@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
@@ -21,6 +22,7 @@ import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.ui.AddContactActivity;
+import com.duoshield.app.ui.SetupPinActivity;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
@@ -123,6 +125,22 @@ public class MainActivity extends AppCompatActivity {
         String myUid = FirebaseAuth.getInstance().getUid();
         if (myUid != null) {
             prefs.edit().putString("my_uid", myUid).apply();
+        }
+
+        // If the app was killed anywhere between account creation and PIN setup
+        // completing, this account was left half-created — Firebase sign-in and
+        // Signal keys exist, but SetupPinActivity never finished. Route back
+        // there instead of ConversationListActivity so the user can finish.
+        // See SeedPhraseDisplayActivity (sets the flag) / SetupPinActivity
+        // (clears it on success). Legacy accounts predating this flow never
+        // have the flag set, so they are unaffected.
+        if (myUid != null && prefs.getBoolean("pending_pin_setup_" + myUid, false)) {
+            Log.i("MainActivity", "route: → SetupPinActivity (interrupted mid-setup) uid=" + myUid);
+            Intent setupIntent = new Intent(this, SetupPinActivity.class);
+            setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+            startActivity(setupIntent);
+            finish();
+            return;
         }
 
         // 3. Refresh FCM token.

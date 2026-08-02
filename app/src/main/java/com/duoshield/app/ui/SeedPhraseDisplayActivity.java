@@ -270,8 +270,18 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
                 com.google.firebase.auth.FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
                 if (user != null) {
                     Log.i(TAG, "[2/4] persisting my_uid=" + user.getUid());
+                    // Marks this account as "mandatory PIN setup not yet finished".
+                    // If the app is killed anywhere between here and SetupPinActivity
+                    // successfully saving a PIN, SignInActivity's returning-user route()
+                    // checks this flag and sends the user back to SetupPinActivity
+                    // instead of ConversationListActivity, so a half-created account can
+                    // never get stranded without a way to finish setup. Cleared by
+                    // SetupPinActivity once PinManager.setPin() succeeds. Legacy accounts
+                    // (created before this flow existed) never have this flag set, so
+                    // they are never retroactively forced into PIN setup.
                     prefs.edit()
                          .putString("my_uid", user.getUid())
+                         .putBoolean("pending_pin_setup_" + user.getUid(), true)
                          .remove(com.duoshield.app.BaseActivity.KEY_EXPLICIT_SIGNOUT)
                          .remove("signed_out_reason_inactivity")
                          .apply();
