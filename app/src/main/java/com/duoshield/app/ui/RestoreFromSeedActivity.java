@@ -243,6 +243,28 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         FirebaseFirestore db     = FirebaseFirestore.getInstance();
         DocumentSnapshot idDoc  = awaitGet(db.collection("identities").document(derivedUserId).get());
 
+        // ── Step D2 — Check the account-level lock flag (duress §3/§8) ───────
+        //
+        // Issued as its own get() call, unconditionally, right alongside Step D's
+        // identities read — both a locked and an unlocked account always perform
+        // the exact same two Firestore round-trips before this method can return,
+        // so the lock's existence can never be inferred from response timing.
+        //
+        // A locked account fails with the *exact same* GENERIC_RESTORE_FAILURE
+        // string as a wrong seed phrase or wrong Account ID (see the derivedUserId
+        // check above) — never a distinct message, and never logged anywhere an
+        // attacker holding the device could see it.
+        DocumentSnapshot lockDoc = awaitGet(db.collection("accountLock").document(derivedUserId).get());
+        boolean accountLocked = lockDoc.exists() && Boolean.TRUE.equals(lockDoc.getBoolean("locked"));
+        if (accountLocked) {
+            rollbackFailedRestore(); // also signs out; nothing else was written to disk yet
+            runOnUiThread(() -> {
+                setLoading(false);
+                showError(GENERIC_RESTORE_FAILURE);
+            });
+            return;
+        }
+
         String oldUid = null; // the previous anonymous UID, if any
         if (idDoc.exists()) {
             // Existing identity record.
