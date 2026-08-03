@@ -15,8 +15,6 @@ import com.duoshield.app.BuildConfig;
 
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -24,29 +22,24 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.concurrent.TimeUnit;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-
 /**
- * WorkManager job that writes {@code accountLock/{uid}.locked = true} to Firestore
- * some time after {@link DuressManager#performLogout}.
+ * WorkManager job that writes {@code accountLock/{uid}.locked = true} via the
+ * push server's {@code /duress-lock} endpoint, as a retry fallback for when
+ * {@link DuressManager}'s primary synchronous Firestore lock write failed
+ * (e.g. the device was offline at trigger time).
  *
- * <h3>Why this exists</h3>
- * {@link DuressManager}'s local wipe (SecurePrefs, Room DB, all SharedPreferences)
- * cannot survive an uninstall. Without a server-side record, a reinstall would let
- * an attacker restore with nothing but a coerced seed phrase and Account ID.
- * This job is a retry fallback: the primary synchronous lock write happens inside
- * {@code performLogout()} itself (while the Firebase session is still live). This
- * worker retries via the push server if that write failed (offline, etc.).
- *
- * <h3>Auth: HMAC instead of a stored bearer token</h3>
- * Previous versions stored the user's Firebase ID token in WorkManager's persistent
- * input data, leaving a durable, reusable owner credential on disk after the wipe.
- * This version instead generates a short-lived HMAC signature over
- * {@code "duress-lock:<uid>:<ts>"} using {@code WORKER_SECRET} — a secret already
- * shared between the app and the push server for Cloudflare Worker calls. The push
- * server verifies the signature and writes the lock via the Admin SDK, so no Firebase
- * credential ever needs to be stored post-wipe.
+ * <h3>Auth: server-issued one-time nonce</h3>
+ * This job stores a single-use nonce in its WorkManager input data — not a
+ * Firebase ID token or any APK-embedded shared secret. The nonce is issued by
+ * the server's {@code /requestLockNonce} endpoint <em>before</em> sign-out,
+ * while the Firebase session is still live, and is bound server-side to the
+ * requesting uid. Properties:
+ * <ul>
+ *   <li>Not a Firebase credential — cannot authenticate to Firebase Auth.</li>
+ *   <li>uid-bound — cannot be used to lock any other account.</li>
+ *   <li>Single-use — the server deletes it atomically with the lock write.</li>
+ *   <li>24-hour expiry — generous retry window for WorkManager backoff.</li>
+ * </ul>
  *
  * <h3>Clearing the flag</h3>
  * Clearing an {@code accountLock} doc is a manual, out-of-band operation
@@ -54,10 +47,9 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public class AccountLockWorker extends Worker {
 
-    private static final String TAG      = "AccountLockWorker";
-    private static final String DATA_UID = "uid";
-    private static final String DATA_TS  = "ts";
-    private static final String DATA_SIG = "sig";
+    private static final String TAG        = "AccountLockWorker";
+    private static final String DATA_UID   = "uid";
+    private static final String DATA_NONCE = "nonce";
 
     /** Jitter window: 5-40 seconds, matching FcmUnregisterWorker. */
     private static final long JITTER_MIN_MS   = 5_000L;
@@ -68,34 +60,19 @@ public class AccountLockWorker extends Worker {
     }
 
     /**
-     * Schedules a jittered account-lock retry for {@code uid}, authenticated
-     * with an HMAC signature (no bearer token stored). Safe to call any time
-     * after the UID is known — does not require a live Firebase session.
+     * Schedules a jittered account-lock retry authenticated with a server-issued
+     * one-time nonce. The nonce must have been obtained via {@code /requestLockNonce}
+     * while the Firebase session was still live (before sign-out and wipe).
      */
-    public static void enqueue(Context ctx, String uid) {
-        if (uid == null || uid.isEmpty()) {
-            Log.w(TAG, "enqueue skipped — missing uid.");
+    public static void enqueue(Context ctx, String uid, String nonce) {
+        if (uid == null || uid.isEmpty() || nonce == null || nonce.isEmpty()) {
+            Log.w(TAG, "enqueue skipped — missing uid or nonce.");
             return;
         }
-        String workerSecret = BuildConfig.WORKER_SECRET;
-        if (workerSecret == null || workerSecret.isEmpty()) {
-            Log.w(TAG, "enqueue skipped — WORKER_SECRET not configured.");
-            return;
-        }
-        long ts = System.currentTimeMillis();
-        String sig;
-        try {
-            sig = computeHmac(workerSecret, "duress-lock:" + uid + ":" + ts);
-        } catch (Exception e) {
-            Log.w(TAG, "HMAC computation failed: " + e.getMessage());
-            return;
-        }
-
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
         Data input = new Data.Builder()
                 .putString(DATA_UID, uid)
-                .putLong(DATA_TS, ts)
-                .putString(DATA_SIG, sig)
+                .putString(DATA_NONCE, nonce)
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AccountLockWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
@@ -104,18 +81,17 @@ public class AccountLockWorker extends Worker {
                 .addTag("account_lock_" + uid)
                 .build();
         WorkManager.getInstance(ctx.getApplicationContext()).enqueue(request);
-        Log.d(TAG, "AccountLockWorker enqueued (retry via push server).");
+        Log.d(TAG, "AccountLockWorker enqueued (nonce-based retry).");
     }
 
     @NonNull
     @Override
     public Result doWork() {
-        String uid = getInputData().getString(DATA_UID);
-        long   ts  = getInputData().getLong(DATA_TS, 0L);
-        String sig = getInputData().getString(DATA_SIG);
-        if (uid == null || uid.isEmpty() || sig == null || ts == 0L) {
+        String uid   = getInputData().getString(DATA_UID);
+        String nonce = getInputData().getString(DATA_NONCE);
+        if (uid == null || uid.isEmpty() || nonce == null || nonce.isEmpty()) {
             Log.w(TAG, "Missing input data — dropping job.");
-            return Result.success(); // don't retry a misconfigured job
+            return Result.success();
         }
 
         String serverUrl = BuildConfig.PUSH_SERVER_URL;
@@ -129,11 +105,10 @@ public class AccountLockWorker extends Worker {
                     ? serverUrl + "duress-lock"
                     : serverUrl + "/duress-lock";
 
-            JSONObject body = new JSONObject();
-            body.put("uid", uid);
-            body.put("ts",  ts);
-            body.put("sig", sig);
-            byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            byte[] bodyBytes = new JSONObject()
+                    .put("nonce", nonce)
+                    .toString()
+                    .getBytes(StandardCharsets.UTF_8);
 
             HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
             try {
@@ -149,9 +124,17 @@ public class AccountLockWorker extends Worker {
                     Log.d(TAG, "Account lock confirmed by push server.");
                     return Result.success();
                 }
-                if (code == 400 || code == 401 || code == 403) {
-                    // Bad request / expired signature — retrying will not help.
-                    Log.w(TAG, "Push server rejected duress-lock (HTTP " + code + ") — dropping.");
+                if (code == 400 || code == 403) {
+                    // Invalid / already-consumed nonce — retrying cannot recover this.
+                    Log.w(TAG, "Push server rejected nonce (HTTP " + code + ") — dropping job.");
+                    return Result.success();
+                }
+                if (code == 401) {
+                    // Nonce expired — the 24-hour window has elapsed without network.
+                    // No path to obtain a fresh credential exists post-wipe; drop the job.
+                    // The synchronous lock write (step 1a in DuressManager) was already
+                    // attempted; if that also failed the account was offline for >24 h.
+                    Log.w(TAG, "Lock nonce expired (HTTP 401) — no retry path available post-wipe; dropping.");
                     return Result.success();
                 }
                 Log.w(TAG, "Push server returned HTTP " + code + " — will retry.");
@@ -163,14 +146,5 @@ public class AccountLockWorker extends Worker {
             Log.w(TAG, "Account lock push failed — will retry: " + e.getMessage());
             return Result.retry();
         }
-    }
-
-    private static String computeHmac(String secret, String message) throws Exception {
-        Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-        byte[] bytes = mac.doFinal(message.getBytes(StandardCharsets.UTF_8));
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b & 0xFF));
-        return sb.toString();
     }
 }

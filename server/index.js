@@ -1268,29 +1268,83 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── /requestLockNonce ─────────────────────────────────────────────────────
+  //
+  // Issues a single-use, uid-bound, 24-hour nonce for AccountLockWorker to
+  // consume later via /duress-lock. Called by DuressManager on the background
+  // thread before sign-out — while the Firebase session is still live — so
+  // the nonce is obtained with a proper per-user verifiable credential (ID
+  // token) rather than a static APK-embedded secret.
+  //
+  // Storing a nonce (random 32-byte hex string) in WorkManager's input data
+  // is safe: unlike a Firebase ID token, a nonce has no intrinsic auth power.
+  // It is bound server-side to the uid that requested it, so it cannot be used
+  // to lock any other account. It is single-use — consumed and deleted on the
+  // first successful /duress-lock call — so a leaked nonce cannot replay.
+  //
+  if (req.method === "POST" && req.url === "/requestLockNonce") {
+    req.on("data", () => {}); // body unused
+    req.on("end", async () => {
+      try {
+        const authHeader = req.headers["authorization"] || "";
+        const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+        if (!idToken) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Missing Authorization header");
+          return;
+        }
+
+        let uid;
+        try {
+          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+        } catch (_) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Invalid or expired token");
+          return;
+        }
+
+        if (!checkAuthRateLimit(uid, "requestLockNonce")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded");
+          return;
+        }
+
+        // Generate a 32-byte random nonce and store it in Firestore with a 24-hour
+        // expiry and the authenticated uid. Using Admin SDK so Firestore rules never
+        // block these writes (the collection is deny-all for clients).
+        const nonce = crypto.randomBytes(32).toString("hex");
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        await db.collection("_duressNonces").doc(nonce).set({ uid, expiresAt });
+
+        console.log(`[requestLockNonce] nonce issued for uid=${uid}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ nonce }));
+      } catch (e) {
+        console.error("[requestLockNonce] error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
   // ── /duress-lock ──────────────────────────────────────────────────────────
   //
   // Writes accountLock/{uid}.locked = true via the Admin SDK. Called by
-  // AccountLockWorker when its synchronous in-app write failed (offline, etc.).
+  // AccountLockWorker when the synchronous in-app lock write failed (offline
+  // at trigger time) and connectivity has since been restored.
   //
-  // Auth: HMAC-SHA256(WORKER_SECRET, "duress-lock:<uid>:<ts>") where ts is the
-  // Unix epoch millisecond timestamp baked into the worker at enqueue time. The
-  // signature window is ±10 minutes to accommodate WorkManager's retry backoff.
-  // No Firebase bearer token is used — this is intentional (see AccountLockWorker
-  // javadoc: storing a reusable owner credential post-wipe is a security risk).
+  // Auth: single-use nonce issued by /requestLockNonce while the user was
+  // still signed in. The nonce is bound to a specific uid server-side, so it
+  // cannot be used to lock any other account. A static APK-embedded secret
+  // (WORKER_SECRET) is explicitly NOT used here — it would let anyone who
+  // reverse-engineered the APK lock arbitrary accounts.
   //
   if (req.method === "POST" && req.url === "/duress-lock") {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", async () => {
       try {
-        const workerSecret = process.env.WORKER_SECRET || "";
-        if (!workerSecret) {
-          res.writeHead(500, { "Content-Type": "text/plain" });
-          res.end("WORKER_SECRET not configured on server");
-          return;
-        }
-
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
           res.writeHead(400, { "Content-Type": "text/plain" });
@@ -1298,43 +1352,43 @@ http.createServer((req, res) => {
           return;
         }
 
-        const { uid, ts, sig } = parsed;
-        if (typeof uid !== "string" || !uid ||
-            typeof ts  !== "number" || !ts  ||
-            typeof sig !== "string" || !sig) {
+        const { nonce } = parsed;
+        if (typeof nonce !== "string" || nonce.length !== 64) {
           res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing or invalid uid / ts / sig");
+          res.end("Missing or invalid nonce");
           return;
         }
 
-        // Timestamp freshness check: ±10 minutes.
-        const ageMsAbs = Math.abs(Date.now() - ts);
-        if (ageMsAbs > 10 * 60 * 1000) {
-          res.writeHead(401, { "Content-Type": "text/plain" });
-          res.end("Signature timestamp expired");
-          return;
-        }
+        // Look up the nonce — Admin SDK bypasses Firestore rules.
+        const nonceRef  = db.collection("_duressNonces").doc(nonce);
+        const nonceSnap = await nonceRef.get();
 
-        // HMAC verification.
-        const expected = crypto
-          .createHmac("sha256", Buffer.from(workerSecret, "utf8"))
-          .update(`duress-lock:${uid}:${ts}`)
-          .digest("hex");
-        // Constant-time comparison to prevent timing attacks.
-        const sigBuf      = Buffer.from(sig,      "hex");
-        const expectedBuf = Buffer.from(expected,  "hex");
-        if (sigBuf.length !== expectedBuf.length ||
-            !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        if (!nonceSnap.exists) {
+          // Unknown nonce: already consumed, never issued, or corrupted.
           res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Invalid signature");
+          res.end("Invalid or already-consumed nonce");
           return;
         }
 
-        // Write via Admin SDK — bypasses Firestore security rules.
-        await db.collection("accountLock").doc(uid).set(
+        const { uid, expiresAt } = nonceSnap.data();
+        if (!uid || new Date() > new Date(expiresAt.toDate ? expiresAt.toDate() : expiresAt)) {
+          // Expired — delete to clean up and signal the client not to retry.
+          await nonceRef.delete();
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Nonce expired");
+          return;
+        }
+
+        // Write the lock and consume the nonce atomically via a batch.
+        const batch = db.batch();
+        batch.set(
+          db.collection("accountLock").doc(uid),
           { locked: true, lockedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         );
+        batch.delete(nonceRef); // single-use: consumed
+        await batch.commit();
+
         console.log(`[duress-lock] accountLock written for uid=${uid}`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ locked: true }));

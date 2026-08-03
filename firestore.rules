@@ -354,6 +354,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Duress lock nonces: server-managed, single-use tokens that allow
+    // AccountLockWorker to write accountLock/{uid} via the push server's
+    // /duress-lock endpoint after a device wipe. Stored and consumed entirely
+    // by the server's Admin SDK — no client should ever read or write these.
+    match /_duressNonces/{nonce} {
+      allow read, write: if false;
+    }
+
     // Invite waitlist: request-access tokens for new-account signups.
     // Entirely server-managed via the push server's Admin SDK (/requestAccess,
     // /waitlistStatus) — no client reads or writes this collection directly,

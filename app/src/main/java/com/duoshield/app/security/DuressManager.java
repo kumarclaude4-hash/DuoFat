@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 
+import com.duoshield.app.BuildConfig;
 import com.duoshield.app.SignInActivity;
 import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.backup.BackupScheduler;
@@ -15,6 +16,14 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.spec.KeySpec;
 import javax.crypto.SecretKeyFactory;
@@ -148,16 +157,16 @@ public class DuressManager {
         FirebaseUser userBeforeWipe = FirebaseAuth.getInstance().getCurrentUser();
         String uidBeforeWipe = userBeforeWipe != null ? userBeforeWipe.getUid() : null;
 
-        // Enqueue retry workers immediately — no bearer token is stored.
-        // AccountLockWorker authenticates via HMAC(WORKER_SECRET) through the push
-        // server. FcmUnregisterWorker calls FirebaseMessaging.deleteToken() directly.
-        // Both are enqueued here as a persistent retry fallback; the primary
-        // account-lock write happens synchronously on the background thread below
-        // (step 1a) while the Firebase session is still live.
+        // Enqueue FcmUnregisterWorker immediately — no credential needed
+        // (FirebaseMessaging.deleteToken() handles its own auth).
+        // AccountLockWorker is enqueued later, inside the background thread
+        // (step 1b), once a server-issued one-time nonce has been obtained while
+        // the Firebase session is still live. If nonce acquisition fails (offline),
+        // the worker is not enqueued; the synchronous write in step 1a is the primary
+        // mechanism and covers the online case.
         final Context appCtx = context.getApplicationContext();
         if (uidBeforeWipe != null) {
             com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx, uidBeforeWipe);
-            AccountLockWorker.enqueue(appCtx, uidBeforeWipe);
         }
 
         // F30 fix: Write a synchronous routing-guard flag BEFORE launching SignInActivity.
@@ -183,10 +192,8 @@ public class DuressManager {
             // 1a. Synchronous account-lock write — performed BEFORE the panic sync
             //     and BEFORE sign-out, while the Firebase session is still live.
             //     This closes the race window where a concurrent restore attempt on
-            //     another device could succeed during the 5-40 second WorkManager
-            //     jitter delay. A 5-second cap keeps the wipe responsive; if the
-            //     write doesn't land (offline, slow network), AccountLockWorker will
-            //     retry via the push server HMAC endpoint once connectivity returns.
+            //     another device could succeed during the WorkManager jitter delay.
+            //     A 5-second cap keeps the wipe responsive.
             if (uidBeforeWipe != null) {
                 try {
                     final Object   lockSync = new Object();
@@ -207,7 +214,44 @@ public class DuressManager {
                     android.util.Log.d("DuressManager", "Synchronous account-lock write complete.");
                 } catch (Exception ignored) {
                     android.util.Log.w("DuressManager",
-                            "Synchronous account-lock write failed — WorkManager retry covers this.");
+                            "Synchronous account-lock write failed — will attempt nonce retry.");
+                }
+            }
+
+            // 1b. Request a server-issued one-time nonce for AccountLockWorker to use
+            //     as a retry fallback. Done here — before sign-out — so the nonce
+            //     request is authenticated with the live Firebase session rather than
+            //     any credential stored persistently in WorkManager input data.
+            //     If this fails (offline), AccountLockWorker is not enqueued; the
+            //     synchronous write in step 1a covers the online case.
+            if (uidBeforeWipe != null && userBeforeWipe != null) {
+                try {
+                    // Get Firebase ID token synchronously (5-second timeout).
+                    final Object tokenSync   = new Object();
+                    final String[] tokenHolder = {null};
+                    userBeforeWipe.getIdToken(false)
+                            .addOnSuccessListener(r -> {
+                                synchronized (tokenSync) { tokenHolder[0] = r.getToken() != null ? r.getToken() : ""; tokenSync.notifyAll(); }
+                            })
+                            .addOnFailureListener(e -> {
+                                synchronized (tokenSync) { tokenHolder[0] = ""; tokenSync.notifyAll(); }
+                            });
+                    synchronized (tokenSync) {
+                        if (tokenHolder[0] == null) tokenSync.wait(5_000);
+                    }
+                    String idToken = tokenHolder[0] != null ? tokenHolder[0] : "";
+
+                    if (!idToken.isEmpty()) {
+                        // POST /requestLockNonce authenticated with the live session.
+                        String nonce = requestLockNonce(idToken);
+                        if (nonce != null && !nonce.isEmpty()) {
+                            AccountLockWorker.enqueue(appCtx, uidBeforeWipe, nonce);
+                            android.util.Log.d("DuressManager", "AccountLockWorker enqueued with nonce.");
+                        }
+                    }
+                } catch (Exception e) {
+                    android.util.Log.w("DuressManager",
+                            "Could not obtain lock nonce — WorkManager retry skipped: " + e.getMessage());
                 }
             }
 
@@ -324,6 +368,63 @@ public class DuressManager {
                     SecurePrefs.get(appCtx).edit().putBoolean(key, eligible).apply();
                 })
                 .addOnFailureListener(e -> { /* keep last-known cached value */ });
+    }
+
+    // ── Lock-nonce helper ─────────────────────────────────────────────────────
+
+    /**
+     * Requests a single-use account-lock nonce from the push server, authenticated
+     * with the supplied Firebase ID token. The nonce is used by {@link AccountLockWorker}
+     * as a retry credential — it has no auth power of its own, is uid-bound server-side,
+     * expires in 24 hours, and is deleted after one successful {@code /duress-lock} call.
+     *
+     * <p>Must NOT be called on the main thread (blocking HTTP call).
+     *
+     * @param idToken valid Firebase ID token captured before sign-out
+     * @return nonce string, or {@code null} if the request failed
+     */
+    private static String requestLockNonce(String idToken) {
+        String serverUrl = BuildConfig.PUSH_SERVER_URL;
+        if (serverUrl == null || serverUrl.isEmpty()) return null;
+        String endpoint = serverUrl.endsWith("/")
+                ? serverUrl + "requestLockNonce"
+                : serverUrl + "/requestLockNonce";
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+            try {
+                conn.setRequestMethod("POST");
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(10_000);
+                conn.setRequestProperty("Authorization", "Bearer " + idToken);
+                conn.setRequestProperty("Content-Length", "0");
+                conn.setDoOutput(false);
+
+                int code = conn.getResponseCode();
+                if (code != 200) {
+                    android.util.Log.w("DuressManager",
+                            "requestLockNonce: server returned HTTP " + code);
+                    return null;
+                }
+                InputStream is = conn.getInputStream();
+                ByteArrayOutputStream buf = new ByteArrayOutputStream();
+                byte[] tmp = new byte[2048];
+                int n;
+                while ((n = is.read(tmp)) != -1) buf.write(tmp, 0, n);
+                String body = buf.toString("UTF-8");
+                JSONObject json = new JSONObject(body);
+                String nonce = json.optString("nonce", null);
+                if (nonce == null || nonce.isEmpty()) {
+                    android.util.Log.w("DuressManager", "requestLockNonce: empty nonce in response");
+                    return null;
+                }
+                return nonce;
+            } finally {
+                conn.disconnect();
+            }
+        } catch (Exception e) {
+            android.util.Log.w("DuressManager", "requestLockNonce failed: " + e.getMessage());
+            return null;
+        }
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
