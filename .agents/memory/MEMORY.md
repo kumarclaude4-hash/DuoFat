@@ -81,3 +81,4 @@
 - [DuoShield duress-PIN finalized design](duoshield-duress-final-design.md) — decoy-shell direction CLOSED for good; exact-match-only trigger routes to ordinary sign-in; accountLock/{uid} manual-unlock-only
 - [DuoShield Render auto-deploy](duoshield-render-autodeploy.md) — srv autoDeploy=yes/trigger=commit; a git push to main deploys live in ~1min, no manual trigger needed, just verify via RENDER_API_KEY
 - [DuoShield manual admin ops](duoshield-manual-admin-ops.md) — accountLock unfreeze + waitlist approval have NO script/API; Firebase-console-only by design, don't build a bypass path
+- [DuoShield admin panel](duoshield-admin-panel.md) — GET /admin UI for waitlist approve + account unfreeze now exists; ADMIN_TOKEN set directly on Render, not in APK
