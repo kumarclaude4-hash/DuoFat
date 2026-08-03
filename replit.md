@@ -67,6 +67,18 @@ Required environment variables for the server (set on Render for production):
 - `WORKER_SECRET` — shared token (must match Android BuildConfig)
 - `TURN_TOKEN_ID`, `TURN_API_TOKEN` — Cloudflare TURN API credentials
 
+## Operator admin panel
+
+`https://duofat.onrender.com/admin` — waitlist approval and account unfreeze, gated by
+the `ADMIN_TOKEN` env var (set directly on Render, not in the APK). Enter the token once;
+it's kept in page memory only, never persisted. Two panels:
+- **Pending waitlist requests** — approve a request id so that user can create an account
+- **Locked accounts** — unfreeze an account by deleting its `accountLock/{uid}` doc
+
+Both actions were previously Firebase-console-only by design; this panel doesn't change
+the access model (Firestore rules still deny clients read/write on both collections) —
+it just gives the operator a UI instead of hand-editing documents.
+
 ## Cloudflare Worker
 
 ```bash
