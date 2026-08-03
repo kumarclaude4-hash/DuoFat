@@ -425,6 +425,73 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// ── Admin panel auth ──────────────────────────────────────────────────────────
+// Gates /admin/api/* (waitlist approval, account-lock unfreeze). A single
+// operator-held token (ADMIN_TOKEN env var), never shipped in the APK. The
+// static /admin page itself carries no data — only the API calls it makes
+// need the token — so serving the HTML shell without auth leaks nothing.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const ADMIN_IP_MAX_FAILS = 10;
+const adminIpFails = new Map(); // ip → { count, windowStart }
+
+setInterval(() => {
+  const cutoff = Date.now() - ADMIN_IP_WINDOW_MS;
+  for (const [ip, rec] of adminIpFails) {
+    if (rec.windowStart < cutoff) adminIpFails.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
+function adminIpLocked(ip) {
+  const rec = adminIpFails.get(ip);
+  if (!rec) return false;
+  if (Date.now() - rec.windowStart >= ADMIN_IP_WINDOW_MS) return false;
+  return rec.count >= ADMIN_IP_MAX_FAILS;
+}
+
+function recordAdminAuthFailure(ip) {
+  const now = Date.now();
+  const rec = adminIpFails.get(ip);
+  if (!rec || now - rec.windowStart >= ADMIN_IP_WINDOW_MS) {
+    adminIpFails.set(ip, { count: 1, windowStart: now });
+  } else {
+    rec.count++;
+  }
+}
+
+// Constant-time comparison so token-guessing can't be timed byte-by-byte.
+function safeTokenEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// Returns true and lets the caller proceed, or writes a 401/429/503 response
+// and returns false. Every admin/api route must call this first.
+function requireAdminAuth(req, res) {
+  const ip = getClientIp(req);
+  if (adminIpLocked(ip)) {
+    res.writeHead(429, { "Content-Type": "text/plain" });
+    res.end("Too many failed attempts — wait 15 min and retry");
+    return false;
+  }
+  if (!ADMIN_TOKEN) {
+    console.error("admin auth: ADMIN_TOKEN is not configured on the server");
+    res.writeHead(503, { "Content-Type": "text/plain" });
+    res.end("Admin panel not configured");
+    return false;
+  }
+  const supplied = req.headers["x-admin-token"] || "";
+  if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
+    recordAdminAuthFailure(ip);
+    res.writeHead(401, { "Content-Type": "text/plain" });
+    res.end("Invalid admin token");
+    return false;
+  }
+  return true;
+}
+
 // ── Global unhandled-rejection / exception guards ─────────────────────────────
 // Prevents a single async exception from crashing the process.
 process.on("unhandledRejection", (reason) => {
@@ -480,6 +547,216 @@ function readBody(req, res) {
     req.on("error", reject);
   });
 }
+
+// ── Admin panel HTML shell ─────────────────────────────────────────────────────
+// Self-contained page (no build step, no external assets) served at GET /admin.
+// Prompts for the operator token once, keeps it in memory only (never
+// persisted to localStorage/cookies), and sends it as `x-admin-token` on
+// every fetch to /admin/api/*. All rendered values go through textContent,
+// never innerHTML, so nothing from Firestore can execute as markup.
+const ADMIN_PAGE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DuoShield Admin</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #0b0f14; color: #e6edf3; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #8b98a5; font-size: 13px; margin-bottom: 20px; }
+  .gate { max-width: 360px; margin: 80px auto; text-align: center; }
+  .gate input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #e6edf3; margin-top: 12px; }
+  .gate button { width: 100%; margin-top: 12px; padding: 10px; border-radius: 6px; border: none; background: #2f81f7; color: white; font-size: 14px; cursor: pointer; }
+  #app { display: none; }
+  section { margin-bottom: 32px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d; }
+  th { color: #8b98a5; font-weight: 500; }
+  button.action { padding: 5px 12px; border-radius: 5px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 12px; }
+  button.action:hover { background: #30363d; }
+  button.danger { border-color: #f85149; color: #f85149; }
+  .empty { color: #8b98a5; font-size: 13px; padding: 12px 0; }
+  .err { color: #f85149; font-size: 13px; margin-top: 8px; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #161b22; border: 1px solid #30363d; padding: 10px 16px; border-radius: 6px; font-size: 13px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+  .refresh { float: right; }
+</style>
+</head>
+<body>
+
+  <div class="gate" id="gate">
+    <h1>DuoShield Admin</h1>
+    <div class="sub">Enter the operator token to continue</div>
+    <input type="password" id="tokenInput" placeholder="Admin token" autofocus>
+    <button onclick="unlock()">Unlock</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+
+  <div id="app">
+    <h1>DuoShield Admin</h1>
+    <div class="sub">Waitlist approval &amp; account unfreeze</div>
+
+    <section>
+      <h2>Pending waitlist requests <button class="action refresh" onclick="loadWaitlist()">Refresh</button></h2>
+      <table>
+        <thead><tr><th>Request ID</th><th>Requested</th><th></th></tr></thead>
+        <tbody id="waitlistBody"></tbody>
+      </table>
+      <div class="empty" id="waitlistEmpty" style="display:none">No pending requests.</div>
+    </section>
+
+    <section>
+      <h2>Locked accounts <button class="action refresh" onclick="loadLocked()">Refresh</button></h2>
+      <table>
+        <thead><tr><th>UID</th><th>Locked at</th><th></th></tr></thead>
+        <tbody id="lockedBody"></tbody>
+      </table>
+      <div class="empty" id="lockedEmpty" style="display:none">No locked accounts.</div>
+    </section>
+  </div>
+
+<script>
+let TOKEN = "";
+
+function unlock() {
+  const t = document.getElementById("tokenInput").value.trim();
+  if (!t) return;
+  TOKEN = t;
+  document.getElementById("gateErr").textContent = "";
+  loadWaitlist();
+  loadLocked();
+}
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({}, opts, {
+    headers: Object.assign({ "x-admin-token": TOKEN, "Content-Type": "application/json" }, (opts && opts.headers) || {}),
+  }));
+  if (res.status === 401) {
+    document.getElementById("app").style.display = "none";
+    document.getElementById("gate").style.display = "block";
+    document.getElementById("gateErr").textContent = "Invalid token.";
+    throw new Error("unauthorized");
+  }
+  if (!res.ok) throw new Error(await res.text());
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : null;
+}
+
+function showApp() {
+  document.getElementById("gate").style.display = "none";
+  document.getElementById("app").style.display = "block";
+}
+
+async function loadWaitlist() {
+  try {
+    const data = await api("/admin/api/waitlist");
+    showApp();
+    const body = document.getElementById("waitlistBody");
+    body.innerHTML = "";
+    document.getElementById("waitlistEmpty").style.display = data.requests.length ? "none" : "block";
+    for (const r of data.requests) {
+      const tr = document.createElement("tr");
+
+      const idTd = document.createElement("td");
+      idTd.className = "mono";
+      idTd.textContent = r.requestId;
+      tr.appendChild(idTd);
+
+      const dateTd = document.createElement("td");
+      dateTd.textContent = r.createdAt ? new Date(r.createdAt).toLocaleString() : "—";
+      tr.appendChild(dateTd);
+
+      const actionTd = document.createElement("td");
+      const btn = document.createElement("button");
+      btn.className = "action";
+      btn.textContent = "Approve";
+      btn.onclick = () => approve(r.requestId, btn);
+      actionTd.appendChild(btn);
+      tr.appendChild(actionTd);
+
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Failed to load waitlist: " + e.message);
+  }
+}
+
+async function approve(requestId, btn) {
+  btn.disabled = true;
+  btn.textContent = "Approving…";
+  try {
+    await api("/admin/api/waitlist/approve", { method: "POST", body: JSON.stringify({ requestId }) });
+    toast("Approved " + requestId.slice(0, 8) + "…");
+    loadWaitlist();
+  } catch (e) {
+    if (e.message !== "unauthorized") { toast("Approve failed: " + e.message); btn.disabled = false; btn.textContent = "Approve"; }
+  }
+}
+
+async function loadLocked() {
+  try {
+    const data = await api("/admin/api/locked");
+    showApp();
+    const body = document.getElementById("lockedBody");
+    body.innerHTML = "";
+    document.getElementById("lockedEmpty").style.display = data.accounts.length ? "none" : "block";
+    for (const a of data.accounts) {
+      const tr = document.createElement("tr");
+
+      const idTd = document.createElement("td");
+      idTd.className = "mono";
+      idTd.textContent = a.uid;
+      tr.appendChild(idTd);
+
+      const dateTd = document.createElement("td");
+      dateTd.textContent = a.lockedAt ? new Date(a.lockedAt).toLocaleString() : "—";
+      tr.appendChild(dateTd);
+
+      const actionTd = document.createElement("td");
+      const btn = document.createElement("button");
+      btn.className = "action danger";
+      btn.textContent = "Unfreeze";
+      btn.onclick = () => unfreeze(a.uid, btn);
+      actionTd.appendChild(btn);
+      tr.appendChild(actionTd);
+
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Failed to load locked accounts: " + e.message);
+  }
+}
+
+async function unfreeze(uid, btn) {
+  if (!confirm("Unfreeze account " + uid + "? This lets the app sign in again.")) return;
+  btn.disabled = true;
+  btn.textContent = "Unfreezing…";
+  try {
+    await api("/admin/api/locked/unfreeze", { method: "POST", body: JSON.stringify({ uid }) });
+    toast("Unfroze " + uid);
+    loadLocked();
+  } catch (e) {
+    if (e.message !== "unauthorized") { toast("Unfreeze failed: " + e.message); btn.disabled = false; btn.textContent = "Unfreeze"; }
+  }
+}
+
+document.getElementById("tokenInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") unlock();
+});
+</script>
+</body>
+</html>
+`;
 
 // ── Health + status + mintToken HTTP server ───────────────────────────────────
 http.createServer((req, res) => {
@@ -1394,6 +1671,164 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ locked: true }));
       } catch (e) {
         console.error("[duress-lock] error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
+  // ── GET /admin ────────────────────────────────────────────────────────────
+  //
+  // Static HTML/JS shell for the operator admin panel — no server data is
+  // embedded in the page itself, only the fetch calls it makes to
+  // /admin/api/* carry the token, so serving this without auth is safe.
+  if (req.method === "GET" && req.url === "/admin") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(ADMIN_PAGE_HTML);
+    return;
+  }
+
+  // ── GET /admin/api/waitlist ───────────────────────────────────────────────
+  //
+  // Auth: x-admin-token header. Returns pending waitlist requests, newest
+  // first, so the operator can see who's asking for access.
+  if (req.method === "GET" && req.url === "/admin/api/waitlist") {
+    (async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        const snap = await db.collection("waitlist")
+          .where("status", "==", "pending")
+          .orderBy("createdAt", "desc")
+          .limit(200)
+          .get();
+        const requests = snap.docs.map((d) => {
+          const data = d.data();
+          const createdAt = data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : null;
+          return { requestId: d.id, createdAt };
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ requests }));
+      } catch (e) {
+        console.error("admin/api/waitlist error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    })();
+    return;
+  }
+
+  // ── POST /admin/api/waitlist/approve ──────────────────────────────────────
+  //
+  // Body: { requestId }. Auth: x-admin-token header.
+  // Flips a pending waitlist doc to status: "approved" so the requester's
+  // next /waitlistStatus poll lets them proceed to account creation.
+  if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+        const { requestId } = parsed;
+        if (typeof requestId !== "string" || !/^[0-9a-f]{32}$/.test(requestId)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid requestId");
+          return;
+        }
+        const ref = db.collection("waitlist").doc(requestId);
+        const snap = await ref.get();
+        if (!snap.exists) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Request not found");
+          return;
+        }
+        if (snap.data().status !== "pending") {
+          res.writeHead(409, { "Content-Type": "text/plain" });
+          res.end(`Request is already "${snap.data().status}", not pending`);
+          return;
+        }
+        await ref.update({ status: "approved", approvedAt: FieldValue.serverTimestamp() });
+        console.log(`[admin] waitlist request approved: requestId=${requestId}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error("admin/api/waitlist/approve error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
+  // ── GET /admin/api/locked ─────────────────────────────────────────────────
+  //
+  // Auth: x-admin-token header. Returns currently-locked accounts so the
+  // operator can see who's frozen and pick one to unfreeze.
+  if (req.method === "GET" && req.url === "/admin/api/locked") {
+    (async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        const snap = await db.collection("accountLock")
+          .where("locked", "==", true)
+          .get();
+        const accounts = snap.docs.map((d) => {
+          const data = d.data();
+          const lockedAt = data.lockedAt && data.lockedAt.toDate ? data.lockedAt.toDate().toISOString() : null;
+          return { uid: d.id, lockedAt };
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accounts }));
+      } catch (e) {
+        console.error("admin/api/locked error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    })();
+    return;
+  }
+
+  // ── POST /admin/api/locked/unfreeze ───────────────────────────────────────
+  //
+  // Body: { uid }. Auth: x-admin-token header.
+  // Deletes the accountLock/{uid} doc — the only way this doc can ever be
+  // removed, per firestore.rules (clients get `allow delete: if false`).
+  if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+        const { uid } = parsed;
+        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid uid");
+          return;
+        }
+        const ref = db.collection("accountLock").doc(uid);
+        const snap = await ref.get();
+        if (!snap.exists) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("No lock found for this uid");
+          return;
+        }
+        await ref.delete();
+        console.log(`[admin] account unfrozen: uid=${uid}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error("admin/api/locked/unfreeze error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Server error: " + e.message);
       }
