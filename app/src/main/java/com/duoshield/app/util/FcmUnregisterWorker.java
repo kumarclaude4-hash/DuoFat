@@ -11,12 +11,11 @@ import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
-import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.SetOptions;
+import org.json.JSONObject;
 
 import java.security.SecureRandom;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -37,11 +36,20 @@ import java.util.concurrent.TimeUnit;
  * <p>This same jittered de-registration is used for every sign-out path (duress
  * and ordinary), not just the duress one, so there's nothing to correlate: token
  * clearing always happens some random interval after any sign-out.
+ *
+ * <h3>Authenticating a write that runs after sign-out</h3>
+ * By design this job fires well after sign-out has already happened, so there is
+ * no live Firebase session left to authenticate the write with. The caller must
+ * capture a Firebase ID token from the user object <em>before</em> calling
+ * {@code signOut()} and pass it into {@link #enqueue}; {@link #doWork} authenticates
+ * the Firestore REST call with that token via {@link FirestoreRestWriter} instead of
+ * relying on the SDK's (by-then absent) ambient signed-in state.
  */
 public class FcmUnregisterWorker extends Worker {
 
-    private static final String TAG     = "FcmUnregisterWorker";
-    private static final String DATA_UID = "uid";
+    private static final String TAG        = "FcmUnregisterWorker";
+    private static final String DATA_UID   = "uid";
+    private static final String DATA_TOKEN = "id_token";
 
     /** Jitter window: 5-40 seconds after the sign-out that scheduled this job. */
     private static final long JITTER_MIN_MS = 5_000L;
@@ -52,16 +60,22 @@ public class FcmUnregisterWorker extends Worker {
     }
 
     /**
-     * Schedules a jittered FCM token de-registration for {@code uid}. Safe to call
-     * from any thread, including a background wipe thread that is about to clear
-     * the SharedPreferences the UID would otherwise have been read from — {@code uid}
-     * must therefore be captured by the caller BEFORE any such wipe.
+     * Schedules a jittered FCM token de-registration for {@code uid}, authenticated
+     * with {@code idToken}. Both must be captured by the caller BEFORE sign-out and
+     * BEFORE any wipe that would clear the SharedPreferences the uid would otherwise
+     * have been read from — see the class javadoc.
      */
-    public static void enqueue(Context ctx, String uid) {
-        if (uid == null || uid.isEmpty()) return;
+    public static void enqueue(Context ctx, String uid, String idToken) {
+        if (uid == null || uid.isEmpty() || idToken == null || idToken.isEmpty()) {
+            Log.w(TAG, "enqueue skipped — missing uid or ID token, write would be unauthenticated.");
+            return;
+        }
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
 
-        Data input = new Data.Builder().putString(DATA_UID, uid).build();
+        Data input = new Data.Builder()
+                .putString(DATA_UID, uid)
+                .putString(DATA_TOKEN, idToken)
+                .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(FcmUnregisterWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
@@ -75,14 +89,13 @@ public class FcmUnregisterWorker extends Worker {
     @Override
     public Result doWork() {
         String uid = getInputData().getString(DATA_UID);
+        String idToken = getInputData().getString(DATA_TOKEN);
         if (uid == null || uid.isEmpty()) return Result.success();
 
         try {
-            Tasks.await(
-                    FirebaseFirestore.getInstance()
-                            .collection("users").document(uid)
-                            .set(Collections.singletonMap("fcmToken", ""), SetOptions.merge()),
-                    20, TimeUnit.SECONDS);
+            Map<String, JSONObject> fields = new HashMap<>();
+            fields.put("fcmToken", FirestoreRestWriter.stringValue(""));
+            FirestoreRestWriter.mergeDocument(idToken, "users", uid, fields);
             Log.d(TAG, "FCM token cleared for signed-out account.");
             return Result.success();
         } catch (Exception e) {

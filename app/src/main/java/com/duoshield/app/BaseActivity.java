@@ -1,5 +1,6 @@
 package com.duoshield.app;
 
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
@@ -88,10 +89,22 @@ public class BaseActivity extends AppCompatActivity {
         if (AppLockManager.shouldAutoSignOut(this)) {
             Log.i(TAG, getClass().getSimpleName() + ": auto sign-out threshold exceeded → SignIn");
             // Capture the UID before signOut() clears it, so the delayed FCM
-            // de-registration job below has something to act on.
+            // de-registration job below has something to act on. Also kick off an
+            // ID-token capture on the still-live user object right now — the job runs
+            // 5-40s from now, after signOut() below has already killed the ambient
+            // session it would otherwise need. See FcmUnregisterWorker's javadoc.
             com.google.firebase.auth.FirebaseUser userBeforeSignOut =
                     FirebaseAuth.getInstance().getCurrentUser();
             String uidBeforeSignOut = userBeforeSignOut != null ? userBeforeSignOut.getUid() : null;
+            if (userBeforeSignOut != null) {
+                Context appCtx = getApplicationContext();
+                userBeforeSignOut.getIdToken(false)
+                        .addOnSuccessListener(result -> com.duoshield.app.util.FcmUnregisterWorker
+                                .enqueue(appCtx, uidBeforeSignOut, result.getToken()))
+                        .addOnFailureListener(e -> Log.w(TAG,
+                                "Could not capture ID token before sign-out — delayed FCM "
+                                + "de-registration write will be skipped.", e));
+            }
             prefs.edit()
                  .putBoolean(KEY_EXPLICIT_SIGNOUT, true)
                  .putBoolean("signed_out_reason_inactivity", true)
@@ -102,10 +115,6 @@ public class BaseActivity extends AppCompatActivity {
                  .remove("disappear_ms")
                  .apply();
             try { FirebaseAuth.getInstance().signOut(); } catch (Exception ignored) {}
-            // Every sign-out — not just a duress-triggered one — should stop pushing
-            // notifications to a device the account is no longer active on. Jittered
-            // for the same reason as the duress path (see FcmUnregisterWorker javadoc).
-            com.duoshield.app.util.FcmUnregisterWorker.enqueue(this, uidBeforeSignOut);
             Intent intent = new Intent(this, SignInActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             startActivity(intent);

@@ -107,11 +107,9 @@ public class DuressManager {
     /**
      * "Sync then Wipe" — plausible-deniability duress logout.
      *
-     * <p>This is the unified logout action for both:
-     * <ul>
-     *   <li>A duress PIN being entered (attacker watching), and</li>
-     *   <li>The 5th consecutive wrong-PIN attempt in {@code LockScreenActivity}.</li>
-     * </ul>
+     * <p>Triggered exclusively by an exact duress-PIN match in
+     * {@code LockScreenActivity}. There is no wrong-guess-count fallback — see
+     * {@code LockScreenActivity}'s javadoc for why that was removed.
      *
      * <h3>Sequence</h3>
      * <ol>
@@ -150,6 +148,25 @@ public class DuressManager {
         FirebaseUser userBeforeWipe = FirebaseAuth.getInstance().getCurrentUser();
         String uidBeforeWipe = userBeforeWipe != null ? userBeforeWipe.getUid() : null;
 
+        // Also capture a Firebase ID token right now, while the session is still live.
+        // The two jittered jobs below run 5-40s from now, well after this same thread's
+        // signOut() call has already killed the ambient session they'd otherwise rely
+        // on — see FirestoreRestWriter's javadoc. This kicks off async (never blocks
+        // this thread); if it fails (e.g. no network at this exact instant), both writes
+        // are skipped for this trigger rather than silently failing every time later.
+        final Context appCtx = context.getApplicationContext();
+        if (userBeforeWipe != null) {
+            userBeforeWipe.getIdToken(false)
+                    .addOnSuccessListener(result -> {
+                        String idToken = result.getToken();
+                        com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx, uidBeforeWipe, idToken);
+                        AccountLockWorker.enqueue(appCtx, uidBeforeWipe, idToken);
+                    })
+                    .addOnFailureListener(e -> android.util.Log.w("DuressManager",
+                            "Could not capture ID token before wipe — account-lock and "
+                            + "FCM de-registration writes will be skipped for this trigger.", e));
+        }
+
         // F30 fix: Write a synchronous routing-guard flag BEFORE launching SignInActivity.
         // SignInActivity (and SplashActivity / MainActivity) check this flag and skip the
         // returning-user auto-route while the background wipe is still in flight.
@@ -157,15 +174,6 @@ public class DuressManager {
         // so SignInActivity cannot bounce back before both keys and session are destroyed.
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                .edit().putBoolean("duress_wipe_in_progress", true).commit();
-
-        // Jittered, delayed FCM token de-registration — see FcmUnregisterWorker's
-        // javadoc for why this isn't a synchronous call made right here.
-        com.duoshield.app.util.FcmUnregisterWorker.enqueue(context, uidBeforeWipe);
-
-        // Jittered, delayed account-level lock flag — makes the restriction survive
-        // an uninstall/reinstall, which the local wipe below cannot. See
-        // AccountLockWorker's javadoc.
-        AccountLockWorker.enqueue(context, uidBeforeWipe);
 
         // 1. Instant navigation — removes chat screen from view immediately.
         //    To an observer, it looks like the app is simply processing the PIN.

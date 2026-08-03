@@ -1,7 +1,6 @@
 package com.duoshield.app;
 
 import android.annotation.SuppressLint;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -26,8 +25,12 @@ import com.duoshield.app.util.PinManager;
  *
  * <h3>PIN-failure policy</h3>
  * <ul>
- *   <li>Attempts 1–4: "Incorrect PIN" error with shake animation.</li>
- *   <li>Attempt 5 (or duress PIN): {@link DuressManager#performLogout(android.content.Context)}.</li>
+ *   <li>Any wrong PIN: "Incorrect PIN" error with shake animation. There is no
+ *       attempt limit — an exact PIN B match is the only signal that triggers
+ *       {@link DuressManager#performLogout(android.content.Context)}. A repeated-
+ *       wrong-guess fallback was considered and explicitly removed: it created
+ *       false-positive lockouts (typos, kids, a drunk owner) with no upside, since
+ *       duress is meant to be a single deliberate, unambiguous signal.</li>
  * </ul>
  *
  * Input is now handled by an on-screen custom numpad — no system keyboard needed.
@@ -35,9 +38,6 @@ import com.duoshield.app.util.PinManager;
 public class LockScreenActivity extends AppCompatActivity {
 
     private static final String PREFS_NAME     = "duoshield_prefs";
-    private static final String PREFS_SECURITY = "duoshield_security_prefs";
-    private static final String KEY_FAIL_COUNT = "pin_fail_count";
-    private static final int    MAX_ATTEMPTS   = 5;
     private static final long   AUTO_SUBMIT_DEBOUNCE_MS = 600L;
 
     // UI refs
@@ -207,8 +207,6 @@ public class LockScreenActivity extends AppCompatActivity {
                 hideScanAnim();
 
                 if (correct) {
-                    getSharedPreferences(PREFS_SECURITY, MODE_PRIVATE)
-                            .edit().putInt(KEY_FAIL_COUNT, 0).apply();
                     unlock();
                 } else {
                     handleWrongPin();
@@ -218,15 +216,6 @@ public class LockScreenActivity extends AppCompatActivity {
     }
 
     private void handleWrongPin() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_SECURITY, MODE_PRIVATE);
-        int failCount = prefs.getInt(KEY_FAIL_COUNT, 0) + 1;
-        prefs.edit().putInt(KEY_FAIL_COUNT, failCount).apply();
-
-        if (failCount >= MAX_ATTEMPTS) {
-            DuressManager.performLogout(this);
-            return;
-        }
-
         HapticHelper.wrongPin(this);
         Animation shake = AnimationUtils.loadAnimation(this, R.anim.shake);
         pinDotsView.startAnimation(shake);

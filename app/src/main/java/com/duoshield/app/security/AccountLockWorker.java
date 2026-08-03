@@ -11,10 +11,9 @@ import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
-import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.firestore.FieldValue;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.SetOptions;
+import com.duoshield.app.util.FirestoreRestWriter;
+
+import org.json.JSONObject;
 
 import java.security.SecureRandom;
 import java.util.HashMap;
@@ -40,6 +39,14 @@ import java.util.concurrent.TimeUnit;
  * observable pattern. WorkManager's persistent queue means the job still fires even
  * if the process is killed or the device reboots before the delay elapses.
  *
+ * <h3>Authenticating a write that runs after sign-out</h3>
+ * By design this job fires well after {@code performLogout()} has already signed the
+ * device out locally, so there is no live Firebase session left to authenticate the
+ * write. The caller must capture a Firebase ID token from the user object <em>before</em>
+ * sign-out and pass it into {@link #enqueue}; {@link #doWork} authenticates the Firestore
+ * REST call with that token via {@link FirestoreRestWriter} instead of relying on the
+ * SDK's (by-then absent) ambient signed-in state.
+ *
  * <h3>Clearing the flag</h3>
  * Not yet implemented client-side — see docs/DURESS_PIN_SECURITY_PLAN.md §8. Until a
  * normalization flow exists, clearing an {@code accountLock} doc is a manual,
@@ -48,8 +55,9 @@ import java.util.concurrent.TimeUnit;
  */
 public class AccountLockWorker extends Worker {
 
-    private static final String TAG      = "AccountLockWorker";
-    private static final String DATA_UID = "uid";
+    private static final String TAG        = "AccountLockWorker";
+    private static final String DATA_UID   = "uid";
+    private static final String DATA_TOKEN = "id_token";
 
     /** Jitter window: 5-40 seconds, matching FcmUnregisterWorker. */
     private static final long JITTER_MIN_MS   = 5_000L;
@@ -60,14 +68,22 @@ public class AccountLockWorker extends Worker {
     }
 
     /**
-     * Schedules a jittered account-lock write for {@code uid}. {@code uid} must be
-     * captured by the caller before any local wipe removes the means to read it.
+     * Schedules a jittered account-lock write for {@code uid}, authenticated with
+     * {@code idToken}. Both must be captured by the caller before any local wipe or
+     * sign-out removes the means to read the uid / invalidates the SDK's ambient
+     * session — see the class javadoc.
      */
-    public static void enqueue(Context ctx, String uid) {
-        if (uid == null || uid.isEmpty()) return;
+    public static void enqueue(Context ctx, String uid, String idToken) {
+        if (uid == null || uid.isEmpty() || idToken == null || idToken.isEmpty()) {
+            Log.w(TAG, "enqueue skipped — missing uid or ID token, write would be unauthenticated.");
+            return;
+        }
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
 
-        Data input = new Data.Builder().putString(DATA_UID, uid).build();
+        Data input = new Data.Builder()
+                .putString(DATA_UID, uid)
+                .putString(DATA_TOKEN, idToken)
+                .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AccountLockWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
@@ -81,17 +97,14 @@ public class AccountLockWorker extends Worker {
     @Override
     public Result doWork() {
         String uid = getInputData().getString(DATA_UID);
+        String idToken = getInputData().getString(DATA_TOKEN);
         if (uid == null || uid.isEmpty()) return Result.success();
 
         try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("locked", true);
-            data.put("lockedAt", FieldValue.serverTimestamp());
-            Tasks.await(
-                    FirebaseFirestore.getInstance()
-                            .collection("accountLock").document(uid)
-                            .set(data, SetOptions.merge()),
-                    20, TimeUnit.SECONDS);
+            Map<String, JSONObject> fields = new HashMap<>();
+            fields.put("locked", FirestoreRestWriter.boolValue(true));
+            fields.put("lockedAt", FirestoreRestWriter.timestampValueNow());
+            FirestoreRestWriter.mergeDocument(idToken, "accountLock", uid, fields);
             Log.d(TAG, "Account lock flag written.");
             return Result.success();
         } catch (Exception e) {
