@@ -324,6 +324,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Account-level restriction flag: set by the client itself (from the device
+    // that just performed a security-triggered sign-out) so the restriction
+    // survives an app uninstall/reinstall — local-only state cannot. Restricted
+    // to the account's own UID for both read and write, same as recovery/{uid},
+    // so the flag can never be probed or set for any other account. Deliberately
+    // NOT named after the feature it backs (see docs/DURESS_PIN_SECURITY_PLAN.md
+    // §9) — a compiled string literal referencing this collection name should not
+    // read as anything security-relevant.
+    match /accountLock/{accountId} {
+      allow read:  if request.auth != null && request.auth.uid == accountId;
+      allow write: if request.auth != null && request.auth.uid == accountId;
+    }
+
     // Invite waitlist: request-access tokens for new-account signups.
     // Entirely server-managed via the push server's Admin SDK (/requestAccess,
     // /waitlistStatus) — no client reads or writes this collection directly,

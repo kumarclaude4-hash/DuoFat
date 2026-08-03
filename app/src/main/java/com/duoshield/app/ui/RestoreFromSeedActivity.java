@@ -76,6 +76,16 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private static final String KEY_ECDH_SHARED    = "ecdh_shared_key";
     private static final String KEY_DISAPPEAR_MS   = "disappear_ms";
 
+    /**
+     * Single generic failure message for any restore-time credential mismatch —
+     * wrong seed, wrong Account ID, or an account whose seed derivation simply
+     * doesn't line up. Deliberately does not distinguish which factor was wrong;
+     * doing so would hand an attacker holding a coerced seed phrase a signal
+     * about what to try next.
+     */
+    private static final String GENERIC_RESTORE_FAILURE =
+            "Restore failed. Please check your Account ID and recovery phrase and try again.";
+
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
     private TextView                  tvError;
@@ -182,9 +192,14 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         byte[]          pubKeyBytes     = identityKeyPair.getPublicKey().serialize();
 
         if (!derivedUserId.equalsIgnoreCase(enteredAccountId.trim())) {
+            // Deliberately generic: this message must be indistinguishable from any
+            // other restore failure (wrong seed, wrong ID, account doesn't exist,
+            // network error). Revealing "these two specific things don't match" is
+            // itself information an attacker holding a coerced seed phrase could use
+            // to narrow down what's wrong and keep guessing.
             runOnUiThread(() -> {
                 setLoading(false);
-                showError("Account ID does not match this recovery phrase. Please check both and try again.");
+                showError(GENERIC_RESTORE_FAILURE);
             });
             return;
         }
@@ -670,16 +685,17 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     }
 
     private static String friendlyError(Throwable e) {
-        if (e == null) return "An unexpected error occurred. Please try again.";
+        if (e == null) return GENERIC_RESTORE_FAILURE;
         String s = e.getMessage() != null ? e.getMessage() : e.toString();
+        // Credential-mismatch cases are deliberately collapsed to the same generic
+        // message as the client-side derivedUserId check above — see
+        // GENERIC_RESTORE_FAILURE's javadoc for why distinguishing them is unsafe.
         if (s.contains("Key mismatch") || s.contains("403"))
-            return "Recovery phrase does not match this Account ID. Please check both and try again.";
+            return GENERIC_RESTORE_FAILURE;
         if (s.contains("429") || s.contains("Too many"))
             return "Too many attempts. Please wait a moment and try again.";
         if (s.contains("PUSH_SERVER_URL"))
             return "The auth server is not configured. Contact support.";
-        if (s.contains("Account ID does not match"))
-            return s;
         if (s.contains("timeout") || s.contains("timed out")
                 || s.contains("network") || s.contains("IOException")
                 || s.contains("UnknownHost") || s.contains("connect"))

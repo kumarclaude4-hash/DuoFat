@@ -186,8 +186,14 @@ public class LockScreenActivity extends AppCompatActivity {
         showScanAnim();
 
         new Thread(() -> {
+            // Both hashes are always computed, regardless of outcome. A short-circuit
+            // here (skip PinManager.verifyPin() once isDuressPin() matches) would make
+            // matching the duress PIN measurably faster than matching the real PIN —
+            // an observable timing side-channel that could tip off an attacker watching
+            // for exactly this kind of asymmetry.
             boolean duress  = DuressManager.isDuressPin(this, entered);
-            boolean correct = !duress && PinManager.verifyPin(this, entered);
+            boolean real    = PinManager.verifyPin(this, entered);
+            boolean correct = real && !duress;
 
             runOnUiThread(() -> {
                 if (duress) {

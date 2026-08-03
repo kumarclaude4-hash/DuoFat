@@ -88,6 +88,18 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         boolean notificationsEnabled = prefs.getBoolean("notifications_enabled", true);
         if (!notificationsEnabled) return;
 
+        // Local fallback suppression: the primary defense is de-registering the FCM
+        // token on sign-out (see FcmUnregisterWorker), but that write is deliberately
+        // delayed and jittered, so there's a short window right after a security
+        // sign-out where a push could still land on this device. If the wipe/sign-out
+        // sequence is still in flight, surfacing a notification here would visibly
+        // contradict the "freshly signed out" appearance the sign-out is trying to
+        // present, so suppress it.
+        if (prefs.getBoolean("duress_wipe_in_progress", false)) {
+            Log.d(TAG, "Sign-out in progress — notification suppressed");
+            return;
+        }
+
         // Sender name from data payload (set by push server from Firestore displayName).
         // Falls back to "DuoShield" for privacy if not present.
         String senderName = remoteMessage.getData().get("senderName");

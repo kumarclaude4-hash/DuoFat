@@ -87,6 +87,11 @@ public class BaseActivity extends AppCompatActivity {
         // 1. Auto sign-out — kills Firebase session after prolonged inactivity.
         if (AppLockManager.shouldAutoSignOut(this)) {
             Log.i(TAG, getClass().getSimpleName() + ": auto sign-out threshold exceeded → SignIn");
+            // Capture the UID before signOut() clears it, so the delayed FCM
+            // de-registration job below has something to act on.
+            com.google.firebase.auth.FirebaseUser userBeforeSignOut =
+                    FirebaseAuth.getInstance().getCurrentUser();
+            String uidBeforeSignOut = userBeforeSignOut != null ? userBeforeSignOut.getUid() : null;
             prefs.edit()
                  .putBoolean(KEY_EXPLICIT_SIGNOUT, true)
                  .putBoolean("signed_out_reason_inactivity", true)
@@ -97,6 +102,10 @@ public class BaseActivity extends AppCompatActivity {
                  .remove("disappear_ms")
                  .apply();
             try { FirebaseAuth.getInstance().signOut(); } catch (Exception ignored) {}
+            // Every sign-out — not just a duress-triggered one — should stop pushing
+            // notifications to a device the account is no longer active on. Jittered
+            // for the same reason as the duress path (see FcmUnregisterWorker javadoc).
+            com.duoshield.app.util.FcmUnregisterWorker.enqueue(this, uidBeforeSignOut);
             Intent intent = new Intent(this, SignInActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
             startActivity(intent);
