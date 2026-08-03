@@ -239,22 +239,26 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
 
         String identityPubKeyHash = sha256Hex(pubKeyBytes);
 
-        // ── Step D — Check /identities/{userId}; run migration if old UID differs ──
-        FirebaseFirestore db     = FirebaseFirestore.getInstance();
-        DocumentSnapshot idDoc  = awaitGet(db.collection("identities").document(derivedUserId).get());
-
-        // ── Step D2 — Check the account-level lock flag (duress §3/§8) ───────
+        // ── Steps D + D2 — Concurrent Firestore reads ────────────────────────
         //
-        // Issued as its own get() call, unconditionally, right alongside Step D's
-        // identities read — both a locked and an unlocked account always perform
-        // the exact same two Firestore round-trips before this method can return,
-        // so the lock's existence can never be inferred from response timing.
+        // Both reads are dispatched simultaneously so neither introduces extra
+        // latency beyond the slower of the two round-trips. This also ensures
+        // timing parity: a locked account and an unlocked account both wait for
+        // exactly the same two in-flight Firestore requests before this method
+        // can branch — the lock's existence cannot be inferred from response time.
         //
         // A locked account fails with the *exact same* GENERIC_RESTORE_FAILURE
-        // string as a wrong seed phrase or wrong Account ID (see the derivedUserId
-        // check above) — never a distinct message, and never logged anywhere an
-        // attacker holding the device could see it.
-        DocumentSnapshot lockDoc = awaitGet(db.collection("accountLock").document(derivedUserId).get());
+        // string as a wrong seed phrase or wrong Account ID — never a distinct
+        // message, and never logged anywhere an attacker holding the device
+        // could see it.
+        FirebaseFirestore db = FirebaseFirestore.getInstance();
+        com.google.android.gms.tasks.Task<DocumentSnapshot> idTask =
+                db.collection("identities").document(derivedUserId).get();
+        com.google.android.gms.tasks.Task<DocumentSnapshot> lockTask =
+                db.collection("accountLock").document(derivedUserId).get();
+
+        DocumentSnapshot idDoc   = awaitGet(idTask);
+        DocumentSnapshot lockDoc = awaitGet(lockTask);
         boolean accountLocked = lockDoc.exists() && Boolean.TRUE.equals(lockDoc.getBoolean("locked"));
         if (accountLocked) {
             rollbackFailedRestore(); // also signs out; nothing else was written to disk yet
@@ -712,7 +716,9 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         // Credential-mismatch cases are deliberately collapsed to the same generic
         // message as the client-side derivedUserId check above — see
         // GENERIC_RESTORE_FAILURE's javadoc for why distinguishing them is unsafe.
-        if (s.contains("Key mismatch") || s.contains("403"))
+        if (s.contains("Key mismatch") || s.contains("403")
+                || s.contains("Recovery phrase does not match")
+                || s.contains("Credential mismatch"))
             return GENERIC_RESTORE_FAILURE;
         if (s.contains("429") || s.contains("Too many"))
             return "Too many attempts. Please wait a moment and try again.";

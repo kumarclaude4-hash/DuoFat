@@ -11,16 +11,15 @@ import androidx.work.WorkManager;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
-import org.json.JSONObject;
+import com.google.android.gms.tasks.Tasks;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.security.SecureRandom;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * WorkManager job that clears {@code users/{uid}.fcmToken} in Firestore some time
- * after a sign-out, so the push server stops delivering notifications to this device.
+ * WorkManager job that de-registers this device's FCM token some time after a
+ * sign-out, so the push server stops delivering notifications to this device.
  *
  * <h3>Why not just call FcmTokenHelper.unregister() synchronously?</h3>
  * A synchronous "sign-out at time T → token cleared at time T" write is a network
@@ -29,30 +28,27 @@ import java.util.concurrent.TimeUnit;
  * {@link com.duoshield.app.security.DuressManager#performLogout}), an attacker
  * watching network traffic could correlate "notifications stopped arriving the
  * instant this PIN was entered" with the PIN just entered being significant.
- * A jittered, WorkManager-scheduled write decouples that timing, and — because
- * WorkManager persists its queue — the job still runs even if the app process
- * dies or the device reboots before the delay elapses.
+ * A jittered, WorkManager-scheduled delete decouples that timing, and — because
+ * WorkManager persists its queue — the job still runs even after a reboot.
  *
  * <p>This same jittered de-registration is used for every sign-out path (duress
- * and ordinary), not just the duress one, so there's nothing to correlate: token
- * clearing always happens some random interval after any sign-out.
+ * and ordinary), not just the duress one, so there is nothing to correlate.
  *
- * <h3>Authenticating a write that runs after sign-out</h3>
- * By design this job fires well after sign-out has already happened, so there is
- * no live Firebase session left to authenticate the write with. The caller must
- * capture a Firebase ID token from the user object <em>before</em> calling
- * {@code signOut()} and pass it into {@link #enqueue}; {@link #doWork} authenticates
- * the Firestore REST call with that token via {@link FirestoreRestWriter} instead of
- * relying on the SDK's (by-then absent) ambient signed-in state.
+ * <h3>Auth: FCM's own deleteToken() instead of a stored bearer token</h3>
+ * Previous versions stored the user's Firebase ID token in WorkManager's persistent
+ * input data to authenticate a post-sign-out Firestore write. Storing a reusable
+ * owner credential on disk after a wipe is a security risk (it survives the wipe
+ * and is valid for up to one hour). {@link FirebaseMessaging#deleteToken()} does
+ * not require any caller-supplied auth — the FCM SDK manages its own registration
+ * independently of the Firebase Auth session — so no credential is stored at all.
  */
 public class FcmUnregisterWorker extends Worker {
 
-    private static final String TAG        = "FcmUnregisterWorker";
-    private static final String DATA_UID   = "uid";
-    private static final String DATA_TOKEN = "id_token";
+    private static final String TAG      = "FcmUnregisterWorker";
+    private static final String DATA_UID = "uid";
 
     /** Jitter window: 5-40 seconds after the sign-out that scheduled this job. */
-    private static final long JITTER_MIN_MS = 5_000L;
+    private static final long JITTER_MIN_MS   = 5_000L;
     private static final long JITTER_RANGE_MS = 35_000L;
 
     public FcmUnregisterWorker(@NonNull Context ctx, @NonNull WorkerParameters params) {
@@ -60,21 +56,19 @@ public class FcmUnregisterWorker extends Worker {
     }
 
     /**
-     * Schedules a jittered FCM token de-registration for {@code uid}, authenticated
-     * with {@code idToken}. Both must be captured by the caller BEFORE sign-out and
-     * BEFORE any wipe that would clear the SharedPreferences the uid would otherwise
-     * have been read from — see the class javadoc.
+     * Schedules a jittered FCM token de-registration for {@code uid}.
+     * No bearer token required — {@link FirebaseMessaging#deleteToken()} handles
+     * its own authentication via the FCM SDK's device registration state.
      */
-    public static void enqueue(Context ctx, String uid, String idToken) {
-        if (uid == null || uid.isEmpty() || idToken == null || idToken.isEmpty()) {
-            Log.w(TAG, "enqueue skipped — missing uid or ID token, write would be unauthenticated.");
+    public static void enqueue(Context ctx, String uid) {
+        if (uid == null || uid.isEmpty()) {
+            Log.w(TAG, "enqueue skipped — missing uid.");
             return;
         }
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
 
         Data input = new Data.Builder()
                 .putString(DATA_UID, uid)
-                .putString(DATA_TOKEN, idToken)
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(FcmUnregisterWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
@@ -89,17 +83,17 @@ public class FcmUnregisterWorker extends Worker {
     @Override
     public Result doWork() {
         String uid = getInputData().getString(DATA_UID);
-        String idToken = getInputData().getString(DATA_TOKEN);
         if (uid == null || uid.isEmpty()) return Result.success();
 
         try {
-            Map<String, JSONObject> fields = new HashMap<>();
-            fields.put("fcmToken", FirestoreRestWriter.stringValue(""));
-            FirestoreRestWriter.mergeDocument(idToken, "users", uid, fields);
-            Log.d(TAG, "FCM token cleared for signed-out account.");
+            // deleteToken() invalidates this device's FCM registration token at the
+            // FCM protocol level — no Firebase Auth session required. The push server
+            // will naturally stop delivering to a deleted token on its next attempt.
+            Tasks.await(FirebaseMessaging.getInstance().deleteToken(), 30, TimeUnit.SECONDS);
+            Log.d(TAG, "FCM token deleted for signed-out account (" + uid + ").");
             return Result.success();
         } catch (Exception e) {
-            Log.w(TAG, "FCM unregister failed — will retry: " + e.getMessage());
+            Log.w(TAG, "FCM token delete failed — will retry: " + e.getMessage());
             return Result.retry();
         }
     }

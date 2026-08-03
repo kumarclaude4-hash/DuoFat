@@ -148,23 +148,16 @@ public class DuressManager {
         FirebaseUser userBeforeWipe = FirebaseAuth.getInstance().getCurrentUser();
         String uidBeforeWipe = userBeforeWipe != null ? userBeforeWipe.getUid() : null;
 
-        // Also capture a Firebase ID token right now, while the session is still live.
-        // The two jittered jobs below run 5-40s from now, well after this same thread's
-        // signOut() call has already killed the ambient session they'd otherwise rely
-        // on — see FirestoreRestWriter's javadoc. This kicks off async (never blocks
-        // this thread); if it fails (e.g. no network at this exact instant), both writes
-        // are skipped for this trigger rather than silently failing every time later.
+        // Enqueue retry workers immediately — no bearer token is stored.
+        // AccountLockWorker authenticates via HMAC(WORKER_SECRET) through the push
+        // server. FcmUnregisterWorker calls FirebaseMessaging.deleteToken() directly.
+        // Both are enqueued here as a persistent retry fallback; the primary
+        // account-lock write happens synchronously on the background thread below
+        // (step 1a) while the Firebase session is still live.
         final Context appCtx = context.getApplicationContext();
-        if (userBeforeWipe != null) {
-            userBeforeWipe.getIdToken(false)
-                    .addOnSuccessListener(result -> {
-                        String idToken = result.getToken();
-                        com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx, uidBeforeWipe, idToken);
-                        AccountLockWorker.enqueue(appCtx, uidBeforeWipe, idToken);
-                    })
-                    .addOnFailureListener(e -> android.util.Log.w("DuressManager",
-                            "Could not capture ID token before wipe — account-lock and "
-                            + "FCM de-registration writes will be skipped for this trigger.", e));
+        if (uidBeforeWipe != null) {
+            com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx, uidBeforeWipe);
+            AccountLockWorker.enqueue(appCtx, uidBeforeWipe);
         }
 
         // F30 fix: Write a synchronous routing-guard flag BEFORE launching SignInActivity.
@@ -186,6 +179,37 @@ public class DuressManager {
 
         // Full "sync then wipe" on a background thread
         new Thread(() -> {
+
+            // 1a. Synchronous account-lock write — performed BEFORE the panic sync
+            //     and BEFORE sign-out, while the Firebase session is still live.
+            //     This closes the race window where a concurrent restore attempt on
+            //     another device could succeed during the 5-40 second WorkManager
+            //     jitter delay. A 5-second cap keeps the wipe responsive; if the
+            //     write doesn't land (offline, slow network), AccountLockWorker will
+            //     retry via the push server HMAC endpoint once connectivity returns.
+            if (uidBeforeWipe != null) {
+                try {
+                    final Object   lockSync = new Object();
+                    final boolean[] written = {false};
+                    java.util.Map<String, Object> lockData = new java.util.HashMap<>();
+                    lockData.put("locked",   true);
+                    lockData.put("lockedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
+                    FirebaseFirestore.getInstance()
+                            .collection("accountLock")
+                            .document(uidBeforeWipe)
+                            .set(lockData)
+                            .addOnCompleteListener(task -> {
+                                synchronized (lockSync) { written[0] = true; lockSync.notifyAll(); }
+                            });
+                    synchronized (lockSync) {
+                        if (!written[0]) lockSync.wait(5_000);
+                    }
+                    android.util.Log.d("DuressManager", "Synchronous account-lock write complete.");
+                } catch (Exception ignored) {
+                    android.util.Log.w("DuressManager",
+                            "Synchronous account-lock write failed — WorkManager retry covers this.");
+                }
+            }
 
             // 2. Panic sync — upload unsynced messages to Firestore before local wipe.
             //    Hard deadline: 10 seconds. If the sync doesn't finish in time,

@@ -838,3 +838,163 @@ describe('/_server_health/{doc}', () => {
     await assertFails(asAnon().doc('_server_health/status').get());
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOUNT LOCK  (Issue 1 — one-way latch enforcement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('/accountLock/{accountId}', () => {
+  test('owner can read their own lock doc', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertSucceeds(asUser('alice').doc('accountLock/alice').get());
+  });
+
+  test('stranger cannot read another account\'s lock doc', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertFails(asUser('bob').doc('accountLock/alice').get());
+  });
+
+  test('unauthenticated cannot read lock doc', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertFails(asAnon().doc('accountLock/alice').get());
+  });
+
+  test('owner can create a lock doc with locked=true', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('accountLock/alice').set({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  test('owner CANNOT create a lock doc with locked=false', async () => {
+    await assertFails(
+      asUser('alice').doc('accountLock/alice').set({ locked: false })
+    );
+  });
+
+  test('owner CANNOT create a lock doc without the locked field', async () => {
+    await assertFails(
+      asUser('alice').doc('accountLock/alice').set({ lockedAt: new Date() })
+    );
+  });
+
+  test('owner can update an existing lock doc keeping locked=true', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertSucceeds(
+      asUser('alice').doc('accountLock/alice').update({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  test('owner CANNOT update doc to set locked=false (one-way latch)', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertFails(
+      asUser('alice').doc('accountLock/alice').update({ locked: false })
+    );
+  });
+
+  test('owner CANNOT delete lock doc', async () => {
+    await seed('accountLock/alice', { locked: true });
+    await assertFails(asUser('alice').doc('accountLock/alice').delete());
+  });
+
+  test('stranger CANNOT write another account\'s lock doc', async () => {
+    await assertFails(
+      asUser('bob').doc('accountLock/alice').set({ locked: true })
+    );
+  });
+
+  test('unauthenticated CANNOT write lock doc', async () => {
+    await assertFails(
+      asAnon().doc('accountLock/alice').set({ locked: true })
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DURESS ELIGIBILITY  (admin-only writes, owner-only read)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('/duressEligibility/{accountId}', () => {
+  beforeEach(async () => {
+    await seed('duressEligibility/alice', { eligible: true });
+  });
+
+  test('owner can read their own eligibility doc', async () => {
+    await assertSucceeds(asUser('alice').doc('duressEligibility/alice').get());
+  });
+
+  test('stranger cannot read another account\'s eligibility doc', async () => {
+    await assertFails(asUser('bob').doc('duressEligibility/alice').get());
+  });
+
+  test('unauthenticated cannot read eligibility doc', async () => {
+    await assertFails(asAnon().doc('duressEligibility/alice').get());
+  });
+
+  test('owner CANNOT write their own eligibility doc', async () => {
+    await assertFails(
+      asUser('alice').doc('duressEligibility/alice').set({ eligible: true })
+    );
+  });
+
+  test('owner CANNOT update their own eligibility doc', async () => {
+    await assertFails(
+      asUser('alice').doc('duressEligibility/alice').update({ eligible: false })
+    );
+  });
+
+  test('owner CANNOT delete their eligibility doc', async () => {
+    await assertFails(asUser('alice').doc('duressEligibility/alice').delete());
+  });
+
+  test('stranger CANNOT write any eligibility doc', async () => {
+    await assertFails(
+      asUser('bob').doc('duressEligibility/carol').set({ eligible: true })
+    );
+  });
+
+  test('unauthenticated CANNOT write any eligibility doc', async () => {
+    await assertFails(
+      asAnon().doc('duressEligibility/alice').set({ eligible: true })
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WAITLIST  (server-managed: no client reads or writes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('/waitlist/{requestId}', () => {
+  beforeEach(async () => {
+    await seed('waitlist/req_001', { userId: 'alice', approved: false });
+  });
+
+  test('authenticated user CANNOT read waitlist docs', async () => {
+    await assertFails(asUser('alice').doc('waitlist/req_001').get());
+  });
+
+  test('unauthenticated CANNOT read waitlist docs', async () => {
+    await assertFails(asAnon().doc('waitlist/req_001').get());
+  });
+
+  test('authenticated user CANNOT create waitlist docs', async () => {
+    await assertFails(
+      asUser('alice').doc('waitlist/req_002').set({ userId: 'alice' })
+    );
+  });
+
+  test('authenticated user CANNOT update waitlist docs', async () => {
+    await assertFails(
+      asUser('alice').doc('waitlist/req_001').update({ approved: true })
+    );
+  });
+
+  test('authenticated user CANNOT delete waitlist docs', async () => {
+    await assertFails(asUser('alice').doc('waitlist/req_001').delete());
+  });
+
+  test('unauthenticated CANNOT write waitlist docs', async () => {
+    await assertFails(
+      asAnon().doc('waitlist/req_003').set({ userId: 'anon' })
+    );
+  });
+});

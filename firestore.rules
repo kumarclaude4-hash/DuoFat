@@ -327,14 +327,31 @@ service cloud.firestore {
     // Account-level restriction flag: set by the client itself (from the device
     // that just performed a security-triggered sign-out) so the restriction
     // survives an app uninstall/reinstall — local-only state cannot. Restricted
-    // to the account's own UID for both read and write, same as recovery/{uid},
-    // so the flag can never be probed or set for any other account. Deliberately
-    // NOT named after the feature it backs (see docs/DURESS_PIN_SECURITY_PLAN.md
-    // §9) — a compiled string literal referencing this collection name should not
-    // read as anything security-relevant.
+    // to the account's own UID for both read and create/update, same as
+    // recovery/{uid}, so the flag can never be probed or set for any other
+    // account. Deliberately NOT named after the feature it backs (see
+    // docs/DURESS_PIN_SECURITY_PLAN.md §9) — a compiled string literal
+    // referencing this collection name should not read as anything
+    // security-relevant.
+    //
+    // IMPORTANT — one-way latch: clients may only ever write locked=true.
+    // Neither the client nor anyone other than the Firebase console / Admin SDK
+    // may clear or delete the document. This enforces the manual-only unlock
+    // decision: once locked, the account stays locked until an operator acts
+    // out-of-band, regardless of what the app (or a malicious APK) tries to do.
     match /accountLock/{accountId} {
-      allow read:  if request.auth != null && request.auth.uid == accountId;
-      allow write: if request.auth != null && request.auth.uid == accountId;
+      allow read:   if request.auth != null && request.auth.uid == accountId;
+      // Create is allowed only when the new document carries locked=true.
+      allow create: if request.auth != null && request.auth.uid == accountId
+                    && request.resource.data.locked == true;
+      // Update is allowed only when the incoming document still carries locked=true
+      // — this prevents any client from flipping locked back to false or removing
+      // the field.
+      allow update: if request.auth != null && request.auth.uid == accountId
+                    && request.resource.data.locked == true;
+      // Deletion is unconditionally denied for all clients. Only Admin SDK can
+      // remove this document (e.g. for a legitimate manual unlock in the console).
+      allow delete: if false;
     }
 
     // Invite waitlist: request-access tokens for new-account signups.

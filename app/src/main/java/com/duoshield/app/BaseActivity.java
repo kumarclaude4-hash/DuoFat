@@ -96,14 +96,11 @@ public class BaseActivity extends AppCompatActivity {
             com.google.firebase.auth.FirebaseUser userBeforeSignOut =
                     FirebaseAuth.getInstance().getCurrentUser();
             String uidBeforeSignOut = userBeforeSignOut != null ? userBeforeSignOut.getUid() : null;
-            if (userBeforeSignOut != null) {
-                Context appCtx = getApplicationContext();
-                userBeforeSignOut.getIdToken(false)
-                        .addOnSuccessListener(result -> com.duoshield.app.util.FcmUnregisterWorker
-                                .enqueue(appCtx, uidBeforeSignOut, result.getToken()))
-                        .addOnFailureListener(e -> Log.w(TAG,
-                                "Could not capture ID token before sign-out — delayed FCM "
-                                + "de-registration write will be skipped.", e));
+            if (uidBeforeSignOut != null) {
+                // FcmUnregisterWorker now uses FirebaseMessaging.deleteToken() directly —
+                // no ID token capture needed. Enqueue immediately.
+                com.duoshield.app.util.FcmUnregisterWorker
+                        .enqueue(getApplicationContext(), uidBeforeSignOut);
             }
             prefs.edit()
                  .putBoolean(KEY_EXPLICIT_SIGNOUT, true)

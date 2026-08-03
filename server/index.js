@@ -1268,6 +1268,85 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── /duress-lock ──────────────────────────────────────────────────────────
+  //
+  // Writes accountLock/{uid}.locked = true via the Admin SDK. Called by
+  // AccountLockWorker when its synchronous in-app write failed (offline, etc.).
+  //
+  // Auth: HMAC-SHA256(WORKER_SECRET, "duress-lock:<uid>:<ts>") where ts is the
+  // Unix epoch millisecond timestamp baked into the worker at enqueue time. The
+  // signature window is ±10 minutes to accommodate WorkManager's retry backoff.
+  // No Firebase bearer token is used — this is intentional (see AccountLockWorker
+  // javadoc: storing a reusable owner credential post-wipe is a security risk).
+  //
+  if (req.method === "POST" && req.url === "/duress-lock") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      try {
+        const workerSecret = process.env.WORKER_SECRET || "";
+        if (!workerSecret) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("WORKER_SECRET not configured on server");
+          return;
+        }
+
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+
+        const { uid, ts, sig } = parsed;
+        if (typeof uid !== "string" || !uid ||
+            typeof ts  !== "number" || !ts  ||
+            typeof sig !== "string" || !sig) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid uid / ts / sig");
+          return;
+        }
+
+        // Timestamp freshness check: ±10 minutes.
+        const ageMsAbs = Math.abs(Date.now() - ts);
+        if (ageMsAbs > 10 * 60 * 1000) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Signature timestamp expired");
+          return;
+        }
+
+        // HMAC verification.
+        const expected = crypto
+          .createHmac("sha256", Buffer.from(workerSecret, "utf8"))
+          .update(`duress-lock:${uid}:${ts}`)
+          .digest("hex");
+        // Constant-time comparison to prevent timing attacks.
+        const sigBuf      = Buffer.from(sig,      "hex");
+        const expectedBuf = Buffer.from(expected,  "hex");
+        if (sigBuf.length !== expectedBuf.length ||
+            !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Invalid signature");
+          return;
+        }
+
+        // Write via Admin SDK — bypasses Firestore security rules.
+        await db.collection("accountLock").doc(uid).set(
+          { locked: true, lockedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+        console.log(`[duress-lock] accountLock written for uid=${uid}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ locked: true }));
+      } catch (e) {
+        console.error("[duress-lock] error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
   res.writeHead(404);
   res.end("Not found");
 
