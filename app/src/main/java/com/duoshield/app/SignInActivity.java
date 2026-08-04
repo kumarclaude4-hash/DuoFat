@@ -19,12 +19,14 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.ui.AddContactActivity;
+import com.duoshield.app.ui.DevicePinGateActivity;
 import com.duoshield.app.ui.RecoveryPhraseWalkthroughActivity;
 import com.duoshield.app.ui.RequestAccessActivity;
 import com.duoshield.app.ui.RestoreFromSeedActivity;
 import com.duoshield.app.ui.SetupPinActivity;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
+import com.duoshield.app.util.PinManager;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.auth.FirebaseAuth;
@@ -79,6 +81,27 @@ public class SignInActivity extends AppCompatActivity {
             Log.w(TAG, "onCreate: Firebase user exists but Signal NOT initialized "
                     + "(SecurePrefs.isAvailable=" + SecurePrefs.isAvailable() + ") "
                     + "— showing sign-in screen for re-setup.");
+        }
+
+        // Device-level PIN gate: the Welcome screen (and everything reachable
+        // from it — Create account, Restore) must never render before this
+        // check, on a fresh install. See PIN_GATE_FIX write-up: without this,
+        // Welcome/Restore were reachable with zero PIN protection in front of
+        // them. Skipped for devices that already show signs of a pre-existing
+        // account (my_uid or an existing account-scoped PIN hash) so this
+        // isn't retroactively forced on installs that predate the feature.
+        if (!PinManager.deviceGateSatisfiedThisProcess) {
+            if (PinManager.hasDevicePinSet(this) || !PinManager.looksLikePreExistingDevice(this)) {
+                Log.i(TAG, "onCreate: device PIN gate not yet satisfied — routing to DevicePinGateActivity");
+                Intent gateIntent = new Intent(this, DevicePinGateActivity.class);
+                gateIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(gateIntent);
+                finish();
+                return;
+            }
+            // Pre-existing device with no device-level PIN — exempt going forward
+            // for this process so we don't re-derive this on every onCreate.
+            PinManager.deviceGateSatisfiedThisProcess = true;
         }
 
         // User not logged in — show welcome UI.

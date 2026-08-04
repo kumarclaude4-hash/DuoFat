@@ -24,6 +24,7 @@ import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FcmTokenHelper;
+import com.duoshield.app.util.PinManager;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
@@ -446,6 +447,16 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
 
         // ── Step J — Schedule daily backup sync and navigate ─────────────────
         BackupScheduler.schedule(getApplicationContext());
+
+        // If this device already collected a device-level PIN via the upfront
+        // gate (DevicePinGateActivity, shown before Welcome/Restore), promote
+        // it to this newly-restored account so the existing AppLockManager /
+        // LockScreenActivity background-lock keeps working. Restoring never had
+        // its own PIN step, so without this a device-gated install would
+        // restore into an account with no local PIN at all.
+        if (PinManager.hasDevicePinSet(this) && !PinManager.hasPinSet(this)) {
+            PinManager.promoteDevicePinToCurrentUser(this);
+        }
 
         SharedPreferences prefs   = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         boolean           paired  = prefs.getBoolean(KEY_IS_PAIRED, false)

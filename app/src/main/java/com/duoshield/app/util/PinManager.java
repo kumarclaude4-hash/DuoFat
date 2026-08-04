@@ -35,6 +35,24 @@ public class PinManager {
     private static final int    DEFAULT_PIN_LEN   = 6;
 
     /**
+     * Device-scoped PIN — independent of any Firebase UID. Gates
+     * {@link com.duoshield.app.SignInActivity} (Welcome / Create / Restore)
+     * on fresh installs, before any account exists. See
+     * {@link com.duoshield.app.ui.DevicePinGateActivity}.
+     */
+    private static final String KEY_DEVICE_PIN_HASH = "device_gate_pin_hash";
+    private static final String KEY_DEVICE_PIN_LEN  = "device_gate_pin_length";
+
+    /**
+     * True once the device-level PIN gate has been satisfied for the current
+     * process — by successful verification, fresh setup, or because this
+     * device predates the feature and is exempt ({@link #looksLikePreExistingDevice}).
+     * Resets naturally on process death; {@code SignInActivity} re-checks on
+     * every cold start so the gate can never be bypassed by relaunching.
+     */
+    public static volatile boolean deviceGateSatisfiedThisProcess = false;
+
+    /**
      * Returns the UID-scoped SecurePrefs key for the currently signed-in user,
      * or {@code null} if no user is signed in.
      */
@@ -117,6 +135,85 @@ public class PinManager {
                 .remove(key)
                 .remove(KEY_PIN_LEGACY)
                 .apply();
+    }
+
+    // ── Device-scoped gate PIN ────────────────────────────────────────────
+
+    public static boolean hasDevicePinSet(Context ctx) {
+        return SecurePrefs.get(ctx).getString(KEY_DEVICE_PIN_HASH, null) != null;
+    }
+
+    public static void setDevicePin(Context ctx, String pin) {
+        try {
+            byte[] salt = new byte[16];
+            new SecureRandom().nextBytes(salt);
+            byte[] hash = pbkdf2(pin, salt);
+            String stored = bytesToHex(salt) + ":" + bytesToHex(hash);
+            SecurePrefs.get(ctx).edit()
+                    .putString(KEY_DEVICE_PIN_HASH, stored)
+                    .putInt(KEY_DEVICE_PIN_LEN, pin.length())
+                    .apply();
+        } catch (Exception e) {
+            android.util.Log.e("PinManager", "Failed to store device-level PIN hash", e);
+        }
+    }
+
+    public static int getDevicePinLength(Context ctx) {
+        return SecurePrefs.get(ctx).getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+    }
+
+    public static boolean verifyDevicePin(Context ctx, String entered) {
+        SharedPreferences sp = SecurePrefs.get(ctx);
+        String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
+        if (stored == null) return false;
+        int sep = stored.indexOf(':');
+        if (sep < 0) return false;
+        try {
+            byte[] salt     = hexToBytes(stored.substring(0, sep));
+            byte[] expected = hexToBytes(stored.substring(sep + 1));
+            byte[] actual   = pbkdf2(entered, salt);
+            return constantTimeEquals(expected, actual);
+        } catch (Exception e) { return false; }
+    }
+
+    /**
+     * Copies the device-level PIN hash into the just-created/just-restored
+     * account's UID-scoped slot, so the existing AppLockManager /
+     * LockScreenActivity background-lock mechanism (which reads
+     * {@code app_pin_hash_<uid>}) works immediately without asking the user
+     * to set a PIN a second time. Copying the stored {@code salt:hash}
+     * string is sufficient — the plaintext PIN is never needed again.
+     */
+    public static void promoteDevicePinToCurrentUser(Context ctx) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+        SharedPreferences sp = SecurePrefs.get(ctx);
+        String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
+        if (stored == null) return;
+        int len = sp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        sp.edit()
+                .putString(KEY_PIN_PREFIX + user.getUid(), stored)
+                .putInt(KEY_LEN_PREFIX + user.getUid(), len)
+                .apply();
+    }
+
+    /**
+     * True if this device shows signs of an account that existed before the
+     * upfront device-PIN gate was introduced — a persisted {@code my_uid}, or
+     * any pre-existing account-scoped PIN hash. Used to exempt pre-existing
+     * installs from being retroactively forced through the new gate (see
+     * {@link com.duoshield.app.ui.DevicePinGateActivity}); this fix only
+     * applies going forward to genuinely fresh installs.
+     */
+    public static boolean looksLikePreExistingDevice(Context ctx) {
+        SharedPreferences prefs = ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE);
+        if (prefs.getString("my_uid", null) != null) return true;
+        SharedPreferences sp = SecurePrefs.get(ctx);
+        if (sp.getString(KEY_PIN_LEGACY, null) != null) return true;
+        for (String key : sp.getAll().keySet()) {
+            if (key.startsWith(KEY_PIN_PREFIX)) return true;
+        }
+        return false;
     }
 
     private static byte[] pbkdf2(String pin, byte[] salt) throws Exception {

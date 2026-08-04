@@ -28,6 +28,7 @@ import com.google.zxing.BarcodeFormat;
 import com.google.zxing.WriterException;
 import com.journeyapps.barcodescanner.BarcodeEncoder;
 
+import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.google.firebase.auth.FirebaseAuth;
@@ -35,6 +36,7 @@ import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.crypto.BackupCryptoHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
+import com.duoshield.app.util.PinManager;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
@@ -317,12 +319,25 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
                             registerIdentity(userId);
                             // BUG-F-12 fix: Register FCM token immediately so notifications work on first install.
                             FcmTokenHelper.register(this);
-                            // Every new account must set a PIN before it can use the
-                            // app — SetupPinActivity makes the final hand-off to
-                            // ConversationListActivity once that's done.
-                            Intent intent = new Intent(this, SetupPinActivity.class);
-                            intent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
-                            startActivity(intent);
+                            // Every new account must have a PIN before it can use the
+                            // app. Devices that came through the new upfront device-PIN
+                            // gate (DevicePinGateActivity, shown before Welcome) already
+                            // collected one — promote it to this account instead of
+                            // asking again. Devices that predate that gate (no device
+                            // PIN on file) fall back to the original SetupPinActivity
+                            // hand-off.
+                            if (PinManager.hasDevicePinSet(this)) {
+                                Log.i(TAG, "[3/4] device PIN already set — promoting to account, skipping SetupPinActivity");
+                                PinManager.promoteDevicePinToCurrentUser(this);
+                                Intent intent = new Intent(this, ConversationListActivity.class);
+                                intent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                                startActivity(intent);
+                            } else {
+                                Intent intent = new Intent(this, SetupPinActivity.class);
+                                intent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+                                startActivity(intent);
+                            }
                             finish();
                         },
                         () -> {
