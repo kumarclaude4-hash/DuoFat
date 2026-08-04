@@ -59,6 +59,29 @@ Source reports: `attached_assets/DuoShield_Code_Review_Report_(6)_1783403471815.
 
 **Note:** this file previously lagged the actual code — F2/F3/F5/F8/F12/F15 were already fixed and tagged in-code (`// F<n> fix`) before this memory entry was updated. When in doubt, grep the codebase for the finding tag rather than trusting this list at face value.
 
+## 2026-08-04 full-scope round (new surfaces: Worker, legacy Firestore rules, push server hardening)
+Full report: `docs/SECURITY_REVIEW_2026-08-04.md`. Confirmed accepted-by-product (not findings): no
+contact-consent gate (F6, same as above); FLAG_SECURE intentionally absent on some screens.
+
+New unfixed items as of this round:
+- **Critical**: Cloudflare Worker `isAuthorized()` fails OPEN (returns true) if `WORKER_SECRET` is unset — `worker/src/index.js:73-79`.
+- **High**: Worker has no per-object authorization — only one shared `WORKER_SECRET` baked into every APK's BuildConfig gates all media; object key comes straight from the URL path with no ownership/traversal check (`worker/src/index.js:264-267`).
+- **High**: legacy `firestore.rules` `/rooms/{code}` (223-234) and `/conversations/{convId}` (237-248) allow hijacking — no creator binding, participants array writable by any participant.
+- **High**: Worker R2→B2 tiering PUT/DELETE/migration is not concurrency-safe (292-313, 447-477) — can orphan files or resurrect stale ciphertext.
+- **High**: `/linkPreview` SSRF blocklist checks the initial host but `fetch` follows redirects without re-validating each hop (`server/index.js:1651-1691`).
+- Several Mediums: `/mintToken` cooldown race, `/duress-lock` nonce-replay race, unbounded body reads on some routes, `identities/{userId}` world-readable (may be intentional — tests bless it), no field-schema validation on user/backup docs, raw IPs logged, SQLCipher key persisted async/unsynchronized in `DatabaseKeyProvider`, `SecurePrefs` silently falls back to plaintext on Keystore init failure.
+
+Verified NOT bugs (subagents over-flagged, corrected by direct read): CallManager relay-only calling
+fails safe (no TURN → RELAY policy + STUN-only server list = call fails to connect, never leaks IP,
+`CallManager.java:320-403`); Signal identity TOFU overwrite is intentional (matches Signal/WhatsApp
+model, mitigated by existing safety-number banner, `DuoShieldSignalStore.java:113-147`); FCM
+notification body is always a fixed generic string server-side today, never real plaintext
+(`server/index.js:91-97`) — client trusting it verbatim is a defense-in-depth gap, not a live leak.
+
+**Lesson:** domain-review subagents are generally accurate on file:line but can overstate severity/
+framing on anything involving a fallback path (TOFU, ICE transport fallback, notification content) —
+always trace the actual runtime behavior before reporting fallback-shaped findings as confirmed bugs.
+
 ## Implementation Rules
 1. Every code change cross-checked by a review subagent — non-negotiable
 2. Compile (:app:compileDebugJavaWithJavac) after each cluster

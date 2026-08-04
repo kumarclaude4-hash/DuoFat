@@ -59,7 +59,7 @@
 - [DuoShield backup scope](duoshield-backup-scope.md) — 4 critical items before prod: checksums, Firestore rules, key derivation verify, seed phrase audit; compression+incremental+monitoring are high priority post-prod
 - [DuoShield backup improvements](duoshield-backup-improvements.md) — all 9 scope items implemented and build-verified; cleanupOldBackupsAsync is wired into ConversationListActivity.onCreate() (verified 2026-07-29)
 - [DuoShield premium UI overhaul](duoshield-premium-ui.md) — Obsidian Dark redesign: 16 drawables, 9 layouts, TypingDotsView; NEVER change layout IDs; zip APKs via python3 zipfile (zip CLI absent)
-- [DuoShield security review plan](security-review-plan.md) — 44 findings; most fixed + Firestore deployed; remaining open (re-verified 2026-07-29): F2/F3/F5/F6/F8/F12/F15 (arch-level); F1/F9/F11/F20 confirmed fixed
+- [DuoShield security review plan](security-review-plan.md) — 44 findings; most fixed + Firestore deployed; 2026-08-04 full-scope round found new Critical/High in Worker + legacy Firestore rules, see docs/SECURITY_REVIEW_2026-08-04.md
 - [DuoShield duress wipe guard](duoshield-duress-wipe-guard.md) — duress_wipe_in_progress flag in duoshield_prefs (commit before intent, remove after signOut); checked in SignInActivity/SplashActivity/MainActivity; logSync() before clearInstance()
 - [DuoShield status race guard](duoshield-status-race-guard.md) — any write of message `status` must transaction-guard against downgrading "read" back to "delivered"; applies to client FCM ACK and server push dispatch alike
 - [DuoShield push server on Render](duoshield-push-server-broken.md) — server is live on Render (https://duoshield.onrender.com); credential lives on Render, not Replit; debug there, not the local workflow
