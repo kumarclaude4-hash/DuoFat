@@ -617,6 +617,19 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
+      <h2>Duress PIN enrollment <button class="action refresh" onclick="loadDuressEnrolled()">Refresh</button></h2>
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <input id="duressUidInput" type="text" placeholder="User UID to enroll" style="flex:1;padding:8px 10px;font-size:13px;border-radius:5px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-family:ui-monospace,monospace;">
+        <button class="action" onclick="enrollDuress()">Enroll</button>
+      </div>
+      <table>
+        <thead><tr><th>UID</th><th>Enrolled at</th><th></th></tr></thead>
+        <tbody id="duressBody"></tbody>
+      </table>
+      <div class="empty" id="duressEmpty" style="display:none">No accounts enrolled.</div>
+    </section>
+
+    <section>
       <h2>Audit log <button class="action refresh" onclick="loadAuditLog()">Refresh</button></h2>
       <table>
         <thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead>
@@ -640,6 +653,7 @@ function unlock() {
   document.getElementById("gateErr").textContent = "";
   loadWaitlist();
   loadLocked();
+  loadDuressEnrolled();
   loadAuditLog();
 }
 
@@ -766,6 +780,68 @@ async function unfreeze(uid, btn) {
   }
 }
 
+async function loadDuressEnrolled() {
+  try {
+    const data = await api("/admin/api/duress/enrolled");
+    const body = document.getElementById("duressBody");
+    body.innerHTML = "";
+    document.getElementById("duressEmpty").style.display = data.accounts.length ? "none" : "block";
+    for (const a of data.accounts) {
+      const tr = document.createElement("tr");
+
+      const idTd = document.createElement("td");
+      idTd.className = "mono";
+      idTd.textContent = a.uid;
+      tr.appendChild(idTd);
+
+      const dateTd = document.createElement("td");
+      dateTd.textContent = a.enrolledAt ? new Date(a.enrolledAt).toLocaleString() : "—";
+      tr.appendChild(dateTd);
+
+      const actionTd = document.createElement("td");
+      const btn = document.createElement("button");
+      btn.className = "action danger";
+      btn.textContent = "Revoke";
+      btn.onclick = () => revokeDuress(a.uid, btn);
+      actionTd.appendChild(btn);
+      tr.appendChild(actionTd);
+
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Failed to load duress enrolled: " + e.message);
+  }
+}
+
+async function enrollDuress() {
+  const input = document.getElementById("duressUidInput");
+  const uid = input.value.trim();
+  if (!uid) { toast("Enter a UID first"); return; }
+  try {
+    await api("/admin/api/duress/enroll", { method: "POST", body: JSON.stringify({ uid }) });
+    toast("Enrolled " + uid);
+    input.value = "";
+    loadDuressEnrolled();
+    loadAuditLog();
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Enroll failed: " + e.message);
+  }
+}
+
+async function revokeDuress(uid, btn) {
+  if (!confirm("Revoke duress PIN eligibility for " + uid + "?\nThey will lose access to the secondary-PIN feature.")) return;
+  btn.disabled = true;
+  btn.textContent = "Revoking…";
+  try {
+    await api("/admin/api/duress/revoke", { method: "POST", body: JSON.stringify({ uid }) });
+    toast("Revoked " + uid);
+    loadDuressEnrolled();
+    loadAuditLog();
+  } catch (e) {
+    if (e.message !== "unauthorized") { toast("Revoke failed: " + e.message); btn.disabled = false; btn.textContent = "Revoke"; }
+  }
+}
+
 async function loadAuditLog() {
   try {
     const data = await api("/admin/api/auditlog");
@@ -778,6 +854,8 @@ async function loadAuditLog() {
       const actionTd = document.createElement("td");
       actionTd.textContent = e.action === "waitlist_approved" ? "✅ Waitlist approved"
                            : e.action === "account_unfrozen"  ? "🔓 Account unfrozen"
+                           : e.action === "duress_enrolled"   ? "🔐 Duress enrolled"
+                           : e.action === "duress_revoked"    ? "❌ Duress revoked"
                            : e.action;
       tr.appendChild(actionTd);
 
@@ -1960,6 +2038,132 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         console.error("admin/api/locked/unfreeze error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
+  // ── GET /admin/api/duress/enrolled ───────────────────────────────────────
+  //
+  // Auth: x-admin-token header. Returns all accounts currently enrolled for
+  // duress-PIN eligibility (duressEligibility/{uid}.eligible == true).
+  if (req.method === "GET" && req.url === "/admin/api/duress/enrolled") {
+    (async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        const snap = await db.collection("duressEligibility")
+          .where("eligible", "==", true)
+          .get();
+        const accounts = snap.docs.map((d) => {
+          const data = d.data();
+          const enrolledAt = data.enrolledAt && data.enrolledAt.toDate
+            ? data.enrolledAt.toDate().toISOString() : null;
+          return { uid: d.id, enrolledAt };
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ accounts }));
+      } catch (e) {
+        console.error("admin/api/duress/enrolled error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    })();
+    return;
+  }
+
+  // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
+  //
+  // Body: { uid }. Auth: x-admin-token header.
+  // Creates or updates duressEligibility/{uid} with eligible:true so the app
+  // shows the secondary-PIN setup UI for that account on next eligibility check.
+  if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+        const { uid } = parsed;
+        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid uid");
+          return;
+        }
+        await db.collection("duressEligibility").doc(uid).set({
+          eligible:   true,
+          enrolledAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        console.log(`[admin] duress enrollment granted: uid=${uid}`);
+
+        db.collection("adminAuditLog").add({
+          action:  "duress_enrolled",
+          uid,
+          adminIp: getClientIp(req),
+          at:      FieldValue.serverTimestamp(),
+        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error("admin/api/duress/enroll error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    });
+    return;
+  }
+
+  // ── POST /admin/api/duress/revoke ─────────────────────────────────────────
+  //
+  // Body: { uid }. Auth: x-admin-token header.
+  // Sets eligible:false on duressEligibility/{uid} — the client's cached flag
+  // is updated on the next eligibility refresh (sign-in or foreground).
+  if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+        const { uid } = parsed;
+        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid uid");
+          return;
+        }
+        const ref = db.collection("duressEligibility").doc(uid);
+        const snap = await ref.get();
+        if (!snap.exists) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("No eligibility record found for this uid");
+          return;
+        }
+        await ref.update({ eligible: false, revokedAt: FieldValue.serverTimestamp() });
+        console.log(`[admin] duress enrollment revoked: uid=${uid}`);
+
+        db.collection("adminAuditLog").add({
+          action:  "duress_revoked",
+          uid,
+          adminIp: getClientIp(req),
+          at:      FieldValue.serverTimestamp(),
+        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        console.error("admin/api/duress/revoke error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Server error: " + e.message);
       }
