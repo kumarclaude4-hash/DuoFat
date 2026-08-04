@@ -615,6 +615,19 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
       </table>
       <div class="empty" id="lockedEmpty" style="display:none">No locked accounts.</div>
     </section>
+
+    <section>
+      <h2>Audit log <button class="action refresh" onclick="loadAuditLog()">Refresh</button></h2>
+      <table>
+        <thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead>
+        <tbody id="auditBody"></tbody>
+      </table>
+      <div class="empty" id="auditEmpty" style="display:none">No audit entries yet.</div>
+    </section>
+
+    <div id="inactivityBanner" style="display:none;position:fixed;top:0;left:0;right:0;background:#f85149;color:#fff;text-align:center;padding:10px 16px;font-size:13px;z-index:999;">
+      Session will expire due to inactivity — <span id="inactivityCountdown">60</span>s remaining.
+    </div>
   </div>
 
 <script>
@@ -627,6 +640,7 @@ function unlock() {
   document.getElementById("gateErr").textContent = "";
   loadWaitlist();
   loadLocked();
+  loadAuditLog();
 }
 
 function toast(msg) {
@@ -698,6 +712,7 @@ async function approve(requestId, btn) {
     await api("/admin/api/waitlist/approve", { method: "POST", body: JSON.stringify({ requestId }) });
     toast("Approved " + requestId.slice(0, 8) + "…");
     loadWaitlist();
+    loadAuditLog();
   } catch (e) {
     if (e.message !== "unauthorized") { toast("Approve failed: " + e.message); btn.disabled = false; btn.textContent = "Approve"; }
   }
@@ -745,10 +760,108 @@ async function unfreeze(uid, btn) {
     await api("/admin/api/locked/unfreeze", { method: "POST", body: JSON.stringify({ uid }) });
     toast("Unfroze " + uid);
     loadLocked();
+    loadAuditLog();
   } catch (e) {
     if (e.message !== "unauthorized") { toast("Unfreeze failed: " + e.message); btn.disabled = false; btn.textContent = "Unfreeze"; }
   }
 }
+
+async function loadAuditLog() {
+  try {
+    const data = await api("/admin/api/auditlog");
+    const body = document.getElementById("auditBody");
+    body.innerHTML = "";
+    document.getElementById("auditEmpty").style.display = data.entries.length ? "none" : "block";
+    for (const e of data.entries) {
+      const tr = document.createElement("tr");
+
+      const actionTd = document.createElement("td");
+      actionTd.textContent = e.action === "waitlist_approved" ? "✅ Waitlist approved"
+                           : e.action === "account_unfrozen"  ? "🔓 Account unfrozen"
+                           : e.action;
+      tr.appendChild(actionTd);
+
+      const targetTd = document.createElement("td");
+      targetTd.className = "mono";
+      targetTd.textContent = e.requestId ? e.requestId.slice(0, 12) + "…" : (e.uid || "—");
+      tr.appendChild(targetTd);
+
+      const ipTd = document.createElement("td");
+      ipTd.className = "mono";
+      ipTd.textContent = e.adminIp || "—";
+      tr.appendChild(ipTd);
+
+      const dateTd = document.createElement("td");
+      dateTd.textContent = e.at ? new Date(e.at).toLocaleString() : "—";
+      tr.appendChild(dateTd);
+
+      body.appendChild(tr);
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Failed to load audit log: " + e.message);
+  }
+}
+
+// ── Inactivity auto-logout (10 minutes) ──────────────────────────────────────
+// Starts counting down once the session is unlocked. Any mouse, keyboard, or
+// touch event resets the timer. A 60-second warning banner appears before logout.
+const INACTIVITY_TIMEOUT_MS  = 10 * 60 * 1000; // 10 min
+const INACTIVITY_WARNING_MS  = 60 * 1000;       // warn 60 s before
+let inactivityTimer  = null;
+let countdownTimer   = null;
+let countdownSeconds = 60;
+
+function resetInactivityTimer() {
+  clearTimeout(inactivityTimer);
+  clearInterval(countdownTimer);
+  document.getElementById("inactivityBanner").style.display = "none";
+  inactivityTimer = setTimeout(startInactivityWarning, INACTIVITY_TIMEOUT_MS - INACTIVITY_WARNING_MS);
+}
+
+function startInactivityWarning() {
+  countdownSeconds = 60;
+  const banner = document.getElementById("inactivityBanner");
+  banner.style.display = "block";
+  document.getElementById("inactivityCountdown").textContent = countdownSeconds;
+  countdownTimer = setInterval(() => {
+    countdownSeconds--;
+    document.getElementById("inactivityCountdown").textContent = countdownSeconds;
+    if (countdownSeconds <= 0) {
+      clearInterval(countdownTimer);
+      forceLogout();
+    }
+  }, 1000);
+}
+
+function forceLogout() {
+  TOKEN = "";
+  clearTimeout(inactivityTimer);
+  clearInterval(countdownTimer);
+  document.getElementById("inactivityBanner").style.display = "none";
+  document.getElementById("app").style.display = "none";
+  document.getElementById("gate").style.display = "block";
+  document.getElementById("gateErr").textContent = "Session expired due to inactivity.";
+  document.getElementById("tokenInput").value = "";
+}
+
+["mousemove", "mousedown", "keydown", "touchstart", "scroll"].forEach((evt) => {
+  document.addEventListener(evt, () => {
+    if (TOKEN) resetInactivityTimer();
+  }, { passive: true });
+});
+
+// Patch unlock() to start the timer after successful login
+const _origUnlock = unlock;
+window.unlock = function() {
+  _origUnlock();
+};
+
+// Patch showApp() to (re)start the timer whenever the app panel becomes visible
+const _origShowApp = showApp;
+window.showApp = function() {
+  _origShowApp();
+  resetInactivityTimer();
+};
 
 document.getElementById("tokenInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") unlock();
@@ -1755,6 +1868,15 @@ http.createServer((req, res) => {
         }
         await ref.update({ status: "approved", approvedAt: FieldValue.serverTimestamp() });
         console.log(`[admin] waitlist request approved: requestId=${requestId}`);
+
+        // Audit log — non-fatal; never block the response on this write
+        db.collection("adminAuditLog").add({
+          action:    "waitlist_approved",
+          requestId,
+          adminIp:   getClientIp(req),
+          at:        FieldValue.serverTimestamp(),
+        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
@@ -1825,6 +1947,15 @@ http.createServer((req, res) => {
         }
         await ref.delete();
         console.log(`[admin] account unfrozen: uid=${uid}`);
+
+        // Audit log — non-fatal; never block the response on this write
+        db.collection("adminAuditLog").add({
+          action:  "account_unfrozen",
+          uid,
+          adminIp: getClientIp(req),
+          at:      FieldValue.serverTimestamp(),
+        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
@@ -1833,6 +1964,35 @@ http.createServer((req, res) => {
         res.end("Server error: " + e.message);
       }
     });
+    return;
+  }
+
+  // ── GET /admin/api/auditlog ───────────────────────────────────────────────
+  //
+  // Auth: x-admin-token header. Returns the 100 most-recent admin actions
+  // (waitlist approvals + account unfreezes) so the operator has a tamper-
+  // evident record of who did what and when.
+  if (req.method === "GET" && req.url === "/admin/api/auditlog") {
+    (async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        const snap = await db.collection("adminAuditLog")
+          .orderBy("at", "desc")
+          .limit(100)
+          .get();
+        const entries = snap.docs.map((d) => {
+          const data = d.data();
+          const at = data.at && data.at.toDate ? data.at.toDate().toISOString() : null;
+          return { id: d.id, action: data.action, requestId: data.requestId || null, uid: data.uid || null, adminIp: data.adminIp || null, at };
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ entries }));
+      } catch (e) {
+        console.error("admin/api/auditlog error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    })();
     return;
   }
 
