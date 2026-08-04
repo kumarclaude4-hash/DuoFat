@@ -381,5 +381,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Admin audit log: records every operator action (waitlist approval,
+    // account unfreeze). Written exclusively by the push server's Admin SDK —
+    // no client should ever read, write, or enumerate these entries.
+    match /adminAuditLog/{entry} {
+      allow read, write: if false;
+    }
+
   }
 }
