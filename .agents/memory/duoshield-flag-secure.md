@@ -1,23 +1,22 @@
 ---
-name: DuoShield FLAG_SECURE — COMPLETE
-description: FLAG_SECURE added to all activities in v1.3; no longer deferred
+name: DuoShield FLAG_SECURE — REMOVED
+description: FLAG_SECURE removed from all screens 2026-08-03; screenshots enabled everywhere
 ---
 
-## Status — DONE (v1.3)
+## Status — REMOVED (2026-08-03)
 
-`getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE)` is now active on every activity.
+`FLAG_SECURE` has been fully removed from every activity. Screenshots and screen recording are allowed on all screens with no exceptions.
 
-## Coverage
+## What was changed
 
-- `BaseActivity.onCreate()` — covers all 9 subclasses automatically (ChatMediaActivity, GroupChatActivity, ConversationListActivity, SettingsActivity, AddContactActivity, CreateGroupActivity, FakeChatsActivity, …)
-- Individually added (extend AppCompatActivity, not BaseActivity):
-  - `LockScreenActivity.onCreate()`
-  - `SignInActivity.onCreate()`
-  - `MainActivity.onCreate()`
-  - `RestoreFromSeedActivity.onCreate()`
-  - `SessionLogActivity.onCreate()`
-  - `SeedPhraseDisplayActivity.onCreate()`
+- `BaseActivity.onCreate()` — now always calls `clearFlags(FLAG_SECURE)` (removed preference-based conditional)
+- `MainActivity.onCreate()` — same, always clears
+- `LockScreenActivity.onCreate()` — same, always clears
+- `RestoreFromSeedActivity.onCreate()` — hardcoded `addFlags` removed
+- `SeedPhraseDisplayActivity.onCreate()` — hardcoded `addFlags` removed
+- `SetupPinActivity.onCreate()` — hardcoded `addFlags` removed
+- `SecurityPrivacySettingsActivity.applyScreenshotFlag()` — now always clears, never adds
 
-**Why:** Prevents the app from appearing in the recent-apps thumbnail, blocks Android screen recording, and blocks the built-in screenshot mechanism — essential for a secure messenger.
+**Why:** User explicitly requested screenshots enabled across full app with no exceptions.
 
-**How to apply:** No further action needed. If a new Activity is added that extends BaseActivity, it inherits FLAG_SECURE automatically. If it extends AppCompatActivity directly, add `getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE)` in its `onCreate()`.
+**How to apply:** Do NOT re-add FLAG_SECURE to any screen without an explicit user request. If a new Activity is added, no FLAG_SECURE action is needed — BaseActivity subclasses inherit the clearFlags() call automatically.
