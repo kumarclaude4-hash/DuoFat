@@ -41,14 +41,8 @@ public class BaseActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Apply or clear FLAG_SECURE based on the global screenshot preference.
-        boolean allowScreenshots = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                .getBoolean("app_screenshot_enabled", false);
-        if (allowScreenshots) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        } else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        }
+        // Screenshots are always allowed — FLAG_SECURE is not applied globally.
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
 
     @Override

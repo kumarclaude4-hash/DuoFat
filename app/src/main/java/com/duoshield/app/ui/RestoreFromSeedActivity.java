@@ -104,9 +104,6 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Seed restoration screen keeps FLAG_SECURE — the user types their 12-word recovery
-        // phrase here, which is a cryptographic secret that must never be screen-captured.
-        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         setContentView(R.layout.activity_restore_from_seed);
 
         etAccountId     = findViewById(R.id.etAccountId);

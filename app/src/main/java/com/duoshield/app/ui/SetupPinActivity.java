@@ -35,8 +35,6 @@ public class SetupPinActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // PIN entry is a security-sensitive screen — never allow screenshots/recording.
-        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         setContentView(R.layout.activity_setup_pin);
 
         EditText etNewPin     = findViewById(R.id.etNewPin);

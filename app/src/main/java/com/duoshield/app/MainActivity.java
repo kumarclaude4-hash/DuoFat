@@ -37,16 +37,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Apply or clear FLAG_SECURE based on the global screenshot preference.
-        // Default: screenshots BLOCKED (pref absent → FLAG_SECURE on) — see F20 fix note
-        // in BaseActivity.onCreate() for the full rationale.
-        boolean allowScreenshots = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                .getBoolean("app_screenshot_enabled", false);
-        if (allowScreenshots) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        } else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        }
+        // Screenshots are always allowed.
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
 
         FrameLayout splash = new FrameLayout(this);
         splash.setBackgroundColor(0xFF191620);

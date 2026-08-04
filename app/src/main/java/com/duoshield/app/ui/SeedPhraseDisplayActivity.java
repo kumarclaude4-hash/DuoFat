@@ -73,9 +73,6 @@ public class SeedPhraseDisplayActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Seed phrase screen keeps FLAG_SECURE regardless of the screenshot toggle —
-        // the recovery mnemonic is a cryptographic secret and must never be captured.
-        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         setContentView(R.layout.activity_seed_phrase_display);
 
         mnemonic    = getIntent().getStringExtra(EXTRA_MNEMONIC);

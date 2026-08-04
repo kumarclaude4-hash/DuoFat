@@ -333,11 +333,8 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
     }
 
     private void applyScreenshotFlag(boolean allow) {
-        if (allow) {
-            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
-        } else {
-            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
-        }
+        // Screenshots are always enabled app-wide; FLAG_SECURE is never applied.
+        getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
     }
 
     // ── Lock timeout ──────────────────────────────────────────────────────────

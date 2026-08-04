@@ -65,13 +65,7 @@ public class LockScreenActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        boolean allowScreenshots = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean("app_screenshot_enabled", false);
-        if (allowScreenshots) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        } else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        }
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
 
         setContentView(R.layout.activity_lock_screen);
 
