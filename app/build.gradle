@@ -134,6 +134,18 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
+    testOptions {
+        unitTests {
+            // Plain JVM unit tests (app/src/test) run against the real android.jar
+            // stub, not a real device/Robolectric. Every stubbed Android method
+            // throws "not mocked" by default, including android.util.Log calls
+            // made incidentally by production code under test. Without this,
+            // testDebugUnitTest fails on that alone, before a test's own
+            // assertions ever run.
+            returnDefaultValues true
+        }
+    }
+
     lint {
         abortOnError false
         checkDependencies false

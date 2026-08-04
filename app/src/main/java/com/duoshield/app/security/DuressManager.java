@@ -277,6 +277,12 @@ public class DuressManager {
             // 3b. Synchronously destroy all key material in SecurePrefs.
             //     .commit() (not .apply()) guarantees the keys are gone before we
             //     proceed — critical for forensic resistance.
+            //     NOTE: this clears the account-scoped SecurePrefs file only. The
+            //     device-level PIN gate lives in its own isolated file
+            //     (SecurePrefs.getDeviceGate()) precisely so this wipe can never
+            //     reach it — see PinManager's class javadoc. Do not "fix" this by
+            //     re-adding the device-gate keys to this clear(); that is the exact
+            //     bug the isolated file exists to prevent.
             try {
                 SecurePrefs.get(context).edit().clear().commit();
                 SecurePrefs.reset(); // invalidate cached instance

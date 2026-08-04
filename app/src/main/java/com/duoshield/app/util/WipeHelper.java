@@ -42,6 +42,10 @@ public class WipeHelper {
         // Wipe EncryptedSharedPreferences FIRST so Signal identity key material
         // (identity key pair, prekeys, PIN hashes) is destroyed before anything
         // else. A forensic extraction after wipe must not recover any key material.
+        // NOTE: this clears the account-scoped SecurePrefs file only — the
+        // device-level PIN gate lives in its own isolated file
+        // (SecurePrefs.getDeviceGate()) and must survive this wipe by design;
+        // see PinManager's class javadoc.
         try {
             SecurePrefs.get(ctx).edit().clear().commit();
         } catch (Exception e) {

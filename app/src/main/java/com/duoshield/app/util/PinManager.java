@@ -24,6 +24,17 @@ import javax.crypto.spec.PBEKeySpec;
  * Existing installs that stored the hash under the legacy global key
  * {@code "app_pin_hash"} are migrated transparently on first access: the value
  * is moved to the UID-scoped key and the legacy entry is removed.
+ *
+ * <h3>Device-scoped gate PIN storage</h3>
+ * The device-level gate PIN (see below) lives in its own SecurePrefs file
+ * ({@link SecurePrefs#getDeviceGate}) — a physically separate container from
+ * the account-scoped file this class otherwise uses. That split is load-
+ * bearing: {@code DuressManager.performLogout()}, {@code WipeHelper.wipeAll()},
+ * and the Danger Zone "unpair" flow all blank-clear() the account-scoped file
+ * when wiping an account from this device, and the device gate must survive
+ * every one of those wipes — it protects the device itself, not any one
+ * account. Installs that set a device PIN before the split are migrated
+ * transparently on first read, mirroring the legacy-key pattern above.
  */
 public class PinManager {
 
@@ -77,6 +88,17 @@ public class PinManager {
                 ed.putInt(KEY_LEN_PREFIX + user.getUid(), pin.length());
             }
             ed.apply();
+
+            // Keep the device-level gate PIN in sync with the account PIN —
+            // but only if this device already has one. Devices exempted from
+            // the gate (looksLikePreExistingDevice()) must not gain a device
+            // PIN just because the account PIN changed via Settings. Without
+            // this sync, a later promotion (uninstall/reinstall, or a
+            // wipe-and-restore cycle) would resurrect whatever PIN the user
+            // set at first launch instead of the one they actually remember.
+            if (hasDevicePinSet(ctx)) {
+                setDevicePin(ctx, pin);
+            }
         } catch (Exception e) {
             android.util.Log.e("PinManager", "Failed to store PIN hash", e);
         }
@@ -138,9 +160,32 @@ public class PinManager {
     }
 
     // ── Device-scoped gate PIN ────────────────────────────────────────────
+    //
+    // Stored in SecurePrefs.getDeviceGate() — a separate physical file from
+    // the account-scoped SecurePrefs.get() used everywhere above. See the
+    // class javadoc "Device-scoped gate PIN storage" section for why.
 
+    /**
+     * True if a device-level gate PIN is set. Also performs a one-time,
+     * transparent migration for installs that set their device PIN before
+     * it was split into its own file: such installs stored it under the
+     * same keys in the account-scoped file, which is exactly the file
+     * {@code DuressManager.performLogout()} / {@code WipeHelper.wipeAll()}
+     * blank-clear() — so any device PIN still sitting there is moved into
+     * the isolated file (and removed from the old one) the first time it is
+     * read after upgrading.
+     */
     public static boolean hasDevicePinSet(Context ctx) {
-        return SecurePrefs.get(ctx).getString(KEY_DEVICE_PIN_HASH, null) != null;
+        SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
+        if (sp.getString(KEY_DEVICE_PIN_HASH, null) != null) return true;
+        SharedPreferences legacySp = SecurePrefs.get(ctx);
+        String legacy = legacySp.getString(KEY_DEVICE_PIN_HASH, null);
+        if (legacy == null) return false;
+        int len = legacySp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        sp.edit().putString(KEY_DEVICE_PIN_HASH, legacy).putInt(KEY_DEVICE_PIN_LEN, len).apply();
+        legacySp.edit().remove(KEY_DEVICE_PIN_HASH).remove(KEY_DEVICE_PIN_LEN).apply();
+        android.util.Log.i("PinManager", "Migrated device-gate PIN hash to its isolated storage file.");
+        return true;
     }
 
     public static void setDevicePin(Context ctx, String pin) {
@@ -149,7 +194,7 @@ public class PinManager {
             new SecureRandom().nextBytes(salt);
             byte[] hash = pbkdf2(pin, salt);
             String stored = bytesToHex(salt) + ":" + bytesToHex(hash);
-            SecurePrefs.get(ctx).edit()
+            SecurePrefs.getDeviceGate(ctx).edit()
                     .putString(KEY_DEVICE_PIN_HASH, stored)
                     .putInt(KEY_DEVICE_PIN_LEN, pin.length())
                     .apply();
@@ -159,12 +204,18 @@ public class PinManager {
     }
 
     public static int getDevicePinLength(Context ctx) {
-        return SecurePrefs.get(ctx).getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        return SecurePrefs.getDeviceGate(ctx).getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
     }
 
     public static boolean verifyDevicePin(Context ctx, String entered) {
-        SharedPreferences sp = SecurePrefs.get(ctx);
+        SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
         String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
+        if (stored == null) {
+            // Fallback to the pre-split shared-file location (handles the window
+            // between hasDevicePinSet() and verifyDevicePin() being called before
+            // migration has run) — mirrors the legacy-key fallback in verifyPin().
+            stored = SecurePrefs.get(ctx).getString(KEY_DEVICE_PIN_HASH, null);
+        }
         if (stored == null) return false;
         int sep = stored.indexOf(':');
         if (sep < 0) return false;
@@ -183,15 +234,22 @@ public class PinManager {
      * {@code app_pin_hash_<uid>}) works immediately without asking the user
      * to set a PIN a second time. Copying the stored {@code salt:hash}
      * string is sufficient — the plaintext PIN is never needed again.
+     *
+     * This is intentionally a copy, not a move: the device-gate PIN must
+     * remain set in its own file afterwards so DevicePinGateActivity keeps
+     * opening in verify mode for this device (future accounts on the same
+     * device, wipe-and-restore, etc.), and so {@link #setPin} has a
+     * device-level copy to keep in sync when the user changes their PIN.
      */
     public static void promoteDevicePinToCurrentUser(Context ctx) {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null) return;
-        SharedPreferences sp = SecurePrefs.get(ctx);
+        if (!hasDevicePinSet(ctx)) return; // also runs the legacy-file migration above
+        SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
         String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
         if (stored == null) return;
         int len = sp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
-        sp.edit()
+        SecurePrefs.get(ctx).edit()
                 .putString(KEY_PIN_PREFIX + user.getUid(), stored)
                 .putInt(KEY_LEN_PREFIX + user.getUid(), len)
                 .apply();

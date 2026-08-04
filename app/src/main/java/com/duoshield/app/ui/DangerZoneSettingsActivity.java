@@ -77,6 +77,9 @@ public class DangerZoneSettingsActivity extends BaseActivity {
                 // 2. Wipe EncryptedSharedPreferences (Signal identity key, prekeys,
                 //    shared ECDH key, registration ID).  Leaving these in place would
                 //    allow the next paired user to inherit the current identity (BUG-SET01).
+                //    NOTE: account-scoped file only — the device-level PIN gate lives in
+                //    its own isolated file (SecurePrefs.getDeviceGate()) and must survive
+                //    this wipe by design; see PinManager's class javadoc.
                 SecurePrefs.get(getApplicationContext()).edit().clear().commit();
             } catch (Exception e) {
                 android.util.Log.e("Settings", "unpair: SecurePrefs clear failed (non-fatal)", e);
