@@ -662,7 +662,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     <h1>DuoShield Admin</h1>
     <div class="sub">Enter the operator token to continue</div>
     <input type="password" id="tokenInput" placeholder="Admin token" autofocus>
-    <button onclick="unlock()">Unlock</button>
+    <button id="unlockBtn">Unlock</button>
     <div class="err" id="gateErr"></div>
   </div>
 
@@ -769,6 +769,7 @@ async function api(path, opts) {
 function showApp() {
   document.getElementById("gate").style.display = "none";
   document.getElementById("app").style.display = "block";
+  resetInactivityTimer();
 }
 
 async function loadWaitlist() {
@@ -1049,19 +1050,7 @@ function forceLogout() {
   }, { passive: true });
 });
 
-// Patch unlock() to start the timer after successful login
-const _origUnlock = unlock;
-window.unlock = function() {
-  _origUnlock();
-};
-
-// Patch showApp() to (re)start the timer whenever the app panel becomes visible
-const _origShowApp = showApp;
-window.showApp = function() {
-  _origShowApp();
-  resetInactivityTimer();
-};
-
+document.getElementById("unlockBtn").addEventListener("click", unlock);
 document.getElementById("tokenInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") unlock();
 });
