@@ -69,15 +69,19 @@ Required environment variables for the server (set on Render for production):
 
 ## Operator admin panel
 
-`https://duofat.onrender.com/admin` — waitlist approval and account unfreeze, gated by
-the `ADMIN_TOKEN` env var (set directly on Render, not in the APK). Enter the token once;
-it's kept in page memory only, never persisted. Two panels:
+`https://duofat.onrender.com/admin` — waitlist approval, account unfreeze, and duress-PIN
+enrollment, gated by the `ADMIN_TOKEN` env var (set directly on Render, not in the APK).
+Enter the token once; it's kept in page memory only, never persisted. Panels:
 - **Pending waitlist requests** — approve a request id so that user can create an account
 - **Locked accounts** — unfreeze an account by deleting its `accountLock/{uid}` doc
+- **Duress PIN enrollment** — search an account by UID (`GET /admin/api/account/lookup`
+  verifies it exists in `identities/{uid}` before showing an Enable/Disable action) to
+  grant or revoke `duressEligibility/{uid}`. Enrollment is refused for a UID with no
+  matching account — no phantom eligibility docs.
 
-Both actions were previously Firebase-console-only by design; this panel doesn't change
-the access model (Firestore rules still deny clients read/write on both collections) —
-it just gives the operator a UI instead of hand-editing documents.
+All actions were previously Firebase-console-only by design; this panel doesn't change
+the access model (Firestore rules still deny clients read/write on the underlying
+collections) — it just gives the operator a UI instead of hand-editing documents.
 
 ## Cloudflare Worker
 

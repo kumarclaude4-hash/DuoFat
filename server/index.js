@@ -691,9 +691,19 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     <section>
       <h2>Duress PIN enrollment <button class="action refresh" onclick="loadDuressEnrolled()">Refresh</button></h2>
       <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-        <input id="duressUidInput" type="text" placeholder="User UID to enroll" style="flex:1;padding:8px 10px;font-size:13px;border-radius:5px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-family:ui-monospace,monospace;">
-        <button class="action" onclick="enrollDuress()">Enroll</button>
+        <input id="duressUidInput" type="text" placeholder="Search by account UID" style="flex:1;padding:8px 10px;font-size:13px;border-radius:5px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-family:ui-monospace,monospace;" onkeydown="if(event.key==='Enter')searchDuressAccount();">
+        <button class="action" onclick="searchDuressAccount()">Search</button>
       </div>
+      <div id="duressSearchResult" style="display:none;margin-bottom:16px;padding:12px 14px;border:1px solid #30363d;border-radius:6px;background:#161b22;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <div>
+            <div class="mono" id="duressSearchUid" style="font-size:13px;"></div>
+            <div class="sub" id="duressSearchStatus" style="margin:4px 0 0;"></div>
+          </div>
+          <button class="action" id="duressSearchAction"></button>
+        </div>
+      </div>
+      <div class="empty" id="duressSearchEmpty" style="display:none">No account found for that UID.</div>
       <table>
         <thead><tr><th>UID</th><th>Enrolled at</th><th></th></tr></thead>
         <tbody id="duressBody"></tbody>
@@ -885,32 +895,67 @@ async function loadDuressEnrolled() {
   }
 }
 
-async function enrollDuress() {
+let duressSearchUid = "";
+
+async function searchDuressAccount() {
   const input = document.getElementById("duressUidInput");
   const uid = input.value.trim();
   if (!uid) { toast("Enter a UID first"); return; }
+  const resultBox = document.getElementById("duressSearchResult");
+  const emptyBox  = document.getElementById("duressSearchEmpty");
+  resultBox.style.display = "none";
+  emptyBox.style.display  = "none";
   try {
-    await api("/admin/api/duress/enroll", { method: "POST", body: JSON.stringify({ uid }) });
-    toast("Enrolled " + uid);
-    input.value = "";
-    loadDuressEnrolled();
-    loadAuditLog();
+    const data = await api("/admin/api/account/lookup?uid=" + encodeURIComponent(uid));
+    if (!data.accountExists) {
+      emptyBox.style.display = "block";
+      return;
+    }
+    duressSearchUid = uid;
+    document.getElementById("duressSearchUid").textContent = uid;
+    document.getElementById("duressSearchStatus").textContent =
+      data.duressEligible ? "Duress PIN: enabled" : "Duress PIN: not enabled";
+    const btn = document.getElementById("duressSearchAction");
+    btn.className = data.duressEligible ? "action danger" : "action";
+    btn.textContent = data.duressEligible ? "Disable" : "Enable";
+    btn.onclick = data.duressEligible
+      ? () => revokeDuress(uid, btn, true)
+      : () => enrollDuress(uid, btn);
+    resultBox.style.display = "block";
   } catch (e) {
-    if (e.message !== "unauthorized") toast("Enroll failed: " + e.message);
+    if (e.message !== "unauthorized") toast("Search failed: " + e.message);
   }
 }
 
-async function revokeDuress(uid, btn) {
+async function enrollDuress(uid, btn) {
+  if (!uid) { toast("Enter a UID first"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Enabling…"; }
+  try {
+    await api("/admin/api/duress/enroll", { method: "POST", body: JSON.stringify({ uid }) });
+    toast("Enabled duress PIN for " + uid);
+    document.getElementById("duressUidInput").value = "";
+    document.getElementById("duressSearchResult").style.display = "none";
+    loadDuressEnrolled();
+    loadAuditLog();
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Enable failed: " + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = "Enable"; }
+  }
+}
+
+async function revokeDuress(uid, btn, fromSearch) {
   if (!confirm("Revoke duress PIN eligibility for " + uid + "?\nThey will lose access to the secondary-PIN feature.")) return;
+  const resetLabel = fromSearch ? "Disable" : "Revoke";
   btn.disabled = true;
   btn.textContent = "Revoking…";
   try {
     await api("/admin/api/duress/revoke", { method: "POST", body: JSON.stringify({ uid }) });
     toast("Revoked " + uid);
+    if (fromSearch) document.getElementById("duressSearchResult").style.display = "none";
     loadDuressEnrolled();
     loadAuditLog();
   } catch (e) {
-    if (e.message !== "unauthorized") { toast("Revoke failed: " + e.message); btn.disabled = false; btn.textContent = "Revoke"; }
+    if (e.message !== "unauthorized") { toast("Revoke failed: " + e.message); btn.disabled = false; btn.textContent = resetLabel; }
   }
 }
 
@@ -2150,11 +2195,47 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── GET /admin/api/account/lookup?uid=... ────────────────────────────────
+  //
+  // Auth: x-admin-token header. Looks up whether an account with this UID
+  // actually exists (identities/{uid}) and its current duress-PIN eligibility
+  // status. Used by the admin panel's "search by UID" step before enabling —
+  // enrollment must never be granted blind to a UID that isn't a real account.
+  if (req.method === "GET" && req.url.startsWith("/admin/api/account/lookup")) {
+    (async () => {
+      if (!requireAdminAuth(req, res)) return;
+      try {
+        const requestUrl = new URL(req.url, "http://localhost");
+        const uid = requestUrl.searchParams.get("uid") || "";
+        if (!uid || uid.length > 128) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid uid");
+          return;
+        }
+        const [identitySnap, eligibilitySnap] = await Promise.all([
+          db.collection("identities").doc(uid).get(),
+          db.collection("duressEligibility").doc(uid).get(),
+        ]);
+        const accountExists  = identitySnap.exists;
+        const duressEligible = accountExists && eligibilitySnap.exists && eligibilitySnap.data().eligible === true;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ uid, accountExists, duressEligible }));
+      } catch (e) {
+        console.error("admin/api/account/lookup error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Server error: " + e.message);
+      }
+    })();
+    return;
+  }
+
   // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
   //
   // Body: { uid }. Auth: x-admin-token header.
   // Creates or updates duressEligibility/{uid} with eligible:true so the app
   // shows the secondary-PIN setup UI for that account on next eligibility check.
+  // Requires the UID to correspond to a real account (identities/{uid}) —
+  // enrollment is never granted blind to an unverified/nonexistent UID.
   if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
@@ -2171,6 +2252,12 @@ http.createServer((req, res) => {
         if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
+          return;
+        }
+        const identitySnap = await db.collection("identities").doc(uid).get();
+        if (!identitySnap.exists) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("No account found for this uid");
           return;
         }
         await db.collection("duressEligibility").doc(uid).set({
