@@ -23,6 +23,7 @@ android {
         targetSdk 34
         versionCode 5
         versionName "1.4"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         // Keep DuoShield's supported app-language resources while still stripping the many
         // unused locales bundled by Firebase, Material, and other dependencies.
@@ -283,6 +284,16 @@ dependencies {
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
+
+    // Instrumented (on-device) tests — Espresso + AndroidX Test.
+    // Used for regression coverage that needs the real Android runtime (real
+    // AndroidKeyStore / EncryptedSharedPreferences), which app/src/test's plain
+    // JVM unit tests cannot exercise. See DevicePinGateInstrumentedTest.
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test:rules:1.5.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-intents:3.5.1'
 }
 
 // Assign distinct versionCodes per ABI so Play Store can distinguish split APKs.
