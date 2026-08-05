@@ -217,33 +217,32 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Legacy pairing rooms (kept for backwards compatibility).
-    // Read is restricted to the creator and joiner — open read leaks both
-    // parties' legacy ECDH public keys to any authenticated user (BUG-F07).
+    // Legacy pairing rooms — fully retired. PairingActivity/PairingManager
+    // (the only code that ever read or wrote this collection) were deleted
+    // when AddContactActivity/ContactManager replaced the pairing flow.
+    // 2026-08-04 security review: grepped the entire Android app and server
+    // for any remaining "rooms" collection reference — none found. The prior
+    // creator/joiner-scoped rules were still reachable by any authenticated
+    // client with Firestore access, holding open a write surface (including
+    // a status/joinerUid-gated update) for a flow nothing in the product
+    // exercises anymore. Denying outright removes that surface; if pairing
+    // is ever reintroduced, write fresh rules against the new design rather
+    // than reviving this one.
     match /rooms/{code} {
-      allow create: if request.auth != null;
-      allow read:   if request.auth != null
-                    && (request.auth.uid == resource.data.creatorUid
-                        || request.auth.uid == resource.data.joinerUid);
-      allow update: if request.auth != null
-                    && resource.data.status == "waiting"
-                    && resource.data.joinerUid == "";
-      allow delete: if request.auth != null
-                    && (request.auth.uid == resource.data.creatorUid
-                        || request.auth.uid == resource.data.joinerUid);
+      allow read, write: if false;
     }
 
-    // Legacy conversations (kept for backwards compatibility)
+    // Legacy conversations — fully retired, superseded by /chats (see the
+    // deterministic-chatId model above). 2026-08-04 security review: grepped
+    // the entire Android app and server for any remaining "conversations"
+    // collection reference — none found. Denying outright rather than
+    // patching the field rules, since nothing legitimate depends on this
+    // collection anymore.
     match /conversations/{convId} {
-      allow create: if request.auth != null
-                    && request.auth.uid in request.resource.data.participants;
-      allow read, update: if request.auth != null
-                          && request.auth.uid in resource.data.participants;
+      allow read, write: if false;
 
       match /messages/{msgId} {
-        allow read, write: if request.auth != null
-                           && request.auth.uid in
-                              get(/databases/$(database)/documents/conversations/$(convId)).data.participants;
+        allow read, write: if false;
       }
     }
 

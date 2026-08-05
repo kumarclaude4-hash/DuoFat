@@ -68,12 +68,15 @@ function corsHeaders() {
 // All data-plane and stats requests must include:
 //   Authorization: Bearer <WORKER_SECRET>
 // Health check is intentionally unauthenticated.
-// If WORKER_SECRET is unset the Worker logs a warning and operates in open mode
-// (acceptable for local dev only — never deploy without it).
+// FAIL CLOSED if WORKER_SECRET is unset — a missing secret must never widen
+// access. (Previously this fell back to "open mode", which meant a deploy
+// that forgot to set the secret silently exposed every user's media with
+// zero authentication. Local dev should set a throwaway WORKER_SECRET via
+// `.dev.vars` / `wrangler secret put` rather than relying on an open mode.)
 function isAuthorized(request, env) {
   if (!env.WORKER_SECRET) {
-    console.warn('WORKER_SECRET is not configured — running in open mode');
-    return true;
+    console.error('WORKER_SECRET is not configured — denying all requests (fail closed)');
+    return false;
   }
   const auth = request.headers.get('Authorization') ?? '';
   return auth === `Bearer ${env.WORKER_SECRET}`;
@@ -166,7 +169,17 @@ async function getR2Bytes(env) {
 async function adjustR2(env, deltaBytes) {
   if (!env.RATE_KV || deltaBytes === 0) return;
   const cur = safeInt(await kvGet(env, 'global:storage:r2'));
-  await kvSet(env, 'global:storage:r2', Math.max(0, cur + deltaBytes));
+  const next = Math.max(0, cur + deltaBytes);
+  await kvSet(env, 'global:storage:r2', next);
+  // Best-effort observability only: concurrent uploads can both pass the
+  // pre-check in the PUT handler and land here before either write is
+  // visible, so this counter is not a hard reservation (true atomicity
+  // would need Durable Objects, not provisioned for this project). Log
+  // loudly if we drift past the cap so it's visible in Worker logs rather
+  // than silently over-accepting indefinitely.
+  if (next > MAX_R2_BYTES) {
+    console.warn(`R2 usage (${next} B) exceeds cap (${MAX_R2_BYTES} B) — likely concurrent uploads racing the pre-check`);
+  }
 }
 
 // ─── B2 ListObjectsV2 → authoritative byte total ──────────────────────────────
@@ -262,9 +275,18 @@ export default {
     if (rateLimited) return rateLimited;
 
     // Object key: everything after the leading slash.
-    // DuoShield paths: media/<chatId>/<uuid>.jpg | voice/<chatId>/<uuid>.m4a
+    // DuoShield paths: media/<chatId|groupId>/<uuid>.<ext> | voice/<chatId|groupId>/<uuid>.<ext>
     const key = decodeURIComponent(url.pathname.slice(1));
     if (!key) return json({ error: 'Missing file key' }, 400);
+
+    // Strict key format allow-list. The Android client only ever generates keys
+    // matching this shape (see B2StorageHelper / ChatMediaActivity / GroupChatActivity).
+    // Rejecting anything else closes off path traversal ("../"), null bytes, and
+    // arbitrary-prefix keys that the shared-secret auth alone does not constrain.
+    const KEY_FORMAT = /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
+    if (!KEY_FORMAT.test(key)) {
+      return json({ error: 'Invalid file key format' }, 400);
+    }
 
     // ── UPLOAD ────────────────────────────────────────────────────────────────
     if (request.method === 'PUT') {
@@ -456,6 +478,7 @@ export default {
         // B2's S3-compatible API returns 411 Length Required without it.
         // Sequential processing keeps peak RAM ~= one file (≤ 10 MB).
         const body = await r2Obj.arrayBuffer();
+        const readEtag = r2Obj.httpEtag;
 
         const putResp = await b2.fetch(b2Url(env, obj.key), {
           method: 'PUT',
@@ -468,9 +491,24 @@ export default {
         });
 
         if (putResp.ok) {
-          await env.HOT_BUCKET.delete(obj.key);
-          moved++;
-          // Object now lives in B2 — do NOT add its size to r2TotalBytes.
+          // Race guard: a client PUT/DELETE could have landed on this key
+          // between the get() above and now. Re-HEAD and only delete from R2
+          // if the object is unchanged (same etag) — otherwise we'd delete
+          // content that was never actually migrated to the B2 copy we just
+          // wrote, losing data. If it changed, leave R2 alone; the (now
+          // stale) B2 copy is harmless because GET always checks R2 first,
+          // and the object will be reconsidered on tomorrow's run.
+          const current = await env.HOT_BUCKET.head(obj.key).catch(() => null);
+          if (current && current.httpEtag === readEtag) {
+            await env.HOT_BUCKET.delete(obj.key);
+            moved++;
+            // Object now lives in B2 — do NOT add its size to r2TotalBytes.
+          } else if (current) {
+            console.warn(`Skipped R2 delete for ${obj.key} — object changed during migration`);
+            r2TotalBytes += current.size ?? 0;
+          } else {
+            // Deleted concurrently — nothing left in R2, nothing to count.
+          }
         } else {
           // B2 PUT failed — object stays in R2. Count it and retry tomorrow.
           r2TotalBytes += obj.size ?? 0;

@@ -629,6 +629,74 @@ describe('/identities/{userId}', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LEGACY COLLECTIONS — retired, must stay fully denied
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-08-04 security review: /rooms and /conversations have zero remaining
+// callers in the app or server (PairingActivity/PairingManager were deleted;
+// /chats supersedes /conversations). These tests guard against the rules ever
+// being loosened back open for a flow the product no longer has.
+
+describe('/rooms/{code} (retired)', () => {
+  const CODE = 'ABC123';
+
+  beforeEach(async () => {
+    await seed(`rooms/${CODE}`, {
+      creatorUid: 'alice',
+      joinerUid: '',
+      status: 'waiting',
+    });
+  });
+
+  test('creator cannot read a legacy room', async () => {
+    await assertFails(asUser('alice').doc(`rooms/${CODE}`).get());
+  });
+
+  test('no authenticated user can create a legacy room', async () => {
+    await assertFails(
+      asUser('alice').doc('rooms/new-code').set({ creatorUid: 'alice', joinerUid: '', status: 'waiting' })
+    );
+  });
+
+  test('no authenticated user can update a legacy room', async () => {
+    await assertFails(asUser('alice').doc(`rooms/${CODE}`).update({ joinerUid: 'bob' }));
+  });
+
+  test('no authenticated user can delete a legacy room', async () => {
+    await assertFails(asUser('alice').doc(`rooms/${CODE}`).delete());
+  });
+});
+
+describe('/conversations/{convId} (retired)', () => {
+  const CONV_ID = 'legacy-conv-1';
+
+  beforeEach(async () => {
+    await seed(`conversations/${CONV_ID}`, { participants: ['alice', 'bob'] });
+    await seed(`conversations/${CONV_ID}/messages/msg1`, { text: 'hi' });
+  });
+
+  test('participant cannot read a legacy conversation', async () => {
+    await assertFails(asUser('alice').doc(`conversations/${CONV_ID}`).get());
+  });
+
+  test('no authenticated user can create a legacy conversation', async () => {
+    await assertFails(
+      asUser('alice').doc('conversations/new-conv').set({ participants: ['alice', 'bob'] })
+    );
+  });
+
+  test('participant cannot update a legacy conversation', async () => {
+    await assertFails(asUser('alice').doc(`conversations/${CONV_ID}`).update({ participants: ['alice'] }));
+  });
+
+  test('participant cannot read or write legacy conversation messages', async () => {
+    await assertFails(asUser('alice').doc(`conversations/${CONV_ID}/messages/msg1`).get());
+    await assertFails(
+      asUser('alice').doc(`conversations/${CONV_ID}/messages/msg2`).set({ text: 'new' })
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RECOVERY
 // ─────────────────────────────────────────────────────────────────────────────
 

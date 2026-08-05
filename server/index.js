@@ -523,6 +523,49 @@ function sha256hex(hexStr) {
   return crypto.createHash("sha256").update(Buffer.from(hexStr, "hex")).digest("hex");
 }
 
+// ── SSRF guard helpers for /linkPreview ───────────────────────────────────────
+// Block private/loopback addresses and cloud metadata endpoints. Applied both
+// to the initial user-supplied URL and to every redirect hop (see
+// fetchFollowingSafeRedirects below) — checking only the first URL would let
+// a malicious server redirect the fetch to an internal address afterwards.
+function isBlockedPreviewHost(hostname) {
+  const host = hostname.toLowerCase();
+  return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host) ||
+    host === "metadata.google.internal" ||
+    host === "169.254.169.254" ||
+    host.endsWith(".internal") ||
+    host.endsWith(".local");
+}
+
+// Fetches targetUrl, manually validating and following redirects (instead of
+// `redirect: "follow"`) so each hop is re-checked against isBlockedPreviewHost
+// before it is fetched. Throws on a blocked/invalid hop or too many redirects.
+async function fetchFollowingSafeRedirects(targetUrl, { headers, timeoutMs, maxRedirects = 5 }) {
+  let current = targetUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const parsed = new URL(current);
+    if (!["http:", "https:"].includes(parsed.protocol) || isBlockedPreviewHost(parsed.hostname)) {
+      throw new Error(`Blocked redirect target: ${parsed.hostname}`);
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetch(current, { headers, signal: ctrl.signal, redirect: "manual" });
+    } finally {
+      clearTimeout(t);
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("Redirect with no Location header");
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return { response, finalUrl: current };
+  }
+  throw new Error("Too many redirects");
+}
+
 // ── Request body size limit ───────────────────────────────────────────────────
 // Prevents DoS via oversized request bodies. 64 KB is plenty for all valid
 // JSON payloads; media goes to B2 directly via presigned URLs, never here.
@@ -545,6 +588,35 @@ function readBody(req, res) {
     });
     req.on("end", () => resolve(body));
     req.on("error", reject);
+  });
+}
+
+// Callback-style counterpart to readBody(), for handlers written in the
+// on("data")/on("end") style (several routes below need to run
+// requireAdminAuth or other checks before body parsing, so they never
+// migrated to the Promise-based helper above). Enforces the same
+// MAX_BODY_BYTES cap: the naive `body += chunk` pattern this replaces has
+// no size limit of its own — it only inherited protection from the
+// declared Content-Length pre-check up in the request handler, which a
+// chunked-encoding request (no Content-Length header) bypasses entirely.
+// Calls onComplete(body) only when the body stayed within the limit;
+// otherwise the 413 response is already sent and onComplete is not called.
+function collectBody(req, res, onComplete) {
+  let body = "";
+  let tooLarge = false;
+  req.on("data", (chunk) => {
+    if (tooLarge) return;
+    body += chunk;
+    if (body.length > MAX_BODY_BYTES) {
+      tooLarge = true;
+      res.writeHead(413, { "Content-Type": "text/plain" });
+      res.end("Request body too large");
+      req.destroy();
+    }
+  });
+  req.on("end", () => {
+    if (tooLarge) return;
+    onComplete(body);
   });
 }
 
@@ -974,9 +1046,7 @@ http.createServer((req, res) => {
   //   • Rate limit: one successful mint per userId per 60 s (in-memory).
   //
   if (req.method === "POST" && req.url === "/mintToken") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         // ── IP rate limit (checked before parsing body) ──────────────────────
         const clientIp = getClientIp(req);
@@ -996,6 +1066,11 @@ http.createServer((req, res) => {
         }
 
         // ── Per-userId cooldown (prevents rapid re-auth from same account) ───
+        // Set the cooldown timestamp synchronously, before the first `await`
+        // below, not after the token is minted. Setting it post-mint left a
+        // window where two concurrent requests for the same userId could both
+        // read the old timestamp and both pass the check before either write
+        // landed, bypassing the 60s limit entirely.
         const now  = Date.now();
         const last = mintCooldown.get(userId) || 0;
         if (now - last < 60_000) {
@@ -1003,6 +1078,7 @@ http.createServer((req, res) => {
           res.end("Too many requests — wait 60 s and retry");
           return;
         }
+        mintCooldown.set(userId, now);
 
         const incomingHash = sha256hex(identityPubKeyHex);
 
@@ -1058,7 +1134,6 @@ http.createServer((req, res) => {
         // Token is minted only after the atomic identity-claim succeeds.
         const token = await admin.auth().createCustomToken(userId);
 
-        mintCooldown.set(userId, now);
         console.log(`mintToken: issued token for userId=${userId} newAccount=${isNewAccount}`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -1629,9 +1704,7 @@ http.createServer((req, res) => {
 
   // ── /linkPreview — server-side OG fetch (F12: prevents sender IP leakage) ──
   if (req.method === "POST" && req.url === "/linkPreview") {
-    let body = "";
-    req.on("data", c => (body += c));
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
@@ -1654,24 +1727,21 @@ http.createServer((req, res) => {
         if (!["http:", "https:"].includes(parsed.protocol)) {
           res.writeHead(400); res.end("Invalid URL scheme"); return;
         }
-        // SSRF guard — block private/loopback addresses and cloud metadata endpoints
-        const host = parsed.hostname.toLowerCase();
-        if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host) ||
-            host === "metadata.google.internal" ||
-            host === "169.254.169.254" ||
-            host.endsWith(".internal") ||
-            host.endsWith(".local")) {
+        if (isBlockedPreviewHost(parsed.hostname)) {
           res.writeHead(403); res.end("Forbidden address"); return;
         }
 
         try {
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 6000);
-          const r = await fetch(targetUrl, {
+          // SSRF guard, continued: `redirect: "follow"` would let a
+          // malicious server 302 the fetch to an internal address
+          // (127.0.0.1, a cloud metadata IP, etc.) after the initial host
+          // already passed the check above — Node's fetch does not re-run
+          // caller validation on redirect hops. Follow redirects manually
+          // instead, so every hop's host is checked before it's fetched.
+          const { response: r, finalUrl } = await fetchFollowingSafeRedirects(targetUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
-            signal: ctrl.signal, redirect: "follow",
+            timeoutMs: 6000,
           });
-          clearTimeout(t);
           const preview = { url: targetUrl, domain: parsed.hostname.replace(/^www\./, "") };
           if (r.ok && (r.headers.get("content-type") || "").includes("text/html")) {
             const html = (await r.text()).slice(0, 30000);
@@ -1685,20 +1755,22 @@ http.createServer((req, res) => {
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(preview));
-        } catch (_) {
+        } catch (fetchErr) {
+          console.warn("/linkPreview fetch failed:", fetchErr.message);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ url: targetUrl, domain: parsed.hostname.replace(/^www\./, "") }));
         }
-      } catch (e) { res.writeHead(500); res.end("Server error: " + e.message); }
+      } catch (e) {
+        console.error("/linkPreview error:", e.message);
+        res.writeHead(500); res.end("Internal server error");
+      }
     });
     return;
   }
 
   // ── /removeGroupMember — admin removes member + revokes key (F3) ─────────
   if (req.method === "POST" && req.url === "/removeGroupMember") {
-    let body = "";
-    req.on("data", c => (body += c));
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
@@ -1730,7 +1802,7 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ removed: true }));
       } catch (e) {
         console.error("/removeGroupMember error:", e.message);
-        res.writeHead(500); res.end("Server error: " + e.message);
+        res.writeHead(500); res.end("Internal server error");
       }
     });
     return;
@@ -1790,7 +1862,7 @@ http.createServer((req, res) => {
       } catch (e) {
         console.error("[requestLockNonce] error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        res.end("Internal server error");
       }
     });
     return;
@@ -1809,9 +1881,7 @@ http.createServer((req, res) => {
   // reverse-engineered the APK lock arbitrary accounts.
   //
   if (req.method === "POST" && req.url === "/duress-lock") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -1827,35 +1897,42 @@ http.createServer((req, res) => {
           return;
         }
 
-        // Look up the nonce — Admin SDK bypasses Firestore rules.
-        const nonceRef  = db.collection("_duressNonces").doc(nonce);
-        const nonceSnap = await nonceRef.get();
-
-        if (!nonceSnap.exists) {
-          // Unknown nonce: already consumed, never issued, or corrupted.
-          res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Invalid or already-consumed nonce");
-          return;
+        // Look up + consume the nonce and write the lock atomically in a single
+        // transaction. This used to be a get() followed by a separate batch()
+        // write, leaving a window where two concurrent requests carrying the
+        // same nonce could both read it as valid before either deleted it.
+        // Admin SDK bypasses Firestore rules either way.
+        let uid;
+        try {
+          uid = await db.runTransaction(async (tx) => {
+            const nonceRef  = db.collection("_duressNonces").doc(nonce);
+            const nonceSnap = await tx.get(nonceRef);
+            if (!nonceSnap.exists) {
+              // Unknown nonce: already consumed, never issued, or corrupted.
+              throw Object.assign(new Error("Invalid or already-consumed nonce"), { status: 403 });
+            }
+            const { uid: nonceUid, expiresAt } = nonceSnap.data();
+            if (!nonceUid || new Date() > new Date(expiresAt.toDate ? expiresAt.toDate() : expiresAt)) {
+              // Expired — delete to clean up and signal the client not to retry.
+              tx.delete(nonceRef);
+              throw Object.assign(new Error("Nonce expired"), { status: 401 });
+            }
+            tx.set(
+              db.collection("accountLock").doc(nonceUid),
+              { locked: true, lockedAt: admin.firestore.FieldValue.serverTimestamp() },
+              { merge: true }
+            );
+            tx.delete(nonceRef); // single-use: consumed
+            return nonceUid;
+          });
+        } catch (txErr) {
+          if (txErr.status) {
+            res.writeHead(txErr.status, { "Content-Type": "text/plain" });
+            res.end(txErr.message);
+            return;
+          }
+          throw txErr; // unexpected Firestore error — fall through to outer catch
         }
-
-        const { uid, expiresAt } = nonceSnap.data();
-        if (!uid || new Date() > new Date(expiresAt.toDate ? expiresAt.toDate() : expiresAt)) {
-          // Expired — delete to clean up and signal the client not to retry.
-          await nonceRef.delete();
-          res.writeHead(401, { "Content-Type": "text/plain" });
-          res.end("Nonce expired");
-          return;
-        }
-
-        // Write the lock and consume the nonce atomically via a batch.
-        const batch = db.batch();
-        batch.set(
-          db.collection("accountLock").doc(uid),
-          { locked: true, lockedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
-        batch.delete(nonceRef); // single-use: consumed
-        await batch.commit();
 
         console.log(`[duress-lock] accountLock written for uid=${uid}`);
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -1863,7 +1940,7 @@ http.createServer((req, res) => {
       } catch (e) {
         console.error("[duress-lock] error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        res.end("Internal server error");
       }
     });
     return;
