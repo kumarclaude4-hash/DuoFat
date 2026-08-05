@@ -733,6 +733,10 @@ function unlock() {
   if (!t) return;
   TOKEN = t;
   document.getElementById("gateErr").textContent = "";
+  // Show the app immediately — if the token is wrong every panel's 401
+  // handler will push the user back to the gate automatically.
+  showApp();
+  resetInactivityTimer();
   loadWaitlist();
   loadLocked();
   loadDuressEnrolled();
