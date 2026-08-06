@@ -1,5 +1,7 @@
 package com.duoshield.app.backup;
 
+import com.duoshield.app.util.LogRedact;
+
 import android.content.Context;
 import android.util.Log;
 
@@ -822,7 +824,7 @@ public final class BackupManager {
                        .collection(COL_CONTACTS).document(c.uid)
                        .set(doc)
                        .addOnFailureListener(e ->
-                           Log.w(TAG, "backupContacts: write failed for " + c.uid));
+                           Log.w(TAG, "backupContacts: write failed for " + LogRedact.uid(c.uid)));
                 }
                 Log.d(TAG, "backupContacts: backed up " + contacts.size() + " contacts");
             } catch (Exception e) {

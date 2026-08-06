@@ -1,5 +1,7 @@
 package com.duoshield.app.crypto.signal;
 
+import com.duoshield.app.util.LogRedact;
+
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
@@ -140,7 +142,7 @@ public final class SignalSessionManager {
                             runX3DH(ctx, recipientUid, address, store, doc, callback));
                 })
                 .addOnFailureListener(e -> {
-                    Log.e(TAG, "Failed to fetch public key bundle for " + recipientUid, e);
+                    Log.e(TAG, "Failed to fetch public key bundle for " + LogRedact.uid(recipientUid), e);
                     deliver(callback, null, null,
                             "Could not fetch " + recipientUid + "'s public keys: " + e.getMessage());
                 });
@@ -218,7 +220,7 @@ public final class SignalSessionManager {
                         kyberPreKeySig = Base64.decode(kpkSigB64, Base64.NO_WRAP);
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Kyber pre-key parse failed for " + recipientUid
+                    Log.w(TAG, "Kyber pre-key parse failed for " + LogRedact.uid(recipientUid)
                             + " — falling back to X3DH only.", e);
                     kyberPreKeyId = -1;
                     kyberPreKey   = null;
@@ -234,7 +236,7 @@ public final class SignalSessionManager {
             // Pass preKeyId=0 / preKey=null when no one-time pre-key is available
             // (X3DH still works but forward secrecy is slightly reduced for this session).
             if (otpkPub == null) {
-                Log.w(TAG, "No one-time pre-keys available for " + recipientUid
+                Log.w(TAG, "No one-time pre-keys available for " + LogRedact.uid(recipientUid)
                         + " — session established without OTP key. Forward secrecy reduced for this session."
                         + " Partner should re-open the app to replenish their pre-key pool.");
             }
@@ -277,7 +279,7 @@ public final class SignalSessionManager {
                 new SessionBuilder(store, address).process(bundle);
             } catch (Exception pqxdhEx) {
                 if (kyberPreKey != null) {
-                    Log.w(TAG, "PQXDH SessionBuilder.process() failed for " + recipientUid
+                    Log.w(TAG, "PQXDH SessionBuilder.process() failed for " + LogRedact.uid(recipientUid)
                             + " — partner's Kyber key may be corrupt; retrying with classic X3DH.",
                             pqxdhEx);
                     // Delete any partial session state written by the failed PQXDH attempt
@@ -314,7 +316,7 @@ public final class SignalSessionManager {
             if (otpkId >= 0 && otpkPub != null && chosenEntry != null) {
                 consumeOtpkOnFirestore(recipientUid, otpkId, chosenEntry);
                 if (otpks.size() == 1) {
-                    Log.w(TAG, "OTP key pool for " + recipientUid + " is now exhausted after this session."
+                    Log.w(TAG, "OTP key pool for " + LogRedact.uid(recipientUid) + " is now exhausted after this session."
                             + " Pre-key refresh will be triggered on next outbound message.");
                 }
             }
@@ -322,10 +324,10 @@ public final class SignalSessionManager {
             deliver(callback, address, store, null);
 
         } catch (InvalidKeyException | UntrustedIdentityException e) {
-            Log.e(TAG, "X3DH failed for " + recipientUid, e);
+            Log.e(TAG, "X3DH failed for " + LogRedact.uid(recipientUid), e);
             deliver(callback, null, null, "Session establishment failed: " + e.getMessage());
         } catch (Exception e) {
-            Log.e(TAG, "Unexpected error during X3DH for " + recipientUid, e);
+            Log.e(TAG, "Unexpected error during X3DH for " + LogRedact.uid(recipientUid), e);
             deliver(callback, null, null, "Unexpected error: " + e.getMessage());
         }
     }

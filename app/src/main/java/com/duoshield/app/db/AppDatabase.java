@@ -49,6 +49,12 @@ public abstract class AppDatabase extends RoomDatabase {
     public static synchronized AppDatabase getInstance(Context context) {
         if (instance == null) {
             SQLiteDatabase.loadLibs(context);
+            // May throw DatabaseKeyProvider.KeyUnavailableException when a database
+            // exists but its passphrase is temporarily unreadable. That is
+            // deliberately NOT caught here: the data is still intact and may open
+            // on a later launch once the Keystore recovers. Swallowing it would
+            // send us into the destructive branch below and wipe the user's
+            // entire message history (SEC-D02).
             byte[] passphrase = DatabaseKeyProvider.getOrCreate(context);
             SupportFactory factory = new SupportFactory(passphrase);
             java.util.Arrays.fill(passphrase, (byte) 0); // zero out after handing to factory
@@ -57,10 +63,22 @@ public abstract class AppDatabase extends RoomDatabase {
                 // Force-open to detect a pre-existing unencrypted file early
                 instance.getOpenHelper().getWritableDatabase();
             } catch (Exception e) {
+                try { if (instance != null) instance.close(); } catch (Exception ignored) {}
+                instance = null;
+
+                // Only destroy the file for the one case this recovery exists for:
+                // a legacy *unencrypted* database that SQLCipher cannot interpret.
+                // Any other failure (failed migration, disk full, transient I/O)
+                // must propagate — deleting on those turned recoverable faults
+                // into permanent, silent loss of every message (SEC-D02).
+                if (!isNotADatabaseError(e)) {
+                    Log.e(TAG, "Database open failed and is NOT a legacy-plaintext"
+                            + " upgrade — preserving the existing file.", e);
+                    throw new IllegalStateException("Unable to open encrypted database", e);
+                }
+
                 Log.w(TAG, "SQLCipher could not open existing DB — deleting and recreating "
                         + "encrypted (BUG-D01 first-run upgrade)", e);
-                try { instance.close(); } catch (Exception ignored) {}
-                instance = null;
                 context.deleteDatabase("duoshield_db");
                 // Re-derive passphrase (was zeroed above)
                 byte[] p2 = DatabaseKeyProvider.getOrCreate(context);
@@ -70,6 +88,26 @@ public abstract class AppDatabase extends RoomDatabase {
             }
         }
         return instance;
+    }
+
+    /**
+     * True when the throwable chain indicates the file is not a SQLCipher
+     * database at all — i.e. the legacy plaintext SQLite file that the
+     * BUG-D01 upgrade is allowed to discard. SQLCipher reports this as
+     * "file is not a database" / "file is encrypted or is not a database".
+     */
+    private static boolean isNotADatabaseError(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            String msg = c.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase(java.util.Locale.ROOT);
+                if (m.contains("not a database") || m.contains("file is encrypted")) {
+                    return true;
+                }
+            }
+            if (c.getCause() == c) break;
+        }
+        return false;
     }
 
     private static AppDatabase buildDatabase(Context appCtx, SupportFactory factory) {

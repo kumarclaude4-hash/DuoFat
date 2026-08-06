@@ -1,5 +1,7 @@
 package com.duoshield.app;
 
+import com.duoshield.app.util.LogRedact;
+
 import android.Manifest;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -360,7 +362,7 @@ public class GroupChatActivity extends BaseActivity {
               // decrypting/trusting it. This guards against a stale/misconfigured rule
               // or a future regression re-opening write access to other members.
               if (creatorUid != null && !creatorUid.equals(sender)) {
-                  Log.w(TAG, "Group key doc senderUid (" + sender + ") does not match "
+                  Log.w(TAG, "Group key doc senderUid (" + LogRedact.uid(sender) + ") does not match "
                           + "group creator (" + creatorUid + ") — refusing to trust it");
                   Toast.makeText(this,
                           "Group key came from an unexpected sender — refusing for safety",
@@ -1337,7 +1339,7 @@ public class GroupChatActivity extends BaseActivity {
                           .addOnSuccessListener(v -> guard.recordWrites(1));
                     }
                 } catch (Exception e) {
-                    Log.w(TAG, "Key dist failed for " + uid + ": " + e.getMessage());
+                    Log.w(TAG, "Key dist failed for " + LogRedact.uid(uid) + ": " + e.getMessage());
                 }
             }
 

@@ -129,6 +129,30 @@
 -dontwarn okhttp3.**
 -dontwarn okio.**
 
+# ── SEC-L03: strip verbose/debug/info logging from release ───
+# The app logs identifiers and operational detail at d/i level
+# (user ids, chat ids, object keys, storage tiers, key-init
+# tiers). logcat is not readable by other apps on modern
+# Android, but it IS captured by `adb logcat`, OEM diagnostic
+# tools and bug reports — so on a device that is seized,
+# borrowed or already compromised those lines become a plain
+# record of who talked to whom and when. For a messenger whose
+# entire value proposition is metadata resistance, none of it
+# belongs in a shipped build.
+#
+# R8 removes these call sites entirely (they are treated as
+# side-effect free), so there is zero runtime cost and no
+# source changes are required. Log.w and Log.e are kept
+# deliberately: they carry genuine failure diagnostics.
+# When adding a warn/error log, do not interpolate a raw user
+# id, phone number, message body or object key into it.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+    public static boolean isLoggable(...);
+}
+
 # ── Keep source file names for crash reporting ───────────────
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
