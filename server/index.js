@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 const http = require("http");
 const crypto = require("crypto");
+const pure = require("./lib/pure");
 
 let serviceAccount;
 try {
@@ -88,13 +89,7 @@ function shouldSkipOldInitialMessage(change, data) {
   return false;
 }
 
-function notificationBody(data) {
-  if (data.type === "image") return "Sent a photo 🖼";
-  if (data.type === "video") return "Sent a video 🎬";
-  if (data.type === "voice") return "Sent a voice note 🎙";
-  if (data.type === "contact") return "Shared a contact card 📇";
-  return "New encrypted message";
-}
+const notificationBody = pure.notificationBody;
 
 async function removeInvalidToken(uid, token, err) {
   const code = err.code || err.errorInfo?.code || "";
@@ -407,13 +402,20 @@ function checkAuthRateLimit(uid, endpoint) {
   const now   = Date.now();
   const limit = AUTH_RATE_LIMITS[endpoint] || 30;
   const rec   = authRateLimits.get(uid);
+  // Per-endpoint fixed window. Reuse the pure windowing helper by projecting the
+  // multi-endpoint record down to this endpoint's { count, windowStart }.
+  const projected = rec
+    ? { count: rec.counts[endpoint] || 0, windowStart: rec.windowStart }
+    : undefined;
+  const { allowed, record } = pure.evaluateFixedWindow(projected, now, AUTH_RATE_WINDOW_MS, limit);
+  if (!allowed) return false;
+
   if (!rec || now - rec.windowStart >= AUTH_RATE_WINDOW_MS) {
-    authRateLimits.set(uid, { counts: { [endpoint]: 1 }, windowStart: now });
-    return true;
+    // Window rolled over (or first hit): start a fresh multi-endpoint record.
+    authRateLimits.set(uid, { counts: { [endpoint]: record.count }, windowStart: record.windowStart });
+  } else {
+    rec.counts[endpoint] = record.count;
   }
-  const cur = rec.counts[endpoint] || 0;
-  if (cur >= limit) return false;
-  rec.counts[endpoint] = cur + 1;
   return true;
 }
 
@@ -469,19 +471,10 @@ function recordAdminAuthFailure(ip) {
 }
 
 // Constant-time comparison so token-guessing can't be timed byte-by-byte.
-function safeTokenEqual(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
+// Implementation lives in ./lib/pure (unit-tested there).
+const safeTokenEqual = pure.safeTokenEqual;
 
-function validAdminUid(uid) {
-  return typeof uid === "string"
-    && uid.length >= 1
-    && uid.length <= 128
-    && !/[\/\\\u0000-\u001f]/.test(uid);
-}
+const validAdminUid = pure.validAdminUid;
 
 function adminSessionCookie(sessionId, req, maxAgeSeconds) {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
@@ -489,16 +482,7 @@ function adminSessionCookie(sessionId, req, maxAgeSeconds) {
   return `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${maxAgeSeconds}; HttpOnly;${isHttps ? " Secure;" : ""} SameSite=Strict`;
 }
 
-function getCookie(req, name) {
-  const raw = req.headers.cookie || "";
-  for (const part of raw.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    const key = part.slice(0, separator).trim();
-    if (key === name) return decodeURIComponent(part.slice(separator + 1).trim());
-  }
-  return "";
-}
+const getCookie = pure.getCookie;
 
 function createAdminSession() {
   const sessionId = crypto.randomBytes(32).toString("hex");
@@ -581,14 +565,7 @@ function sha256hex(hexStr) {
 // to the initial user-supplied URL and to every redirect hop (see
 // fetchFollowingSafeRedirects below) — checking only the first URL would let
 // a malicious server redirect the fetch to an internal address afterwards.
-function isBlockedPreviewHost(hostname) {
-  const host = hostname.toLowerCase();
-  return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host) ||
-    host === "metadata.google.internal" ||
-    host === "169.254.169.254" ||
-    host.endsWith(".internal") ||
-    host.endsWith(".local");
-}
+const isBlockedPreviewHost = pure.isBlockedPreviewHost;
 
 // Fetches targetUrl, manually validating and following redirects (instead of
 // `redirect: "follow"`) so each hop is re-checked against isBlockedPreviewHost
@@ -1218,8 +1195,52 @@ document.getElementById("duressUidInput").addEventListener("keydown", (event) =>
 </html>
 `;
 
+// ── Security response headers ─────────────────────────────────────────────────
+// Baseline defense-in-depth headers applied to *every* response via setHeader()
+// at the top of the request handler. Node merges these with the object passed to
+// res.writeHead(), and writeHead values take precedence — so the two HTML routes
+// (GET / and GET /admin) override only Content-Security-Policy with a policy that
+// permits their own inline <style>/<script>, while everything else keeps the
+// strict `default-src 'none'` API policy below.
+const CSP_API = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+// The dashboard (GET /) is fully self-contained: inline <style>, no scripts, no
+// network calls.
+const CSP_DASHBOARD =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; " +
+  "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+// The admin panel (GET /admin) has an inline <script>/<style> shell that fetches
+// same-origin /admin/api/* and posts the native login form to /admin/login.
+const CSP_ADMIN =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src 'self' data:; connect-src 'self'; form-action 'self'; " +
+  "base-uri 'none'; frame-ancestors 'none'";
+
+function setBaselineSecurityHeaders(req, res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+  );
+  res.setHeader("Content-Security-Policy", CSP_API);
+  // HSTS only over HTTPS. Behind Render/most proxies TLS terminates upstream and
+  // the original scheme arrives in X-Forwarded-Proto.
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0].trim().toLowerCase();
+  if (forwardedProto === "https" || req.socket.encrypted) {
+    res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  }
+}
+
 // ── Health + status + mintToken HTTP server ───────────────────────────────────
 http.createServer((req, res) => {
+
+  // Baseline security headers on every response (merged with, and overridable by,
+  // each route's writeHead — see setBaselineSecurityHeaders above).
+  setBaselineSecurityHeaders(req, res);
 
   // Reject oversized bodies before any routing (DoS guard).
   // Content-Length may be absent (chunked), so also enforce via readBody().
@@ -1561,27 +1582,40 @@ http.createServer((req, res) => {
         }
 
         // 3. Rewrite chat participants arrays.
+        //
+        // The swap MUST be atomic. The previous implementation issued arrayRemove(oldUid)
+        // and arrayUnion(userId) as two separate updates; a crash, timeout, or partial
+        // failure between them left the user removed from the chat but never re-added —
+        // silently dropping them from the conversation. Firestore also forbids applying
+        // arrayRemove and arrayUnion to the same field in one update, so we instead read
+        // the current membership inside a transaction, compute the swapped array in
+        // memory, and write it in a single atomic update. This is also idempotent: a
+        // retry after oldUid is already gone is a no-op.
         const chatsSnap = await db.collection("chats")
           .where("participants", "array-contains", oldUid).get();
         for (const chatDoc of chatsSnap.docs) {
-          await chatDoc.ref.update({
-            participants: FieldValue.arrayRemove(oldUid),
-          });
-          await chatDoc.ref.update({
-            participants: FieldValue.arrayUnion(userId),
+          await db.runTransaction(async (txn) => {
+            const snap = await txn.get(chatDoc.ref);
+            if (!snap.exists) return;
+            const current = Array.isArray(snap.get("participants")) ? snap.get("participants") : [];
+            if (!current.includes(oldUid)) return; // already migrated by an earlier run
+            const next = Array.from(new Set(current.filter((u) => u !== oldUid).concat(userId)));
+            txn.update(chatDoc.ref, { participants: next });
           });
           results.chatsMigrated++;
         }
 
-        // 4. Rewrite group members arrays.
+        // 4. Rewrite group members arrays — same atomic read-swap-write as chats above.
         const groupsSnap = await db.collection("groups")
           .where("members", "array-contains", oldUid).get();
         for (const groupDoc of groupsSnap.docs) {
-          await groupDoc.ref.update({
-            members: FieldValue.arrayRemove(oldUid),
-          });
-          await groupDoc.ref.update({
-            members: FieldValue.arrayUnion(userId),
+          await db.runTransaction(async (txn) => {
+            const snap = await txn.get(groupDoc.ref);
+            if (!snap.exists) return;
+            const current = Array.isArray(snap.get("members")) ? snap.get("members") : [];
+            if (!current.includes(oldUid)) return; // already migrated by an earlier run
+            const next = Array.from(new Set(current.filter((u) => u !== oldUid).concat(userId)));
+            txn.update(groupDoc.ref, { members: next });
           });
           results.groupsMigrated++;
         }
@@ -1894,7 +1928,10 @@ http.createServer((req, res) => {
   </p>
 </body>
 </html>`;
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": CSP_DASHBOARD,
+    });
     res.end(html);
     return;
   }
@@ -2065,7 +2102,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── /duress-lock ──────────────────────────────────────────────────────────
+  // ─��� /duress-lock ──────────────────────────────────────────────────────────
   //
   // Writes accountLock/{uid}.locked = true via the Admin SDK. Called by
   // AccountLockWorker when the synchronous in-app lock write failed (offline
@@ -2210,6 +2247,7 @@ http.createServer((req, res) => {
     const authenticated = hasValidAdminSession(req);
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": CSP_ADMIN,
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "Pragma": "no-cache",
       "Expires": "0",
@@ -2578,52 +2616,19 @@ http.createServer((req, res) => {
 }).listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
 
 // ── B2 SigV4 helpers — used by /b2PresignedPut, /b2PresignedGet, /b2Delete ──
-
-function b2HmacKey(appKey, dateStamp, region) {
-  const kDate    = crypto.createHmac("sha256", Buffer.from("AWS4" + appKey)).update(dateStamp).digest();
-  const kRegion  = crypto.createHmac("sha256", kDate).update(region).digest();
-  const kService = crypto.createHmac("sha256", kRegion).update("s3").digest();
-  return crypto.createHmac("sha256", kService).update("aws4_request").digest();
-}
+// The signing math lives in ./lib/pure (unit-tested there). This wrapper only
+// supplies the runtime credentials/config and the current time.
 
 function b2PresignUrl(method, objectKey, contentType, ttlSeconds) {
-  const kId  = process.env.B2_KEY_ID  || "";
-  const kApp = process.env.B2_APPLICATION_KEY || "";
-  const bkt  = process.env.B2_BUCKET   || "yyush-duoshield";
-  const rgn  = process.env.B2_REGION   || "eu-central-003";
-  if (!kId || !kApp) return null;
-
-  const host = "s3." + rgn + ".backblazeb2.com";
-  const now  = new Date();
-  const ds   = now.toISOString().slice(0, 10).replace(/-/g, "");
-  // yyyyMMddTHHmmssZ
-  const az   = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const cs   = ds + "/" + rgn + "/s3/aws4_request";
-  const cred = kId + "/" + cs;
-  const sh   = (method === "PUT" && contentType) ? "content-type;host" : "host";
-
-  const qpRaw = [
-    ["X-Amz-Algorithm",    "AWS4-HMAC-SHA256"],
-    ["X-Amz-Credential",   cred],
-    ["X-Amz-Date",         az],
-    ["X-Amz-Expires",      String(ttlSeconds)],
-    ["X-Amz-SignedHeaders", sh],
-  ];
-  // Canonical query string must be sorted by key
-  const canonQs = qpRaw.slice().sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v))
-    .join("&");
-
-  const ch = (method === "PUT" && contentType)
-    ? "content-type:" + contentType + "\nhost:" + host + "\n"
-    : "host:" + host + "\n";
-
-  const cr  = [method, "/" + bkt + "/" + objectKey, canonQs, ch, sh, "UNSIGNED-PAYLOAD"].join("\n");
-  const sts = ["AWS4-HMAC-SHA256", az, cs,
-    crypto.createHash("sha256").update(cr).digest("hex")].join("\n");
-  const sk  = b2HmacKey(kApp, ds, rgn);
-  const sig = crypto.createHmac("sha256", sk).update(sts).digest("hex");
-
-  return "https://" + host + "/" + bkt + "/" + objectKey
-    + "?" + canonQs + "&X-Amz-Signature=" + sig;
+  return pure.buildB2PresignUrl({
+    keyId:       process.env.B2_KEY_ID          || "",
+    appKey:      process.env.B2_APPLICATION_KEY  || "",
+    bucket:      process.env.B2_BUCKET           || "yyush-duoshield",
+    region:      process.env.B2_REGION           || "eu-central-003",
+    method,
+    objectKey,
+    contentType,
+    ttlSeconds,
+    now: new Date(),
+  });
 }
