@@ -476,6 +476,19 @@ function safeTokenEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+function validAdminUid(uid) {
+  return typeof uid === "string"
+    && uid.length >= 1
+    && uid.length <= 128
+    && !/[\/\\\u0000-\u001f]/.test(uid);
+}
+
+function adminSessionCookie(sessionId, req, maxAgeSeconds) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  const isHttps = forwardedProto === "https" || Boolean(req.socket.encrypted);
+  return `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${maxAgeSeconds}; HttpOnly;${isHttps ? " Secure;" : ""} SameSite=Strict`;
+}
+
 function getCookie(req, name) {
   const raw = req.headers.cookie || "";
   for (const part of raw.split(";")) {
@@ -674,101 +687,149 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 <title>DuoShield Admin</title>
 <meta name="robots" content="noindex, nofollow">
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: -apple-system, system-ui, sans-serif; background: #0b0f14; color: #e6edf3; margin: 0; padding: 24px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .sub { color: #8b98a5; font-size: 13px; margin-bottom: 20px; }
-  .gate { max-width: 360px; margin: 80px auto; text-align: center; }
-  .gate input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #e6edf3; margin-top: 12px; }
-  .gate button { width: 100%; margin-top: 12px; padding: 10px; border-radius: 6px; border: none; background: #2f81f7; color: white; font-size: 14px; cursor: pointer; }
-  #app { display: none; }
-  section { margin-bottom: 32px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d; }
-  th { color: #8b98a5; font-weight: 500; }
-  button.action { padding: 5px 12px; border-radius: 5px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 12px; }
-  button.action:hover { background: #30363d; }
-  button.danger { border-color: #f85149; color: #f85149; }
-  .empty { color: #8b98a5; font-size: 13px; padding: 12px 0; }
-  .err { color: #f85149; font-size: 13px; margin-top: 8px; }
-  .toast { position: fixed; bottom: 20px; right: 20px; background: #161b22; border: 1px solid #30363d; padding: 10px 16px; border-radius: 6px; font-size: 13px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
-  .refresh { float: right; }
+  :root { color-scheme: dark; --bg:#080c14; --panel:#0f1620; --panel-strong:#162232; --line:#263344; --text:#edf4ff; --muted:#96a6b8; --accent:#00c9e0; --accent-strong:#73f1ff; --danger:#ff6b72; font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  * { box-sizing:border-box; }
+  body { min-height:100vh; margin:0; background:radial-gradient(circle at 80% 0%,#123147 0,transparent 34rem),var(--bg); color:var(--text); }
+  button,input { font:inherit; }
+  button { -webkit-tap-highlight-color:transparent; }
+  .gate { width:min(calc(100% - 32px),390px); margin:clamp(56px,15vh,140px) auto; padding:32px; text-align:center; background:rgba(15,22,32,.94); border:1px solid var(--line); border-radius:18px; box-shadow:0 24px 80px rgba(0,0,0,.35); }
+  .brand-mark { display:grid; place-items:center; width:48px; height:48px; margin:0 auto 18px; border-radius:14px; color:var(--bg); background:linear-gradient(135deg,var(--accent-strong),var(--accent)); font-weight:800; }
+  h1 { margin:0 0 6px; font-size:clamp(20px,3vw,28px); letter-spacing:-.02em; }
+  h2 { margin:0; font-size:16px; }
+  .sub { color:var(--muted); font-size:13px; line-height:1.5; }
+  .gate .sub { margin-bottom:22px; }
+  .gate input,.search-input { width:100%; min-height:46px; padding:11px 13px; border:1px solid var(--line); border-radius:10px; outline:0; background:#0b121c; color:var(--text); }
+  .gate input:focus,.search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(0,201,224,.16); }
+  .gate button { width:100%; min-height:46px; margin-top:12px; border:0; border-radius:10px; background:linear-gradient(135deg,#14d8ec,#008eb1); color:#001218; font-weight:750; cursor:pointer; }
+  .gate button:disabled { opacity:.6; cursor:wait; }
+  #app { display:none; width:min(calc(100% - 32px),1180px); margin:0 auto; padding:30px 0 64px; }
+  .app-header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:26px; }
+  .eyebrow { margin:0 0 8px; color:var(--accent-strong); font-size:11px; font-weight:750; letter-spacing:.14em; text-transform:uppercase; }
+  .header-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:24px; }
+  .stat,section { background:rgba(15,22,32,.88); border:1px solid var(--line); border-radius:14px; }
+  .stat { padding:16px; }
+  .stat-label { color:var(--muted); font-size:12px; }
+  .stat-value { margin-top:6px; font-size:25px; font-weight:760; }
+  section { margin-bottom:16px; overflow:hidden; }
+  .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 18px 14px; }
+  .section-help { padding:0 18px 14px; color:var(--muted); font-size:12px; }
+  .section-body { padding:0 18px 18px; }
+  .search-row { display:flex; gap:8px; align-items:center; }
+  .search-row .search-input { flex:1; font-family:ui-monospace,SFMono-Regular,monospace; }
+  .search-result { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:12px 0 16px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#0b121c; }
+  .search-status { margin-top:4px; color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:12px 10px; border-bottom:1px solid rgba(38,51,68,.72); text-align:left; vertical-align:middle; }
+  th { color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
+  tr:last-child td { border-bottom:0; }
+  .action { min-height:36px; padding:7px 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel-strong); color:var(--text); cursor:pointer; font-size:12px; font-weight:650; white-space:nowrap; }
+  .action:hover { border-color:#4a6078; background:#1a2939; }
+  .action:disabled { opacity:.55; cursor:wait; }
+  .action.primary { border-color:rgba(0,201,224,.55); color:var(--accent-strong); }
+  .action.danger { border-color:rgba(255,107,114,.7); color:var(--danger); }
+  .empty,.loading { color:var(--muted); font-size:13px; padding:14px 0 2px; }
+  .err { min-height:19px; color:var(--danger); font-size:13px; margin-top:10px; }
+  .toast { position:fixed; right:18px; bottom:18px; z-index:10; max-width:min(420px,calc(100% - 36px)); padding:12px 15px; border:1px solid var(--line); border-radius:10px; background:#182434; box-shadow:0 12px 30px rgba(0,0,0,.3); font-size:13px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow-wrap:anywhere; }
+  .refresh { margin-left:auto; }
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  @media (max-width:760px) { #app{width:min(calc(100% - 20px),620px);padding-top:18px}.app-header{flex-direction:column}.header-actions{width:100%}.header-actions .action{flex:1}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.section-head{padding:15px 14px 12px}.section-help,.section-body{padding-left:14px;padding-right:14px}.table-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px}.table-scroll table{min-width:570px}.search-row{align-items:stretch;flex-direction:column}.search-row .action{width:100%}.search-result{align-items:flex-start;flex-direction:column}.search-result .action{width:100%} }
+  @media (max-width:390px) { .gate{width:calc(100% - 20px);padding:24px 18px}.stats{gap:8px}.stat{padding:13px}.stat-value{font-size:21px} }
 </style>
 </head>
 <body>
 
   <div class="gate" id="gate">
+    <div class="brand-mark" aria-hidden="true">DS</div>
     <h1>DuoShield Admin</h1>
-    <div class="sub">Enter the operator token to continue</div>
+    <div class="sub">Secure operator access for waitlist, account locks, and duress PIN eligibility.</div>
     <form id="gateForm" action="/admin/login" method="post">
-      <input type="password" id="tokenInput" name="token" placeholder="Admin token" autofocus autocomplete="current-password">
-      <button type="submit" id="unlockBtn">Unlock</button>
+      <label class="sr-only" for="tokenInput">Admin token</label>
+      <input type="password" id="tokenInput" name="token" placeholder="Enter admin token" autofocus autocomplete="current-password" required>
+      <button type="submit" id="unlockBtn">Unlock dashboard</button>
     </form>
-    <div class="err" id="gateErr"></div>
+    <div class="err" id="gateErr" role="alert"></div>
   </div>
 
   <div id="app">
-    <h1>DuoShield Admin</h1>
-    <div class="sub">Waitlist approval &amp; account unfreeze</div>
-
-    <section>
-      <h2>Pending waitlist requests <button class="action refresh" onclick="loadWaitlist()">Refresh</button></h2>
-      <table>
-        <thead><tr><th>Request ID</th><th>Requested</th><th></th></tr></thead>
-        <tbody id="waitlistBody"></tbody>
-      </table>
-      <div class="empty" id="waitlistEmpty" style="display:none">No pending requests.</div>
-    </section>
-
-    <section>
-      <h2>Locked accounts <button class="action refresh" onclick="loadLocked()">Refresh</button></h2>
-      <table>
-        <thead><tr><th>UID</th><th>Locked at</th><th></th></tr></thead>
-        <tbody id="lockedBody"></tbody>
-      </table>
-      <div class="empty" id="lockedEmpty" style="display:none">No locked accounts.</div>
-    </section>
-
-    <section>
-      <h2>Duress PIN enrollment <button class="action refresh" onclick="loadDuressEnrolled()">Refresh</button></h2>
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-        <input id="duressUidInput" type="text" placeholder="Search by account UID" style="flex:1;padding:8px 10px;font-size:13px;border-radius:5px;border:1px solid #30363d;background:#161b22;color:#e6edf3;font-family:ui-monospace,monospace;" onkeydown="if(event.key==='Enter')searchDuressAccount();">
-        <button class="action" onclick="searchDuressAccount()">Search</button>
+    <header class="app-header">
+      <div>
+        <div class="eyebrow">Operator console</div>
+        <h1>DuoShield Admin</h1>
+        <div class="sub">Manage access and duress-PIN eligibility without opening the Firebase console.</div>
       </div>
-      <div id="duressSearchResult" style="display:none;margin-bottom:16px;padding:12px 14px;border:1px solid #30363d;border-radius:6px;background:#161b22;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+      <div class="header-actions">
+        <button class="action" type="button" onclick="refreshAll()">Refresh all</button>
+        <button class="action" type="button" onclick="logout()">Sign out</button>
+      </div>
+    </header>
+
+    <div class="stats" aria-label="Account summary">
+      <div class="stat"><div class="stat-label">Pending access</div><div class="stat-value" id="pendingCount">—</div></div>
+      <div class="stat"><div class="stat-label">Locked accounts</div><div class="stat-value" id="lockedCount">—</div></div>
+      <div class="stat"><div class="stat-label">Duress enabled</div><div class="stat-value" id="duressCount">—</div></div>
+      <div class="stat"><div class="stat-label">Recent actions</div><div class="stat-value" id="auditCount">—</div></div>
+    </div>
+
+    <section>
+      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" onclick="loadWaitlist()">Refresh</button></div>
+      <div class="section-body">
+        <div class="table-scroll"><table><thead><tr><th>Request ID</th><th>Requested</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="waitlistBody"></tbody></table></div>
+        <div class="loading" id="waitlistLoading">Loading…</div>
+        <div class="empty" id="waitlistEmpty" hidden>No pending requests.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Locked accounts</h2><button class="action refresh" type="button" onclick="loadLocked()">Refresh</button></div>
+      <div class="section-body">
+        <div class="table-scroll"><table><thead><tr><th>UID</th><th>Locked at</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="lockedBody"></tbody></table></div>
+        <div class="loading" id="lockedLoading">Loading…</div>
+        <div class="empty" id="lockedEmpty" hidden>No locked accounts.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Duress PIN enrollment</h2><button class="action refresh" type="button" onclick="loadDuressEnrolled()">Refresh</button></div>
+      <div class="section-help">Search a real account UID first. Enable makes the secondary-PIN setup available in the app; it does not set a PIN for the user.</div>
+      <div class="section-body">
+      <div class="search-row">
+        <label class="sr-only" for="duressUidInput">Account UID</label>
+        <input class="search-input" id="duressUidInput" type="text" placeholder="Search by account UID" autocomplete="off" spellcheck="false">
+        <button class="action primary" id="duressSearchButton" type="button" onclick="searchDuressAccount()">Search account</button>
+      </div>
+      <div id="duressSearchResult" class="search-result" hidden>
           <div>
-            <div class="mono" id="duressSearchUid" style="font-size:13px;"></div>
-            <div class="sub" id="duressSearchStatus" style="margin:4px 0 0;"></div>
+            <div class="mono" id="duressSearchUid"></div>
+            <div class="search-status" id="duressSearchStatus"></div>
           </div>
-          <button class="action" id="duressSearchAction"></button>
-        </div>
+          <button class="action" id="duressSearchAction" type="button"></button>
       </div>
-      <div class="empty" id="duressSearchEmpty" style="display:none">No account found for that UID.</div>
-      <table>
-        <thead><tr><th>UID</th><th>Enrolled at</th><th></th></tr></thead>
-        <tbody id="duressBody"></tbody>
-      </table>
-      <div class="empty" id="duressEmpty" style="display:none">No accounts enrolled.</div>
+      <div class="empty" id="duressSearchEmpty" hidden>No account found for that UID.</div>
+      <div class="table-scroll"><table><thead><tr><th>UID</th><th>Enrolled at</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="duressBody"></tbody></table></div>
+      <div class="loading" id="duressLoading">Loading…</div>
+      <div class="empty" id="duressEmpty" hidden>No accounts enrolled.</div>
+      </div>
     </section>
 
     <section>
-      <h2>Audit log <button class="action refresh" onclick="loadAuditLog()">Refresh</button></h2>
-      <table>
-        <thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead>
-        <tbody id="auditBody"></tbody>
-      </table>
-      <div class="empty" id="auditEmpty" style="display:none">No audit entries yet.</div>
+      <div class="section-head"><h2>Audit log</h2><button class="action refresh" type="button" onclick="loadAuditLog()">Refresh</button></div>
+      <div class="section-body">
+        <div class="table-scroll"><table><thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead><tbody id="auditBody"></tbody></table></div>
+        <div class="loading" id="auditLoading">Loading…</div>
+        <div class="empty" id="auditEmpty" hidden>No audit entries yet.</div>
+      </div>
     </section>
 
-    <div id="inactivityBanner" style="display:none;position:fixed;top:0;left:0;right:0;background:#f85149;color:#fff;text-align:center;padding:10px 16px;font-size:13px;z-index:999;">
+    <div id="inactivityBanner" hidden style="position:fixed;top:0;left:0;right:0;background:#b83442;color:#fff;text-align:center;padding:10px 16px;font-size:13px;z-index:999;">
       Session will expire due to inactivity — <span id="inactivityCountdown">60</span>s remaining.
     </div>
   </div>
 
 <script>
 let TOKEN = "";
+let sessionActive = false;
 
 function toast(msg) {
   const el = document.createElement("div");
@@ -779,33 +840,65 @@ function toast(msg) {
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, Object.assign({}, opts, {
-    headers: Object.assign({ "x-admin-token": TOKEN, "Content-Type": "application/json" }, (opts && opts.headers) || {}),
-  }));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let res;
+  try {
+    res = await fetch(path, Object.assign({}, opts, {
+      headers: Object.assign({ "x-admin-token": TOKEN, "Content-Type": "application/json" }, (opts && opts.headers) || {}),
+      signal: controller.signal,
+    }));
+  } catch (e) {
+    throw new Error(e.name === "AbortError" ? "Request timed out. Try again." : "Network error. Check the connection.");
+  } finally {
+    clearTimeout(timeout);
+  }
   if (res.status === 401) {
-    document.getElementById("app").style.display = "none";
-    document.getElementById("gate").style.display = "block";
-    document.getElementById("gateErr").textContent = "Invalid token.";
+    forceLogout(false);
+    document.getElementById("gateErr").textContent = "Your session expired. Sign in again.";
     throw new Error("unauthorized");
   }
+  if (res.status === 429) throw new Error("Too many attempts. Wait a few minutes and try again.");
   if (!res.ok) throw new Error(await res.text());
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : null;
 }
 
 function showApp() {
+  sessionActive = true;
   document.getElementById("gate").style.display = "none";
   document.getElementById("app").style.display = "block";
   resetInactivityTimer();
 }
 
+function setLoading(name, loading) {
+  const el = document.getElementById(name + "Loading");
+  if (el) el.hidden = !loading;
+}
+
+function setEmpty(name, empty) {
+  const el = document.getElementById(name + "Empty");
+  if (el) el.hidden = !empty;
+}
+
+function setCount(name, value) {
+  const el = document.getElementById(name + "Count");
+  if (el) el.textContent = String(value);
+}
+
+function refreshAll() {
+  return Promise.all([loadWaitlist(), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
+}
+
 async function loadWaitlist() {
+  setLoading("waitlist", true);
   try {
     const data = await api("/admin/api/waitlist");
     showApp();
     const body = document.getElementById("waitlistBody");
     body.innerHTML = "";
-    document.getElementById("waitlistEmpty").style.display = data.requests.length ? "none" : "block";
+    setCount("pending", data.requests.length);
+    setEmpty("waitlist", !data.requests.length);
     for (const r of data.requests) {
       const tr = document.createElement("tr");
 
@@ -830,6 +923,8 @@ async function loadWaitlist() {
     }
   } catch (e) {
     if (e.message !== "unauthorized") toast("Failed to load waitlist: " + e.message);
+  } finally {
+    setLoading("waitlist", false);
   }
 }
 
@@ -847,12 +942,14 @@ async function approve(requestId, btn) {
 }
 
 async function loadLocked() {
+  setLoading("locked", true);
   try {
     const data = await api("/admin/api/locked");
     showApp();
     const body = document.getElementById("lockedBody");
     body.innerHTML = "";
-    document.getElementById("lockedEmpty").style.display = data.accounts.length ? "none" : "block";
+    setCount("locked", data.accounts.length);
+    setEmpty("locked", !data.accounts.length);
     for (const a of data.accounts) {
       const tr = document.createElement("tr");
 
@@ -877,6 +974,8 @@ async function loadLocked() {
     }
   } catch (e) {
     if (e.message !== "unauthorized") toast("Failed to load locked accounts: " + e.message);
+  } finally {
+    setLoading("locked", false);
   }
 }
 
@@ -895,11 +994,13 @@ async function unfreeze(uid, btn) {
 }
 
 async function loadDuressEnrolled() {
+  setLoading("duress", true);
   try {
     const data = await api("/admin/api/duress/enrolled");
     const body = document.getElementById("duressBody");
     body.innerHTML = "";
-    document.getElementById("duressEmpty").style.display = data.accounts.length ? "none" : "block";
+    setCount("duress", data.accounts.length);
+    setEmpty("duress", !data.accounts.length);
     for (const a of data.accounts) {
       const tr = document.createElement("tr");
 
@@ -924,6 +1025,8 @@ async function loadDuressEnrolled() {
     }
   } catch (e) {
     if (e.message !== "unauthorized") toast("Failed to load duress enrolled: " + e.message);
+  } finally {
+    setLoading("duress", false);
   }
 }
 
@@ -935,12 +1038,15 @@ async function searchDuressAccount() {
   if (!uid) { toast("Enter a UID first"); return; }
   const resultBox = document.getElementById("duressSearchResult");
   const emptyBox  = document.getElementById("duressSearchEmpty");
-  resultBox.style.display = "none";
-  emptyBox.style.display  = "none";
+  resultBox.hidden = true;
+  emptyBox.hidden = true;
+  const searchButton = document.getElementById("duressSearchButton");
+  searchButton.disabled = true;
+  searchButton.textContent = "Searching…";
   try {
     const data = await api("/admin/api/account/lookup?uid=" + encodeURIComponent(uid));
     if (!data.accountExists) {
-      emptyBox.style.display = "block";
+      emptyBox.hidden = false;
       return;
     }
     duressSearchUid = uid;
@@ -953,9 +1059,12 @@ async function searchDuressAccount() {
     btn.onclick = data.duressEligible
       ? () => revokeDuress(uid, btn, true)
       : () => enrollDuress(uid, btn);
-    resultBox.style.display = "block";
+    resultBox.hidden = false;
   } catch (e) {
     if (e.message !== "unauthorized") toast("Search failed: " + e.message);
+  } finally {
+    searchButton.disabled = false;
+    searchButton.textContent = "Search account";
   }
 }
 
@@ -966,7 +1075,7 @@ async function enrollDuress(uid, btn) {
     await api("/admin/api/duress/enroll", { method: "POST", body: JSON.stringify({ uid }) });
     toast("Enabled duress PIN for " + uid);
     document.getElementById("duressUidInput").value = "";
-    document.getElementById("duressSearchResult").style.display = "none";
+    document.getElementById("duressSearchResult").hidden = true;
     loadDuressEnrolled();
     loadAuditLog();
   } catch (e) {
@@ -983,7 +1092,7 @@ async function revokeDuress(uid, btn, fromSearch) {
   try {
     await api("/admin/api/duress/revoke", { method: "POST", body: JSON.stringify({ uid }) });
     toast("Revoked " + uid);
-    if (fromSearch) document.getElementById("duressSearchResult").style.display = "none";
+    if (fromSearch) document.getElementById("duressSearchResult").hidden = true;
     loadDuressEnrolled();
     loadAuditLog();
   } catch (e) {
@@ -992,11 +1101,13 @@ async function revokeDuress(uid, btn, fromSearch) {
 }
 
 async function loadAuditLog() {
+  setLoading("audit", true);
   try {
     const data = await api("/admin/api/auditlog");
     const body = document.getElementById("auditBody");
     body.innerHTML = "";
-    document.getElementById("auditEmpty").style.display = data.entries.length ? "none" : "block";
+    setCount("audit", data.entries.length);
+    setEmpty("audit", !data.entries.length);
     for (const e of data.entries) {
       const tr = document.createElement("tr");
 
@@ -1026,6 +1137,8 @@ async function loadAuditLog() {
     }
   } catch (e) {
     if (e.message !== "unauthorized") toast("Failed to load audit log: " + e.message);
+  } finally {
+    setLoading("audit", false);
   }
 }
 
@@ -1041,14 +1154,14 @@ let countdownSeconds = 60;
 function resetInactivityTimer() {
   clearTimeout(inactivityTimer);
   clearInterval(countdownTimer);
-  document.getElementById("inactivityBanner").style.display = "none";
+  document.getElementById("inactivityBanner").hidden = true;
   inactivityTimer = setTimeout(startInactivityWarning, INACTIVITY_TIMEOUT_MS - INACTIVITY_WARNING_MS);
 }
 
 function startInactivityWarning() {
   countdownSeconds = 60;
   const banner = document.getElementById("inactivityBanner");
-  banner.style.display = "block";
+  banner.hidden = false;
   document.getElementById("inactivityCountdown").textContent = countdownSeconds;
   countdownTimer = setInterval(() => {
     countdownSeconds--;
@@ -1060,20 +1173,26 @@ function startInactivityWarning() {
   }, 1000);
 }
 
-function forceLogout() {
+async function logout() {
+  try { await fetch("/admin/logout", { method: "POST", credentials: "same-origin" }); } catch (_) {}
+  forceLogout(false);
+}
+
+function forceLogout(showMessage = true) {
   TOKEN = "";
+  sessionActive = false;
   clearTimeout(inactivityTimer);
   clearInterval(countdownTimer);
-  document.getElementById("inactivityBanner").style.display = "none";
+  document.getElementById("inactivityBanner").hidden = true;
   document.getElementById("app").style.display = "none";
   document.getElementById("gate").style.display = "block";
-  document.getElementById("gateErr").textContent = "Session expired due to inactivity.";
+  document.getElementById("gateErr").textContent = showMessage ? "Session expired due to inactivity." : "";
   document.getElementById("tokenInput").value = "";
 }
 
 ["mousemove", "mousedown", "keydown", "touchstart", "scroll"].forEach((evt) => {
   document.addEventListener(evt, () => {
-    if (TOKEN) resetInactivityTimer();
+    if (sessionActive) resetInactivityTimer();
   }, { passive: true });
 });
 
@@ -1084,7 +1203,16 @@ if (SESSION_AUTHENTICATED) {
   loadLocked();
   loadDuressEnrolled();
   loadAuditLog();
+} else {
+  const loginError = new URLSearchParams(location.search).get("error");
+  if (loginError === "invalid") document.getElementById("gateErr").textContent = "Invalid admin token.";
+  if (loginError === "locked") document.getElementById("gateErr").textContent = "Too many failed attempts. Wait 15 minutes and try again.";
+  if (loginError === "unconfigured") document.getElementById("gateErr").textContent = "Admin panel is not configured on the server.";
 }
+
+document.getElementById("duressUidInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); searchDuressAccount(); }
+});
 </script>
 </body>
 </html>
@@ -2036,30 +2164,45 @@ http.createServer((req, res) => {
       const supplied = (params.get("token") || "").trim();
       const ip = getClientIp(req);
       if (adminIpLocked(ip)) {
-        res.writeHead(429, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-        res.end("Too many failed attempts — wait 15 min and retry");
+        res.writeHead(303, { "Location": "/admin?error=locked", "Cache-Control": "no-store" });
+        res.end();
         return;
       }
       if (!ADMIN_TOKEN) {
         console.error("admin login: ADMIN_TOKEN is not configured on the server");
-        res.writeHead(503, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-        res.end("Admin panel not configured");
+        res.writeHead(303, { "Location": "/admin?error=unconfigured", "Cache-Control": "no-store" });
+        res.end();
         return;
       }
       if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
         recordAdminAuthFailure(ip);
-        res.writeHead(401, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
-        res.end("Invalid admin token");
+        res.writeHead(303, { "Location": "/admin?error=invalid", "Cache-Control": "no-store" });
+        res.end();
         return;
       }
       const sessionId = createAdminSession();
       res.writeHead(303, {
         Location: "/admin",
         "Cache-Control": "no-store",
-        "Set-Cookie": `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1000)}; HttpOnly; Secure; SameSite=Strict`,
+        "Set-Cookie": adminSessionCookie(sessionId, req, Math.floor(ADMIN_SESSION_TTL_MS / 1000)),
       });
       res.end();
     });
+    return;
+  }
+
+  // Explicitly revoke the in-memory session and expire the browser cookie.
+  // Keeping this server-side means sign-out works consistently across browsers
+  // and does not rely on JavaScript being able to access the HttpOnly cookie.
+  if (req.method === "POST" && requestPath === "/admin/logout") {
+    const sessionId = getCookie(req, "duoshield_admin_session");
+    if (sessionId) adminSessions.delete(sessionId);
+    res.writeHead(303, {
+      Location: "/admin",
+      "Cache-Control": "no-store",
+      "Set-Cookie": adminSessionCookie("", req, 0),
+    });
+    res.end();
     return;
   }
 
@@ -2110,9 +2253,7 @@ http.createServer((req, res) => {
   // Flips a pending waitlist doc to status: "approved" so the requester's
   // next /waitlistStatus poll lets them proceed to account creation.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       if (!requireAdminAuth(req, res)) return;
       try {
         let parsed;
@@ -2194,9 +2335,7 @@ http.createServer((req, res) => {
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be
   // removed, per firestore.rules (clients get `allow delete: if false`).
   if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       if (!requireAdminAuth(req, res)) return;
       try {
         let parsed;
@@ -2206,7 +2345,7 @@ http.createServer((req, res) => {
           return;
         }
         const { uid } = parsed;
-        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+        if (!validAdminUid(uid)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
           return;
@@ -2310,9 +2449,7 @@ http.createServer((req, res) => {
   // Requires the UID to correspond to a real account (identities/{uid}) —
   // enrollment is never granted blind to an unverified/nonexistent UID.
   if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       if (!requireAdminAuth(req, res)) return;
       try {
         let parsed;
@@ -2322,7 +2459,7 @@ http.createServer((req, res) => {
           return;
         }
         const { uid } = parsed;
-        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+        if (!validAdminUid(uid)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
           return;
@@ -2363,9 +2500,7 @@ http.createServer((req, res) => {
   // Sets eligible:false on duressEligibility/{uid} — the client's cached flag
   // is updated on the next eligibility refresh (sign-in or foreground).
   if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       if (!requireAdminAuth(req, res)) return;
       try {
         let parsed;
@@ -2375,7 +2510,7 @@ http.createServer((req, res) => {
           return;
         }
         const { uid } = parsed;
-        if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) {
+        if (!validAdminUid(uid)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
           return;
