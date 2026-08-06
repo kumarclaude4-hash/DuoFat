@@ -729,7 +729,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     <div class="err" id="gateErr" role="alert"></div>
   </div>
 
-  <div id="app">
+  <main id="app">
     <header class="app-header">
       <div>
         <div class="eyebrow">Operator console</div>
@@ -802,7 +802,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     <div id="inactivityBanner" hidden style="position:fixed;top:0;left:0;right:0;background:#b83442;color:#fff;text-align:center;padding:10px 16px;font-size:13px;z-index:999;">
       Session will expire due to inactivity — <span id="inactivityCountdown">60</span>s remaining.
     </div>
-  </div>
+  </main>
 
 <script>
 let TOKEN = "";
@@ -845,6 +845,7 @@ function showApp() {
   sessionActive = true;
   document.getElementById("gate").style.display = "none";
   document.getElementById("app").style.display = "block";
+  document.getElementById("app").removeAttribute("hidden");
   resetInactivityTimer();
 }
 
@@ -1069,7 +1070,10 @@ async function revokeDuress(uid, btn, fromSearch) {
   try {
     await api("/admin/api/duress/revoke", { method: "POST", body: JSON.stringify({ uid }) });
     toast("Revoked " + uid);
-    if (fromSearch) document.getElementById("duressSearchResult").hidden = true;
+    if (fromSearch) {
+      document.getElementById("duressSearchResult").hidden = true;
+      document.getElementById("duressUidInput").value = "";
+    }
     loadDuressEnrolled();
     loadAuditLog();
   } catch (e) {
@@ -1165,6 +1169,9 @@ function forceLogout(showMessage = true) {
   document.getElementById("gate").style.display = "block";
   document.getElementById("gateErr").textContent = showMessage ? "Session expired due to inactivity." : "";
   document.getElementById("tokenInput").value = "";
+  // Revoke the server-side session so the HttpOnly cookie cannot be reused
+  // until the 30-minute TTL elapses. Fire-and-forget; UI is already reset.
+  fetch("/admin/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
 }
 
 ["mousemove", "mousedown", "keydown", "touchstart", "scroll"].forEach((evt) => {
@@ -1187,8 +1194,20 @@ if (SESSION_AUTHENTICATED) {
   if (loginError === "unconfigured") document.getElementById("gateErr").textContent = "Admin panel is not configured on the server.";
 }
 
+document.getElementById("gateForm").addEventListener("submit", () => {
+  const btn = document.getElementById("unlockBtn");
+  btn.disabled = true;
+  btn.textContent = "Verifying…";
+});
+
 document.getElementById("duressUidInput").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") { event.preventDefault(); searchDuressAccount(); }
+  if (!sessionActive) return;
+  if (event.key === "Enter") {
+    // Do not submit while a CJK IME composition is in progress.
+    if (event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    searchDuressAccount();
+  }
 });
 </script>
 </body>

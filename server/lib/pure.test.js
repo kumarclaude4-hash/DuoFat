@@ -244,3 +244,107 @@ test("b2HmacKey derivation matches a hand-computed AWS4 signing key", () => {
   const expected = crypto.createHmac("sha256", kService).update("aws4_request").digest();
   assert.deepEqual(pure.b2HmacKey(appKey, ds, region), expected);
 });
+
+// ── Additional edge-case coverage ─────────────────────────────────────────────
+
+test("buildB2PresignUrl PUT without contentType signs only host (no content-type header)", () => {
+  const url = pure.buildB2PresignUrl({
+    keyId: "000abc0000000000000000001",
+    appKey: "K000secretsecretsecretsecret",
+    bucket: "my-bucket",
+    region: "eu-central-003",
+    method: "PUT",
+    objectKey: "upload.bin",
+    // contentType deliberately omitted
+    ttlSeconds: 300,
+    now: new Date("2026-01-02T03:04:05.678Z"),
+  });
+  // Without contentType, PUT falls back to signing only the host header.
+  assert.match(url, /X-Amz-SignedHeaders=host(?:[^a-z]|$)/);
+  assert.doesNotMatch(url, /content-type/);
+});
+
+test("buildB2PresignUrl accepts a Date object or plain new Date() for `now`", () => {
+  const params = {
+    keyId: "000abc0000000000000000001",
+    appKey: "K000secretsecretsecretsecret",
+    bucket: "b",
+    region: "eu-central-003",
+    method: "GET",
+    objectKey: "k",
+    ttlSeconds: 60,
+    now: new Date("2026-03-15T12:00:00.000Z"),
+  };
+  const url = pure.buildB2PresignUrl(params);
+  // Date stamp in the credential string must reflect the `now` value.
+  assert.match(url, /X-Amz-Date=20260315T120000Z/);
+});
+
+test("isBlockedPreviewHost blocks bracketed IPv6 loopback [::1]", () => {
+  assert.equal(pure.isBlockedPreviewHost("[::1]"), true);
+});
+
+test("isBlockedPreviewHost treats edge 172.x boundary correctly", () => {
+  // 172.15.x and 172.32.x are public — only 172.16–31 are RFC-1918.
+  assert.equal(pure.isBlockedPreviewHost("172.15.255.255"), false);
+  assert.equal(pure.isBlockedPreviewHost("172.16.0.1"), true);
+  assert.equal(pure.isBlockedPreviewHost("172.31.255.255"), true);
+  assert.equal(pure.isBlockedPreviewHost("172.32.0.0"), false);
+});
+
+test("evaluateFixedWindow allows exactly `max` requests in a window", () => {
+  const windowMs = 60000;
+  const max = 5;
+  let rec;
+  for (let i = 1; i <= max; i++) {
+    const result = pure.evaluateFixedWindow(rec, i * 100, windowMs, max);
+    assert.equal(result.allowed, true, `request ${i} should be allowed`);
+    assert.equal(result.record.count, i);
+    rec = result.record;
+  }
+  // Request max+1 must be blocked.
+  const over = pure.evaluateFixedWindow(rec, (max + 1) * 100, windowMs, max);
+  assert.equal(over.allowed, false);
+  assert.equal(over.record.count, max); // record is unchanged when blocked
+});
+
+test("evaluateFixedWindow treats now exactly at windowStart + windowMs as a new window", () => {
+  const windowMs = 60000;
+  const max = 1;
+  // Fill the window.
+  const first = pure.evaluateFixedWindow(undefined, 0, windowMs, max).record;
+  // Exactly at the boundary (elapsed === windowMs) should open a fresh window.
+  const boundary = pure.evaluateFixedWindow(first, windowMs, windowMs, max);
+  assert.equal(boundary.allowed, true);
+  assert.deepEqual(boundary.record, { count: 1, windowStart: windowMs });
+});
+
+test("getCookie returns empty string when name is not present but header is non-empty", () => {
+  const header = "a=1; b=2; c=3";
+  assert.equal(pure.getCookie(header, "d"), "");
+  assert.equal(pure.getCookie(header, ""), "");
+});
+
+test("getCookie handles a cookie value that contains encoded equals signs", () => {
+  // Values may contain %3D (encoded '=').
+  const header = "token=abc%3Ddef";
+  assert.equal(pure.getCookie(header, "token"), "abc=def");
+});
+
+test("notificationBody returns fallback for unknown type strings", () => {
+  assert.equal(pure.notificationBody({ type: "file" }), "New encrypted message");
+  assert.equal(pure.notificationBody({ type: "" }), "New encrypted message");
+  assert.equal(pure.notificationBody({ type: 42 }), "New encrypted message");
+});
+
+test("validAdminUid rejects UIDs with other control characters", () => {
+  assert.equal(pure.validAdminUid("a\tb"), false);   // tab (0x09)
+  assert.equal(pure.validAdminUid("a\rb"), false);   // carriage return (0x0d)
+  assert.equal(pure.validAdminUid("a\u001fb"), false); // unit separator (0x1f)
+});
+
+test("safeTokenEqual handles empty strings consistently", () => {
+  assert.equal(pure.safeTokenEqual("", ""), true);
+  assert.equal(pure.safeTokenEqual("", "x"), false);
+  assert.equal(pure.safeTokenEqual("x", ""), false);
+});
