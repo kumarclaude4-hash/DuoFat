@@ -729,14 +729,26 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 let TOKEN = "";
 
 function unlock() {
-  const t = document.getElementById("tokenInput").value.trim();
-  if (!t) return;
+  const input = document.getElementById("tokenInput");
+  const btn   = document.getElementById("unlockBtn");
+  // Try .value first; fall back to defaultValue for browsers where autofill
+  // populates the visual but not the live .value until the user interacts.
+  const t = (input.value || input.defaultValue || "").trim();
+  const errEl = document.getElementById("gateErr");
+  if (!t) {
+    errEl.textContent = "Tap the token field first, then press Unlock.";
+    input.focus();
+    return;
+  }
+  errEl.textContent = "";
+  btn.disabled = true;
+  btn.textContent = "Unlocking…";
   TOKEN = t;
-  document.getElementById("gateErr").textContent = "";
   // Show the app immediately — if the token is wrong every panel's 401
   // handler will push the user back to the gate automatically.
   showApp();
-  resetInactivityTimer();
+  btn.disabled = false;
+  btn.textContent = "Unlock";
   loadWaitlist();
   loadLocked();
   loadDuressEnrolled();
