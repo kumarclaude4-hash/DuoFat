@@ -4,7 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:background="#000000">
+    android:background="@color/ds_background">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -21,7 +21,7 @@
             android:layout_height="48dp"
             android:src="@drawable/ic_arrow_back"
             android:background="?attr/selectableItemBackgroundBorderless"
-            app:tint="#FFFFFF"
+            app:tint="@color/ds_text_primary"
             android:contentDescription="Back"
             android:layout_marginStart="-8dp"
             android:layout_marginBottom="8dp" />
@@ -35,7 +35,7 @@
             android:textSize="28sp"
             android:textStyle="bold"
             android:fontFamily="sans-serif-medium"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/ds_text_primary"
             android:layout_marginBottom="12dp" />
 
         <!-- Description card -->
@@ -43,7 +43,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:background="#111111"
+            android:background="@color/ds_surface"
             android:padding="16dp"
             android:layout_marginBottom="20dp">
 
@@ -60,14 +60,15 @@
                     android:text="Recovery Phrase"
                     android:textSize="15sp"
                     android:textStyle="bold"
-                    android:textColor="#FFFFFF"
+                    android:textColor="@color/ds_text_primary"
                     android:layout_weight="1" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🔒"
-                    android:textSize="18sp" />
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:src="@drawable/ic_lock"
+                    app:tint="@color/ds_accent"
+                    android:contentDescription="Secured" />
             </LinearLayout>
 
             <TextView
@@ -75,7 +76,7 @@
                 android:layout_height="wrap_content"
                 android:text="Use your recovery phrase to load your account on new devices."
                 android:textSize="14sp"
-                android:textColor="#CCCCCC"
+                android:textColor="@color/ds_text_secondary"
                 android:lineSpacingMultiplier="1.4"
                 android:layout_marginBottom="10dp" />
 
@@ -84,7 +85,7 @@
                 android:layout_height="wrap_content"
                 android:text="Your account cannot be recovered without your recovery phrase. Make sure it&#8217;s stored somewhere safe and secure — and don&#8217;t share it with anyone."
                 android:textSize="14sp"
-                android:textColor="#CCCCCC"
+                android:textColor="@color/ds_text_secondary"
                 android:lineSpacingMultiplier="1.4" />
 
         </LinearLayout>
@@ -95,7 +96,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:background="#111111"
+            android:background="@color/ds_surface"
             android:padding="16dp"
             android:layout_marginBottom="16dp">
 
@@ -109,7 +110,9 @@
 
         </LinearLayout>
 
-        <!-- Copy / QR buttons row -->
+        <!-- QR button -->
+        <!-- Copy-to-clipboard is intentionally NOT offered: the mnemonic must
+             never touch the system clipboard. Transfer to a new device via QR. -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -117,29 +120,14 @@
             android:layout_marginBottom="20dp">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnCopyPhrase"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_weight="1"
-                android:text="Copy"
-                android:textColor="#FFFFFF"
-                android:textAllCaps="false"
-                android:backgroundTint="#00000000"
-                app:strokeColor="#444444"
-                app:strokeWidth="1dp"
-                app:cornerRadius="22dp"
-                android:layout_marginEnd="8dp" />
-
-            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnViewQr"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="44dp"
-                android:layout_weight="1"
                 android:text="View QR"
-                android:textColor="#FFFFFF"
+                android:textColor="@color/ds_text_primary"
                 android:textAllCaps="false"
                 android:backgroundTint="#00000000"
-                app:strokeColor="#444444"
+                app:strokeColor="@color/ds_divider"
                 app:strokeWidth="1dp"
                 app:cornerRadius="22dp" />
 
@@ -151,7 +139,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:background="#111111"
+            android:background="@color/ds_surface"
             android:padding="16dp"
             android:layout_marginBottom="24dp">
 
@@ -167,7 +155,7 @@
                     android:text="Hide Recovery Phrase"
                     android:textSize="15sp"
                     android:textStyle="bold"
-                    android:textColor="#FFFFFF"
+                    android:textColor="@color/ds_text_primary"
                     android:layout_marginBottom="4dp" />
 
                 <TextView
@@ -175,7 +163,7 @@
                     android:layout_height="wrap_content"
                     android:text="Hide the words from view. Tap again to show them."
                     android:textSize="13sp"
-                    android:textColor="#888888"
+                    android:textColor="@color/ds_text_secondary"
                     android:lineSpacingMultiplier="1.3" />
             </LinearLayout>
 
@@ -184,10 +172,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
                 android:text="Hide"
-                android:textColor="#FF4444"
+                android:textColor="@color/ds_danger"
                 android:textAllCaps="false"
                 android:backgroundTint="#00000000"
-                app:strokeColor="#FF4444"
+                app:strokeColor="@color/ds_danger"
                 app:strokeWidth="1dp"
                 app:cornerRadius="18dp"
                 android:layout_marginStart="12dp" />
@@ -200,9 +188,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="I&#8217;ve saved my recovery phrase"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/ds_text_primary"
             android:textSize="15sp"
-            android:buttonTint="#9A81FF"
+            android:buttonTint="@color/ds_accent"
             android:layout_marginBottom="20dp" />
 
         <!-- Progress -->
@@ -212,33 +200,33 @@
             android:layout_height="wrap_content"
             android:indeterminate="true"
             android:visibility="gone"
-            app:indicatorColor="#9A81FF"
-            app:trackColor="#2D2938"
+            app:indicatorColor="@color/ds_accent"
+            app:trackColor="@color/ds_surface_2"
             android:layout_marginBottom="8dp" />
 
         <TextView
             android:id="@+id/tvStep"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="#888888"
+            android:textColor="@color/ds_text_secondary"
             android:textSize="13sp"
             android:textAlignment="center"
             android:visibility="gone"
             android:layout_marginBottom="16dp" />
 
-        <!-- Continue (pill, outline green) -->
+        <!-- Continue (pill, outline accent) -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnContinue"
             android:layout_width="match_parent"
             android:layout_height="56dp"
             android:text="Continue"
-            android:textColor="#9A81FF"
+            android:textColor="@color/ds_accent"
             android:textSize="16sp"
             android:fontFamily="sans-serif-medium"
             android:textAllCaps="false"
             android:enabled="false"
             android:backgroundTint="#00000000"
-            app:strokeColor="#9A81FF"
+            app:strokeColor="@color/ds_accent"
             app:strokeWidth="1.5dp"
             app:cornerRadius="28dp" />
 
