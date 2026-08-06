@@ -71,7 +71,9 @@ Required environment variables for the server (set on Render for production):
 
 `https://duofat.onrender.com/admin` — waitlist approval, account unfreeze, and duress-PIN
 enrollment, gated by the `ADMIN_TOKEN` env var (set directly on Render, not in the APK).
-Enter the token once; it's kept in page memory only, never persisted. Panels:
+The unlock form is a native POST to `/admin/login`; on success the server sets a
+30-minute, sliding, HttpOnly admin-session cookie. The token is never placed in
+page JavaScript, local storage, or a URL. Panels:
 - **Pending waitlist requests** — approve a request id so that user can create an account
 - **Locked accounts** — unfreeze an account by deleting its `accountLock/{uid}` doc
 - **Duress PIN enrollment** — search an account by UID (`GET /admin/api/account/lookup`
