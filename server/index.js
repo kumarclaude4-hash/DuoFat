@@ -661,8 +661,10 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   <div class="gate" id="gate">
     <h1>DuoShield Admin</h1>
     <div class="sub">Enter the operator token to continue</div>
-    <input type="password" id="tokenInput" placeholder="Admin token" autofocus>
-    <button id="unlockBtn">Unlock</button>
+    <form id="gateForm" onsubmit="return handleUnlock(event)">
+      <input type="password" id="tokenInput" placeholder="Admin token" autofocus autocomplete="current-password">
+      <button type="submit" id="unlockBtn">Unlock</button>
+    </form>
     <div class="err" id="gateErr"></div>
   </div>
 
@@ -728,24 +730,21 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 <script>
 let TOKEN = "";
 
-function unlock() {
+function handleUnlock(event) {
+  if (event) event.preventDefault();
   const input = document.getElementById("tokenInput");
   const btn   = document.getElementById("unlockBtn");
-  // Try .value first; fall back to defaultValue for browsers where autofill
-  // populates the visual but not the live .value until the user interacts.
-  const t = (input.value || input.defaultValue || "").trim();
   const errEl = document.getElementById("gateErr");
+  const t = (input.value || input.defaultValue || "").trim();
   if (!t) {
-    errEl.textContent = "Tap the token field first, then press Unlock.";
+    errEl.textContent = "Enter the admin token first.";
     input.focus();
-    return;
+    return false;
   }
   errEl.textContent = "";
   btn.disabled = true;
   btn.textContent = "Unlocking…";
   TOKEN = t;
-  // Show the app immediately — if the token is wrong every panel's 401
-  // handler will push the user back to the gate automatically.
   showApp();
   btn.disabled = false;
   btn.textContent = "Unlock";
@@ -753,6 +752,7 @@ function unlock() {
   loadLocked();
   loadDuressEnrolled();
   loadAuditLog();
+  return false;
 }
 
 function toast(msg) {
@@ -1062,9 +1062,8 @@ function forceLogout() {
   }, { passive: true });
 });
 
-document.getElementById("unlockBtn").addEventListener("click", unlock);
 document.getElementById("tokenInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") unlock();
+  if (e.key === "Enter") handleUnlock(null);
 });
 </script>
 </body>
@@ -2002,7 +2001,12 @@ http.createServer((req, res) => {
   // embedded in the page itself, only the fetch calls it makes to
   // /admin/api/* carry the token, so serving this without auth is safe.
   if (req.method === "GET" && req.url === "/admin") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    });
     res.end(ADMIN_PAGE_HTML);
     return;
   }
