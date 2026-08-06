@@ -343,9 +343,17 @@ db.collection("calls").onSnapshot(
 const mintCooldown = new Map();
 
 // ── Waitlist request-access rate limit (separate from mintToken's IP bucket) ──
+// /requestAccess creation bucket: strict — only 5 submissions per IP per 15 min.
 const WAITLIST_IP_WINDOW_MS = 15 * 60 * 1000;
 const WAITLIST_IP_MAX_HITS  = 5;
 const waitlistIpHits = new Map();
+// /waitlistStatus polling bucket: permissive — the poll happens every few
+// minutes and must not drain the creation bucket.  Kept separate so a user
+// who polls their own status cannot accidentally lock themselves out of
+// /requestAccess.  60 hits / 15 min ≈ one poll every 15 seconds.
+const WAITLIST_POLL_WINDOW_MS = 15 * 60 * 1000;
+const WAITLIST_POLL_MAX_HITS  = 60;
+const waitlistPollHits = new Map();
 
 setInterval(() => {
   const cutoff = Date.now() - WAITLIST_IP_WINDOW_MS;
@@ -362,6 +370,18 @@ function checkWaitlistIpRateLimit(ip) {
     return true;
   }
   if (rec.count >= WAITLIST_IP_MAX_HITS) return false;
+  rec.count++;
+  return true;
+}
+
+function checkWaitlistPollRateLimit(ip) {
+  const now = Date.now();
+  const rec = waitlistPollHits.get(ip);
+  if (!rec || now - rec.windowStart >= WAITLIST_POLL_WINDOW_MS) {
+    waitlistPollHits.set(ip, { count: 1, windowStart: now });
+    return true;
+  }
+  if (rec.count >= WAITLIST_POLL_MAX_HITS) return false;
   rec.count++;
   return true;
 }
@@ -387,14 +407,18 @@ setInterval(() => {
 // server-mediated endpoints.  Each endpoint has its own per-minute bucket.
 const AUTH_RATE_WINDOW_MS = 60_000;
 const AUTH_RATE_LIMITS = {
-  b2PresignedPut:  30,   // 30 PUT presigns / min per user
-  b2PresignedGet:  60,   // 60 GET presigns / min per user
-  b2Delete:        10,   // 10 deletes / min per user
-  createChat:      10,   // 10 chat creations / min per user
-  migrateUid:       2,   //  2 migrations / min per user
-  turnCredentials: 20,   // 20 TURN fetches / min per user
-  removeGroupMember: 20, // 20 removals / min per user
-  linkPreview:     30,   // 30 link previews / min per user
+  b2PresignedPut:    30,   // 30 PUT presigns / min per user
+  b2PresignedGet:    60,   // 60 GET presigns / min per user
+  b2Delete:          10,   // 10 deletes / min per user
+  createChat:        10,   // 10 chat creations / min per user
+  migrateUid:         2,   //  2 migrations / min per user
+  turnCredentials:   20,   // 20 TURN fetches / min per user
+  removeGroupMember: 20,   // 20 removals / min per user
+  linkPreview:       30,   // 30 link previews / min per user
+  // Duress-lock nonce: very low limit — issuing a nonce writes a Firestore doc
+  // and is never needed more than once per session.  Without this entry the
+  // fallback default of 30/min would allow 30 Firestore writes/min per user.
+  requestLockNonce:   3,   //  3 nonce requests / min per user
 };
 const authRateLimits = new Map(); // uid → { counts: {ep: n}, windowStart }
 
@@ -539,8 +563,16 @@ process.on("uncaughtException", (err) => {
 });
 
 function getClientIp(req) {
+  // Use the RIGHTMOST entry in X-Forwarded-For — the one appended by the
+  // trusted terminating proxy (Render). The leftmost entries are client-
+  // controlled and trivially spoofable; trusting them would let any attacker
+  // bypass every IP-based rate limit and the admin lockout by forging:
+  //   X-Forwarded-For: 1.2.3.4
   const forwarded = req.headers["x-forwarded-for"];
-  if (forwarded) return forwarded.split(",")[0].trim();
+  if (forwarded) {
+    const entries = forwarded.split(",");
+    return entries[entries.length - 1].trim() || req.socket.remoteAddress || "unknown";
+  }
   return req.socket.remoteAddress || "unknown";
 }
 
@@ -804,7 +836,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </div>
   </main>
 
-<script>
+<script nonce="__SCRIPT_NONCE__">
 let TOKEN = "";
 let sessionActive = false;
 
@@ -1227,12 +1259,17 @@ const CSP_API = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
 const CSP_DASHBOARD =
   "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; " +
   "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-// The admin panel (GET /admin) has an inline <script>/<style> shell that fetches
-// same-origin /admin/api/* and posts the native login form to /admin/login.
-const CSP_ADMIN =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src 'self' data:; connect-src 'self'; form-action 'self'; " +
-  "base-uri 'none'; frame-ancestors 'none'";
+// The admin panel (GET /admin) has a single inline <script> block.  We generate
+// a fresh 128-bit random nonce on every request and embed it into both the
+// <script nonce="…"> attribute and the CSP header.  This completely replaces
+// 'unsafe-inline' so injected <script> tags without the nonce are blocked.
+function buildAdminCsp(nonce) {
+  return (
+    `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; ` +
+    "img-src 'self' data:; connect-src 'self'; form-action 'self'; " +
+    "base-uri 'none'; frame-ancestors 'none'"
+  );
+}
 
 function setBaselineSecurityHeaders(req, res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1442,7 +1479,9 @@ http.createServer((req, res) => {
     (async () => {
       try {
         const clientIp = getClientIp(req);
-        if (!checkWaitlistIpRateLimit(clientIp)) {
+        // Use the dedicated poll bucket (60 hits / 15 min) so polling does
+        // not drain the stricter /requestAccess creation bucket.
+        if (!checkWaitlistPollRateLimit(clientIp)) {
           res.writeHead(429, { "Content-Type": "text/plain" });
           res.end("Too many requests from this IP — wait 15 min and retry");
           return;
@@ -1490,9 +1529,7 @@ http.createServer((req, res) => {
   //   • Rate-limited: one call per userId per 60 s.
   //
   if (req.method === "POST" && req.url === "/migrateUid") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         const authHeader = req.headers["authorization"] || "";
         const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
@@ -1679,14 +1716,12 @@ http.createServer((req, res) => {
   //   • Verifies both UIDs exist in identities/{uid} (registered DuoShield accounts).
   //   • Uses set({ merge: true }) so both sides can call this independently and the
   //     result is idempotent (both writes converge on the same chatId doc).
-  //   • chatId = SHA-256(lex-smaller uid + "/" + lex-larger uid) — same logic as client.
+  //   • chatId = SHA-256(lex-smaller uid + "/" + lex-larger uid) �� same logic as client.
   //   • Admin SDK bypasses Firestore client rules; the client-side create rule is
   //     set to deny, so only this server path can create chat docs (F6 fix).
   //
   if (req.method === "POST" && req.url === "/createChat") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
+    collectBody(req, res, async (body) => {
       try {
         // Verify Firebase ID token from Authorization header
         const authHeader = req.headers["authorization"] || "";
@@ -1868,7 +1903,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── GET / — live HTML dashboard ───────────────────────────────────────────────
+  // ── GET / — live HTML dashboard ──────────���────────────────────────────────────
   if ((req.method === "GET" || req.method === "HEAD") && (parsedUrl === "/" || parsedUrl === "")) {
     const uptime  = Math.floor(process.uptime());
     const hours   = Math.floor(uptime / 3600);
@@ -2003,8 +2038,21 @@ http.createServer((req, res) => {
                      || html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
             const ogI = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']{4,500})["']/i)
                      || html.match(/<meta[^>]+content=["']([^"']{4,500})["'][^>]+property=["']og:image["']/i);
-            if (ogT) preview.title    = ogT[1].trim().replace(/\s+/g, " ");
-            if (ogI) preview.imageUrl = ogI[1].trim();
+            if (ogT) preview.title = ogT[1].trim().replace(/\s+/g, " ");
+            if (ogI) {
+              // Validate the extracted URL before returning it to the client.
+              // A malicious page could set og:image to a javascript:, data:, or
+              // internal-network URL — reject anything that isn't http(s):.
+              const rawImageUrl = ogI[1].trim();
+              try {
+                const imageUrlParsed = new URL(rawImageUrl, targetUrl); // resolve relative URLs
+                if (["http:", "https:"].includes(imageUrlParsed.protocol)) {
+                  preview.imageUrl = imageUrlParsed.href;
+                }
+              } catch {
+                // Malformed image URL — silently omit it.
+              }
+            }
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(preview));
@@ -2264,14 +2312,21 @@ http.createServer((req, res) => {
 
   if (req.method === "GET" && requestPath === "/admin") {
     const authenticated = hasValidAdminSession(req);
+    // Generate a fresh 128-bit nonce for each response so the inline <script>
+    // tag is the only code the browser will execute (blocks injected scripts).
+    const nonce = crypto.randomBytes(16).toString("base64");
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": CSP_ADMIN,
+      "Content-Security-Policy": buildAdminCsp(nonce),
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "Pragma": "no-cache",
       "Expires": "0",
     });
-    res.end(ADMIN_PAGE_HTML.replace("__ADMIN_AUTHENTICATED__", String(authenticated)));
+    res.end(
+      ADMIN_PAGE_HTML
+        .replace("__ADMIN_AUTHENTICATED__", String(authenticated))
+        .replace("__SCRIPT_NONCE__", nonce)
+    );
     return;
   }
 
