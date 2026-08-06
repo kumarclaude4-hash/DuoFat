@@ -388,8 +388,8 @@ function checkWaitlistPollRateLimit(ip) {
 
 // ── Per-IP rate limit ─────────────────────────────────────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
-// Render (and most reverse proxies) sets X-Forwarded-For; we take the first
-// (leftmost) entry which is the original client IP.
+// Render appends its own entry to X-Forwarded-For; we use the RIGHTMOST value
+// (proxy-appended, not client-controlled) via getClientIp(). See CRIT-1 fix.
 const IP_WINDOW_MS  = 15 * 60 * 1000; // 15 minutes
 const IP_MAX_HITS   = 5;
 const ipHits = new Map(); // ip → { count, windowStart }
@@ -1810,8 +1810,9 @@ http.createServer((req, res) => {
   // TURN_TOKEN_ID and TURN_API_TOKEN never leave the server.
   //
   if (req.method === "POST" && req.url === "/turnCredentials") {
-    req.on("data", () => {}); // drain body (unused)
-    req.on("end", async () => {
+    // collectBody enforces MAX_BODY_BYTES on the drained (unused) body — the
+    // raw req.on("data")/req.on("end") pattern skips the size guard entirely.
+    collectBody(req, res, async () => {
       try {
         // ── Auth ────────────────────────────────────────────────────────────
         const authHeader = req.headers["authorization"] || "";
@@ -2038,7 +2039,22 @@ http.createServer((req, res) => {
                      || html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
             const ogI = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']{4,500})["']/i)
                      || html.match(/<meta[^>]+content=["']([^"']{4,500})["'][^>]+property=["']og:image["']/i);
-            if (ogT) preview.title = ogT[1].trim().replace(/\s+/g, " ");
+            if (ogT) {
+              // Decode the most common HTML entities that appear in <title> and
+              // og:title content (&amp; &lt; &gt; &quot; &#39; &#NNN; &#xHHH;).
+              // Without this, "BBC News &amp; Sport" is returned verbatim and
+              // displayed as literal ampersand-entities to the user.
+              const rawTitle = ogT[1].trim().replace(/\s+/g, " ");
+              preview.title = rawTitle
+                .replace(/&amp;/gi,  "&")
+                .replace(/&lt;/gi,   "<")
+                .replace(/&gt;/gi,   ">")
+                .replace(/&quot;/gi, '"')
+                .replace(/&#39;/gi,  "'")
+                .replace(/&apos;/gi, "'")
+                .replace(/&#(\d{1,5});/g,   (_, dec) => String.fromCodePoint(parseInt(dec,  10)))
+                .replace(/&#x([0-9a-f]{1,5});/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+            }
             if (ogI) {
               // Validate the extracted URL before returning it to the client.
               // A malicious page could set og:image to a javascript:, data:, or
@@ -2124,8 +2140,10 @@ http.createServer((req, res) => {
   // first successful /duress-lock call — so a leaked nonce cannot replay.
   //
   if (req.method === "POST" && req.url === "/requestLockNonce") {
-    req.on("data", () => {}); // body unused
-    req.on("end", async () => {
+    // collectBody enforces MAX_BODY_BYTES even though the body is unused here —
+    // the bare req.on("data")/req.on("end") drain pattern bypasses the size
+    // guard and allowed an unbounded POST body to stream through unchecked.
+    collectBody(req, res, async () => {
       try {
         const authHeader = req.headers["authorization"] || "";
         const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;

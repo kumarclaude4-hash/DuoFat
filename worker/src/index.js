@@ -73,13 +73,29 @@ function corsHeaders() {
 // that forgot to set the secret silently exposed every user's media with
 // zero authentication. Local dev should set a throwaway WORKER_SECRET via
 // `.dev.vars` / `wrangler secret put` rather than relying on an open mode.)
-function isAuthorized(request, env) {
+async function isAuthorized(request, env) {
   if (!env.WORKER_SECRET) {
     console.error('WORKER_SECRET is not configured — denying all requests (fail closed)');
     return false;
   }
-  const auth = request.headers.get('Authorization') ?? '';
-  return auth === `Bearer ${env.WORKER_SECRET}`;
+  const supplied = request.headers.get('Authorization') ?? '';
+  const expected = `Bearer ${env.WORKER_SECRET}`;
+  // Use constant-time comparison to prevent timing-oracle attacks that could
+  // recover the secret byte-by-byte. JS string === short-circuits on the first
+  // differing character, leaking secret length and content via response time.
+  const enc = new TextEncoder();
+  const a = enc.encode(supplied);
+  const b = enc.encode(expected);
+  // Lengths must be equal first; if they differ we still do a dummy comparison
+  // on identically-sized buffers to avoid leaking the expected length.
+  if (a.byteLength !== b.byteLength) {
+    // Compare against itself so the timing is the same regardless of the
+    // supplied length — no short-circuit possible.
+    await crypto.subtle.digest('SHA-256', a); // consume time
+    return false;
+  }
+  const match = await crypto.subtle.timingSafeEqual(a, b);
+  return match;
 }
 
 // ─── KV helpers ───────────────────────────────────────────────────────────────
@@ -137,15 +153,33 @@ async function checkDailyRequestLimit(env) {
 // KV-based rate limiting is ineffective on the free tier anyway (KV writes have
 // ~60s eventual consistency, making cross-PoP enforcement impossible without
 // Durable Objects, which require a paid plan).
+//
+// The bucket key is derived from a SHA-256 truncation of the Authorization
+// header value, NOT from the client-supplied X-Client-ID header.
+// Using X-Client-ID let any client:
+//   (a) bypass the limit by cycling through arbitrary header values, or
+//   (b) exhaust another client's quota by sending that client's known ID.
+// The credential hash is non-spoofable (only the authorized app knows the
+// WORKER_SECRET) and stable within a session.
 const perUserCounts = new Map();
 
-function checkPerUserRateLimit(request, env) {
+async function credentialBucketKey(request) {
+  const auth = request.headers.get('Authorization') ?? 'anon';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(auth));
+  // Take the first 8 bytes (64 bits) as a hex string — enough entropy for
+  // bucket identity, short enough to avoid memory blowup in the Map.
+  return Array.from(new Uint8Array(hash).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function checkPerUserRateLimit(request, env) {
   const limit     = rateLimit(env);
-  const clientId  = request.headers.get('X-Client-ID') || 'anon';
-  const minuteKey = `${clientId}:${Math.floor(Date.now() / 60_000)}`;
+  const bucketId  = await credentialBucketKey(request);
+  const minuteKey = `${bucketId}:${Math.floor(Date.now() / 60_000)}`;
   const count     = perUserCounts.get(minuteKey) ?? 0;
   if (count >= limit) {
-    return json({ error: `Rate limit exceeded (${limit} req/min per client-id)` }, 429);
+    return json({ error: `Rate limit exceeded (${limit} req/min)` }, 429);
   }
   perUserCounts.set(minuteKey, count + 1);
   // Prune stale minute buckets to prevent unbounded memory growth within the isolate.
@@ -226,7 +260,7 @@ export default {
     }
 
     // ── Authentication — required for every endpoint below ────────────────────
-    if (!isAuthorized(request, env)) {
+    if (!await isAuthorized(request, env)) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status:  401,
         headers: { 'Content-Type': 'application/json', ...corsHeaders() },
@@ -271,7 +305,7 @@ export default {
     if (dailyLimited) return dailyLimited;
 
     // ── Per-isolate rate limit ────────────────────────────────────────────────
-    const rateLimited = checkPerUserRateLimit(request, env);
+    const rateLimited = await checkPerUserRateLimit(request, env);
     if (rateLimited) return rateLimited;
 
     // Object key: everything after the leading slash.
@@ -403,13 +437,19 @@ export default {
         // File is not in R2 → it must have been migrated to B2 (cold tier).
         // B2 counter is reconciled nightly by the cron — no KV write here.
         const b2 = getB2Client(env);
+        let delResp;
         try {
-          const delResp = await b2.fetch(b2Url(env, key), { method: 'DELETE' });
-          if (!delResp.ok && delResp.status !== 404) {
-            console.warn(`B2 delete non-OK for ${key}: ${delResp.status}`);
-          }
+          delResp = await b2.fetch(b2Url(env, key), { method: 'DELETE' });
         } catch (err) {
-          console.error(`B2 delete error for ${key}: ${err.message}`);
+          console.error(`B2 delete network error for ${key}: ${err.message}`);
+          // Surface the failure — returning a false 200 here would tell the
+          // Android client the file is gone when it isn't, making it
+          // impossible to retry and leaving orphaned cold-tier objects forever.
+          return json({ error: 'B2 delete failed (network error)', key }, 502);
+        }
+        if (!delResp.ok && delResp.status !== 404) {
+          console.warn(`B2 delete non-OK for ${key}: ${delResp.status}`);
+          return json({ error: 'B2 delete failed', status: delResp.status, key }, 502);
         }
       }
 
