@@ -354,16 +354,18 @@ export default {
       return json({ status: 'ok', service: 'duoshield-storage' });
     }
 
-    // ── Authentication — required for every endpoint below ────────────────────
-    if (!await isAuthorized(request, env)) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status:  401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders() },
-      });
-    }
-
-    // ── Stats endpoint (authenticated admin view) ─────────────────────────────
+    // ── Stats endpoint (admin view) — gated by the shared WORKER_SECRET ───────
+    // /stats is an operator-only view, not a per-user object operation, so it
+    // keeps the shared-secret bearer check. The data plane (GET/PUT/DELETE on an
+    // object key) does NOT use this secret — it requires a per-object capability
+    // token (verifyMediaToken) minted by the push server. See SEC-A01 below.
     if (url.pathname === '/stats') {
+      if (!await isAuthorized(request, env)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status:  401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      }
       const [r2Raw, b2Raw, reqRaw] = await Promise.all([
         kvGet(env, 'global:storage:r2'),
         kvGet(env, 'global:storage:b2'),
@@ -395,14 +397,6 @@ export default {
       });
     }
 
-    // ── Daily request gate ────────────────────────────────────────────────────
-    const dailyLimited = await checkDailyRequestLimit(env);
-    if (dailyLimited) return dailyLimited;
-
-    // ── Per-isolate rate limit ────────────────────────────────────────────────
-    const rateLimited = await checkPerUserRateLimit(request, env);
-    if (rateLimited) return rateLimited;
-
     // Object key: everything after the leading slash.
     // DuoShield paths: media/<chatId|groupId>/<uuid>.<ext> | voice/<chatId|groupId>/<uuid>.<ext>
     const key = decodeURIComponent(url.pathname.slice(1));
@@ -416,6 +410,30 @@ export default {
     if (!KEY_FORMAT.test(key)) {
       return json({ error: 'Invalid file key format' }, 400);
     }
+
+    // ── Per-object authorization (SEC-A01) ────────────────────────────────────
+    // The data plane is authorized per object, not by a shared secret. The client
+    // must present a capability token minted by the push server's POST /mediaToken
+    // — bound to exactly this key, this HTTP verb, this user and a short expiry —
+    // which the server only issues after confirming the caller participates in the
+    // chat/group named by the key's middle segment. A token stolen for one object
+    // or verb grants nothing anywhere else.
+    //
+    // This runs BEFORE the quota/rate-limit gates below so that an unauthenticated
+    // flood is rejected cheaply and can never consume the global daily request
+    // budget (which would otherwise be a cost/DoS lever available to anyone).
+    const cap = await verifyMediaToken(request, env, key);
+    if (!cap.ok) {
+      return json({ error: cap.error }, cap.status);
+    }
+
+    // ── Daily request gate ────────────────────────────────────────────────────
+    const dailyLimited = await checkDailyRequestLimit(env);
+    if (dailyLimited) return dailyLimited;
+
+    // ── Per-isolate rate limit ────────────────────────────────────────────────
+    const rateLimited = await checkPerUserRateLimit(request, env);
+    if (rateLimited) return rateLimited;
 
     // ── UPLOAD ────────────────────────────────────────────────────────────────
     if (request.method === 'PUT') {

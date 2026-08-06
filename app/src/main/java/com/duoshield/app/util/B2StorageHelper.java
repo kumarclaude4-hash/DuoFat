@@ -94,12 +94,12 @@ public final class B2StorageHelper {
         return w.endsWith("/") ? w.substring(0, w.length() - 1) : w;
     }
     /**
-     * Returns the shared auth token for the Cloudflare Worker, or empty string if not set.
-     * Every Worker request includes {@code Authorization: Bearer <token>}.
+     * SEC-A01: the shared {@code WORKER_SECRET} is no longer used to authorize the
+     * media data plane. GET/PUT/DELETE now carry a per-object capability token
+     * minted by the push server ({@link #fetchMediaCapabilityToken}). The Worker
+     * only still accepts {@code WORKER_SECRET} on its operator-only {@code /stats}
+     * endpoint, which the app never calls.
      */
-    private static String getWorkerSecret() {
-        return BuildConfig.WORKER_SECRET == null ? "" : BuildConfig.WORKER_SECRET.trim();
-    }
     /** Returns the Firebase UID for the X-Client-ID rate-limit header, or "anon". */
     private static String getClientId() {
         com.google.firebase.auth.FirebaseUser user =
@@ -171,7 +171,7 @@ public final class B2StorageHelper {
 
     private B2StorageHelper() {}
 
-    // ── Retry infrastructure ──────────────────────────────────────────────────
+    // ── Retry infrastructure ────────────���─────────────────────────────────────
 
     /**
      * Thrown for HTTP 4xx responses — configuration errors that won't be fixed
@@ -1014,7 +1014,7 @@ public final class B2StorageHelper {
         });
     }
 
-    // ── AWS SigV4 helpers ─────────────────────────────────────────────────────
+    // ── AWS SigV4 helpers ──────────────────────────────────────────────���──────
 
     private static byte[] getSigningKey(String dateStamp, String region) throws Exception {
         byte[] kSecret  = ("AWS4" + getAppKey()).getBytes(StandardCharsets.UTF_8);
@@ -1157,17 +1157,19 @@ public final class B2StorageHelper {
             throws Exception {
         String url = getWorkerUrl() + "/" + objectKey;
         MediaType   mt   = MediaType.parse(contentType);
-        RequestBody rb   = new ProgressRequestBody(data, mt, cb);
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(url)
-                .put(rb)
-                .header("Content-Type",   contentType)
-                .header("Content-Length", String.valueOf(data.length))
-                .header("X-Client-ID",    getClientId());
-        String secret = getWorkerSecret();
-        if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
-        Request request = reqBuilder.build();
+        // SEC-A01: authorize this exact object+verb with a short-lived capability
+        // token from the push server instead of the shared WORKER_SECRET.
+        String capToken = fetchMediaCapabilityToken(objectKey, "write");
         return withRetry("worker-upload:" + objectKey, () -> {
+            RequestBody rb = new ProgressRequestBody(data, mt, cb);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .put(rb)
+                    .header("Content-Type",   contentType)
+                    .header("Content-Length", String.valueOf(data.length))
+                    .header("X-Client-ID",    getClientId())
+                    .header("Authorization",  "Bearer " + capToken)
+                    .build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200 || code == 201) {
@@ -1192,14 +1194,15 @@ public final class B2StorageHelper {
     private static byte[] downloadViaWorker(String b2Path) throws Exception {
         String objectKey = toObjectKey(b2Path);
         String url       = getWorkerUrl() + "/" + objectKey;
+        // SEC-A01: per-object read capability token (replaces shared WORKER_SECRET).
+        String capToken = fetchMediaCapabilityToken(objectKey, "read");
         return withRetry("worker-download:" + objectKey, () -> {
-            Request.Builder reqBuilder = new Request.Builder()
+            Request request = new Request.Builder()
                     .url(url)
                     .get()
-                    .header("X-Client-ID", getClientId());
-            String secret = getWorkerSecret();
-            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
-            Request request = reqBuilder.build();
+                    .header("X-Client-ID",   getClientId())
+                    .header("Authorization", "Bearer " + capToken)
+                    .build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200) {
@@ -1233,14 +1236,15 @@ public final class B2StorageHelper {
     private static void deleteViaWorker(String b2Path) throws Exception {
         String objectKey = toObjectKey(b2Path);
         String url       = getWorkerUrl() + "/" + objectKey;
+        // SEC-A01: per-object delete capability token (replaces shared WORKER_SECRET).
+        String capToken = fetchMediaCapabilityToken(objectKey, "delete");
         withRetry("worker-delete:" + objectKey, () -> {
-            Request.Builder reqBuilder = new Request.Builder()
+            Request request = new Request.Builder()
                     .url(url)
                     .delete()
-                    .header("X-Client-ID", getClientId());
-            String secret = getWorkerSecret();
-            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
-            Request request = reqBuilder.build();
+                    .header("X-Client-ID",   getClientId())
+                    .header("Authorization", "Bearer " + capToken)
+                    .build();
             try (Response response = HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200 || code == 204 || code == 404) {
@@ -1439,6 +1443,61 @@ public final class B2StorageHelper {
         return holder[0];
     }
 
+    /**
+     * Exchanges the caller's Firebase ID token for a short-lived, per-object
+     * capability token from the push server's {@code POST /mediaToken}.
+     *
+     * <p>SEC-A01: this token — not the old shared {@code WORKER_SECRET} — is the
+     * only credential the Cloudflare Worker accepts on the data plane. It is bound
+     * to exactly this {@code (objectKey, op)} pair with a short expiry, and the
+     * server only issues it after confirming the caller participates in the
+     * chat/group named by the key. The signing secret never ships in the APK, so
+     * decompiling the client yields nothing reusable and a captured token is
+     * useless beyond one object, one verb, and a few minutes.
+     *
+     * @param objectKey full storage key, e.g. {@code media/<chatId>/<uuid>.jpg}
+     * @param op        one of {@code "read"} (GET), {@code "write"} (PUT),
+     *                  {@code "delete"} (DELETE)
+     * @return the opaque capability token to send as {@code Authorization: Bearer <token>}
+     */
+    private static String fetchMediaCapabilityToken(String objectKey, String op) throws Exception {
+        String idToken = getIdTokenSync();
+        if (idToken == null) {
+            throw new NonRetryableException(401, "Not authenticated — cannot obtain media token");
+        }
+        org.json.JSONObject reqJson = new org.json.JSONObject();
+        reqJson.put("key", objectKey);
+        reqJson.put("op", op);
+        RequestBody body = RequestBody.create(
+                MediaType.parse("application/json; charset=utf-8"), reqJson.toString());
+        Request request = new Request.Builder()
+                .url(BuildConfig.PUSH_SERVER_URL + "/mediaToken")
+                .post(body)
+                .header("Authorization", "Bearer " + idToken)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .build();
+        try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+            int code = response.code();
+            ResponseBody rb = response.body();
+            String payload = rb != null ? rb.string() : "";
+            if (code != 200) {
+                // 4xx (not a participant, bad key, expired sign-in) won't be
+                // fixed by retrying — surface as non-retryable so the caller
+                // fails fast instead of hammering the server.
+                if (code >= 400 && code < 500) {
+                    throw new NonRetryableException(code,
+                            "mediaToken denied [" + code + "]: " + payload);
+                }
+                throw new IOException("mediaToken failed [" + code + "]: " + payload);
+            }
+            String token = new org.json.JSONObject(payload).optString("token", "");
+            if (token.isEmpty()) {
+                throw new IOException("mediaToken response missing token");
+            }
+            return token;
+        }
+    }
+
     private static byte[] hmacSha256(byte[] key, String data) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(key, "HmacSHA256"));
@@ -1589,15 +1648,16 @@ public final class B2StorageHelper {
             throws Exception {
         String url = getWorkerUrl() + "/" + objectKey;
         MediaType mt = MediaType.parse(contentType);
-        Request.Builder reqBuilder = new Request.Builder()
+        // SEC-A01: per-object write capability token (replaces shared WORKER_SECRET).
+        String capToken = fetchMediaCapabilityToken(objectKey, "write");
+        Request request = new Request.Builder()
                 .url(url)
                 .put(new FileRequestBody(encFile, mt, cb))
                 .header("Content-Type",   contentType)
                 .header("Content-Length", String.valueOf(encFile.length()))
-                .header("X-Client-ID",    getClientId());
-        String secret = getWorkerSecret();
-        if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
-        Request request = reqBuilder.build();
+                .header("X-Client-ID",    getClientId())
+                .header("Authorization",  "Bearer " + capToken)
+                .build();
 
         return withRetry("worker-stream:" + objectKey, () -> {
             try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
@@ -1746,14 +1806,15 @@ public final class B2StorageHelper {
     private static void downloadViaWorkerToDisk(String b2Path, File dest) throws Exception {
         String objectKey = toObjectKey(b2Path);
         String url       = getWorkerUrl() + "/" + objectKey;
+        // SEC-A01: per-object read capability token (replaces shared WORKER_SECRET).
+        String capToken = fetchMediaCapabilityToken(objectKey, "read");
         withRetry("worker-download-disk:" + objectKey, () -> {
-            Request.Builder reqBuilder = new Request.Builder()
+            Request request = new Request.Builder()
                     .url(url)
                     .get()
-                    .header("X-Client-ID", getClientId());
-            String secret = getWorkerSecret();
-            if (!secret.isEmpty()) reqBuilder.header("Authorization", "Bearer " + secret);
-            Request request = reqBuilder.build();
+                    .header("X-Client-ID",   getClientId())
+                    .header("Authorization", "Bearer " + capToken)
+                    .build();
             try (Response response = STREAMING_HTTP_CLIENT.newCall(request).execute()) {
                 int code = response.code();
                 if (code == 200) {
