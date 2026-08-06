@@ -434,6 +434,8 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_IP_MAX_FAILS = 10;
 const adminIpFails = new Map(); // ip → { count, windowStart }
+const ADMIN_SESSION_TTL_MS = 30 * 60 * 1000;
+const adminSessions = new Map(); // opaque session id → expiry timestamp
 
 setInterval(() => {
   const cutoff = Date.now() - ADMIN_IP_WINDOW_MS;
@@ -441,6 +443,13 @@ setInterval(() => {
     if (rec.windowStart < cutoff) adminIpFails.delete(ip);
   }
 }, 30 * 60 * 1000);
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, expiresAt] of adminSessions) {
+    if (expiresAt <= now) adminSessions.delete(sessionId);
+  }
+}, 5 * 60 * 1000);
 
 function adminIpLocked(ip) {
   const rec = adminIpFails.get(ip);
@@ -467,6 +476,36 @@ function safeTokenEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+function getCookie(req, name) {
+  const raw = req.headers.cookie || "";
+  for (const part of raw.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const key = part.slice(0, separator).trim();
+    if (key === name) return decodeURIComponent(part.slice(separator + 1).trim());
+  }
+  return "";
+}
+
+function createAdminSession() {
+  const sessionId = crypto.randomBytes(32).toString("hex");
+  adminSessions.set(sessionId, Date.now() + ADMIN_SESSION_TTL_MS);
+  return sessionId;
+}
+
+function hasValidAdminSession(req) {
+  const sessionId = getCookie(req, "duoshield_admin_session");
+  if (!sessionId) return false;
+  const expiresAt = adminSessions.get(sessionId);
+  if (!expiresAt || expiresAt <= Date.now()) {
+    adminSessions.delete(sessionId);
+    return false;
+  }
+  // Sliding expiry keeps an actively used admin panel open.
+  adminSessions.set(sessionId, Date.now() + ADMIN_SESSION_TTL_MS);
+  return true;
+}
+
 // Returns true and lets the caller proceed, or writes a 401/429/503 response
 // and returns false. Every admin/api route must call this first.
 function requireAdminAuth(req, res) {
@@ -483,7 +522,8 @@ function requireAdminAuth(req, res) {
     return false;
   }
   const supplied = req.headers["x-admin-token"] || "";
-  if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
+  const tokenValid = supplied && safeTokenEqual(supplied, ADMIN_TOKEN);
+  if (!tokenValid && !hasValidAdminSession(req)) {
     recordAdminAuthFailure(ip);
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Invalid admin token");
@@ -661,8 +701,8 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   <div class="gate" id="gate">
     <h1>DuoShield Admin</h1>
     <div class="sub">Enter the operator token to continue</div>
-    <form id="gateForm" onsubmit="return handleUnlock(event)">
-      <input type="password" id="tokenInput" placeholder="Admin token" autofocus autocomplete="current-password">
+    <form id="gateForm" action="/admin/login" method="post">
+      <input type="password" id="tokenInput" name="token" placeholder="Admin token" autofocus autocomplete="current-password">
       <button type="submit" id="unlockBtn">Unlock</button>
     </form>
     <div class="err" id="gateErr"></div>
@@ -729,31 +769,6 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 
 <script>
 let TOKEN = "";
-
-function handleUnlock(event) {
-  if (event) event.preventDefault();
-  const input = document.getElementById("tokenInput");
-  const btn   = document.getElementById("unlockBtn");
-  const errEl = document.getElementById("gateErr");
-  const t = (input.value || input.defaultValue || "").trim();
-  if (!t) {
-    errEl.textContent = "Enter the admin token first.";
-    input.focus();
-    return false;
-  }
-  errEl.textContent = "";
-  btn.disabled = true;
-  btn.textContent = "Unlocking…";
-  TOKEN = t;
-  showApp();
-  btn.disabled = false;
-  btn.textContent = "Unlock";
-  loadWaitlist();
-  loadLocked();
-  loadDuressEnrolled();
-  loadAuditLog();
-  return false;
-}
 
 function toast(msg) {
   const el = document.createElement("div");
@@ -1062,9 +1077,14 @@ function forceLogout() {
   }, { passive: true });
 });
 
-document.getElementById("tokenInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") handleUnlock(null);
-});
+const SESSION_AUTHENTICATED = __ADMIN_AUTHENTICATED__;
+if (SESSION_AUTHENTICATED) {
+  showApp();
+  loadWaitlist();
+  loadLocked();
+  loadDuressEnrolled();
+  loadAuditLog();
+}
 </script>
 </body>
 </html>
@@ -2004,14 +2024,54 @@ http.createServer((req, res) => {
   // proxies may append cache-busting parameters (for example /admin?_r=...);
   // comparing req.url to the exact string "/admin" otherwise returns Not found.
   const requestPath = new URL(req.url, "http://localhost").pathname;
+
+  // Native form login: this intentionally does not depend on client-side
+  // JavaScript, which can be skipped by mobile browsers when a password is
+  // autofilled. A successful token check becomes a short-lived HttpOnly
+  // session cookie, so the admin API can authenticate normal same-origin
+  // requests without exposing the token to page JavaScript.
+  if (req.method === "POST" && requestPath === "/admin/login") {
+    collectBody(req, res, (body) => {
+      const params = new URLSearchParams(body);
+      const supplied = (params.get("token") || "").trim();
+      const ip = getClientIp(req);
+      if (adminIpLocked(ip)) {
+        res.writeHead(429, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        res.end("Too many failed attempts — wait 15 min and retry");
+        return;
+      }
+      if (!ADMIN_TOKEN) {
+        console.error("admin login: ADMIN_TOKEN is not configured on the server");
+        res.writeHead(503, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        res.end("Admin panel not configured");
+        return;
+      }
+      if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
+        recordAdminAuthFailure(ip);
+        res.writeHead(401, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        res.end("Invalid admin token");
+        return;
+      }
+      const sessionId = createAdminSession();
+      res.writeHead(303, {
+        Location: "/admin",
+        "Cache-Control": "no-store",
+        "Set-Cookie": `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1000)}; HttpOnly; Secure; SameSite=Strict`,
+      });
+      res.end();
+    });
+    return;
+  }
+
   if (req.method === "GET" && requestPath === "/admin") {
+    const authenticated = hasValidAdminSession(req);
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "Pragma": "no-cache",
       "Expires": "0",
     });
-    res.end(ADMIN_PAGE_HTML);
+    res.end(ADMIN_PAGE_HTML.replace("__ADMIN_AUTHENTICATED__", String(authenticated)));
     return;
   }
 
