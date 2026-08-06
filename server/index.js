@@ -2000,7 +2000,11 @@ http.createServer((req, res) => {
   // Static HTML/JS shell for the operator admin panel — no server data is
   // embedded in the page itself, only the fetch calls it makes to
   // /admin/api/* carry the token, so serving this without auth is safe.
-  if (req.method === "GET" && req.url === "/admin") {
+  // Match /admin with or without a query string. Mobile browsers and reverse
+  // proxies may append cache-busting parameters (for example /admin?_r=...);
+  // comparing req.url to the exact string "/admin" otherwise returns Not found.
+  const requestPath = new URL(req.url, "http://localhost").pathname;
+  if (req.method === "GET" && requestPath === "/admin") {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store, no-cache, must-revalidate",
