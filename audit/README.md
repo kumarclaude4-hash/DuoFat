@@ -4,6 +4,21 @@ This folder is the **single source of truth** for the DuoShield security assessm
 It is written so that any security engineer can pick up the audit **cold** — with no
 prior conversation context — and continue exactly where the previous session stopped.
 
+---
+
+## START HERE (new engineer, cold start)
+
+1. **Read (≈15 min), in order:** `README.md` (this file) → `SESSION-00-RECON.md` → `ARCHITECTURE.md` → `ATTACK_SURFACE.md` → `AUDIT_PROGRESS.md`.
+2. **Internalize the threat model below.** Only server / Worker / Firestore-rule enforcement counts as a control; client-side checks never do.
+3. **Begin Session 01 — Firestore Authorization.** It is the first `NOT STARTED` row in `AUDIT_PROGRESS.md`.
+   - **Files:** `firestore.rules` (~392 lines) + `firestore-tests/rules.test.js` (read them together — the tests encode the intended contract).
+   - **Goal:** prove no authenticated attacker can abuse `create/read/update/delete` cross-user; then find rules the tests do *not* cover (gaps by omission).
+   - **Hotspots (from recon):** cross-user prekey / one-time-key writes, group-key substitution, presence-key diffing, `deletedForAll` gating, the `accountLock` latch, and the enumeration oracle at `firestore.rules:8` and `:253` (any authed user can read `users/{uid}` / `identities/{userId}` — rule whether that is an accepted trade-off).
+   - **Done when:** you create `SESSION-01-FIRESTORE.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 01 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
+4. **Caveat:** `docs/SECURITY_REVIEW_2026-08-04.md` items are marked *"claimed fixed — re-verify,"* not resolved. Do not trust that status for anything in your scope.
+
+---
+
 DuoShield is an end-to-end-encrypted Android messenger with a client-heavy design:
 all cryptography happens on-device and the server tier is intended to be a
 "zero-knowledge" relay that stores only ciphertext and metadata. That design shifts
