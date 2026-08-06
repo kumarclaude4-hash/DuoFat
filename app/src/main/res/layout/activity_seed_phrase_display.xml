@@ -126,7 +126,7 @@
                 android:text="View QR"
                 android:textColor="@color/ds_text_primary"
                 android:textAllCaps="false"
-                android:backgroundTint="#00000000"
+                android:backgroundTint="@color/transparent"
                 app:strokeColor="@color/ds_divider"
                 app:strokeWidth="1dp"
                 app:cornerRadius="22dp" />
@@ -174,7 +174,7 @@
                 android:text="Hide"
                 android:textColor="@color/ds_danger"
                 android:textAllCaps="false"
-                android:backgroundTint="#00000000"
+                android:backgroundTint="@color/transparent"
                 app:strokeColor="@color/ds_danger"
                 app:strokeWidth="1dp"
                 app:cornerRadius="18dp"
@@ -225,7 +225,7 @@
             android:fontFamily="sans-serif-medium"
             android:textAllCaps="false"
             android:enabled="false"
-            android:backgroundTint="#00000000"
+            android:backgroundTint="@color/transparent"
             app:strokeColor="@color/ds_accent"
             app:strokeWidth="1.5dp"
             app:cornerRadius="28dp" />
