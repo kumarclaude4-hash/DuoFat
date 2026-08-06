@@ -9,6 +9,18 @@
 B2_ACCESS_KEY_ID=
 B2_SECRET_ACCESS_KEY=
 
-# Shared auth token — must match the WORKER_SECRET GitHub / Replit secret
-# and the value set via `npx wrangler secret put WORKER_SECRET` in the dashboard.
+# Operator-only /stats auth token. NO LONGER used for the media data plane —
+# GET/PUT/DELETE now require a per-object capability token (see MEDIA_TOKEN_SECRET).
+# Must match the WORKER_SECRET GitHub / Replit secret and the value set via
+# `npx wrangler secret put WORKER_SECRET` in the dashboard.
 WORKER_SECRET=
+
+# SEC-A01 media capability-token signing secret. REQUIRED — the Worker fails
+# closed (503 on all media) if this is unset. Must be byte-identical to the
+# push server's MEDIA_TOKEN_SECRET env var. Generate once, e.g.
+#   openssl rand -base64 48
+# then set it in both places:
+#   npx wrangler secret put MEDIA_TOKEN_SECRET     (Worker)
+#   MEDIA_TOKEN_SECRET=<same value>                (push server env)
+# NEVER compile this into the Android APK — that is the weakness it replaces.
+MEDIA_TOKEN_SECRET=
