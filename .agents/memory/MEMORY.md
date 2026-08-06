@@ -82,3 +82,4 @@
 - [DuoShield Render auto-deploy](duoshield-render-autodeploy.md) — srv autoDeploy=yes/trigger=commit; a git push to main deploys live in ~1min, no manual trigger needed, just verify via RENDER_API_KEY
 - [DuoShield manual admin ops](duoshield-manual-admin-ops.md) — accountLock unfreeze + waitlist approval have NO script/API; Firebase-console-only by design, don't build a bypass path
 - [DuoShield admin panel](duoshield-admin-panel.md) — GET /admin UI for waitlist approve + account unfreeze now exists; ADMIN_TOKEN set directly on Render, not in APK
+- [DuoShield admin route query strings](duoshield-admin-route-query.md) — mobile browsers/cache-busting may request /admin with a query string; route by pathname, not exact req.url
