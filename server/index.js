@@ -419,6 +419,11 @@ const AUTH_RATE_LIMITS = {
   // and is never needed more than once per session.  Without this entry the
   // fallback default of 30/min would allow 30 Firestore writes/min per user.
   requestLockNonce:   3,   //  3 nonce requests / min per user
+  // Scoped media capability tokens (SEC-A01). One token is minted per object
+  // per operation, so a chat with many attachments legitimately needs a burst
+  // when a conversation is first opened; 120/min covers that while still
+  // bounding how fast a compromised account can enumerate media.
+  mediaToken:       120,
 };
 const authRateLimits = new Map(); // uid → { counts: {ep: n}, windowStart }
 
@@ -450,6 +455,79 @@ setInterval(() => {
     if (rec.windowStart < cutoff) authRateLimits.delete(uid);
   }
 }, 5 * 60 * 1000);
+
+// ── Scoped media capability tokens (SEC-A01) ──────────────────────────────────
+// Shared with the Cloudflare Worker ONLY. Set the identical value in both places:
+//   server: MEDIA_TOKEN_SECRET env var
+//   worker: npx wrangler secret put MEDIA_TOKEN_SECRET
+// This value must NEVER be compiled into the Android app — that is precisely the
+// weakness it replaces.
+const MEDIA_TOKEN_SECRET = process.env.MEDIA_TOKEN_SECRET || "";
+if (!MEDIA_TOKEN_SECRET) {
+  console.warn(
+    "MEDIA_TOKEN_SECRET is not set — /mediaToken will refuse to mint tokens and " +
+    "media upload/download will fail. Set it here and in the Worker."
+  );
+}
+
+// Short TTL: long enough to cover a slow upload on a poor connection, short
+// enough that a token captured from logs or a proxy is quickly worthless.
+const MEDIA_TOKEN_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const MEDIA_OPS = new Set(["read", "write", "delete"]);
+
+// Must stay byte-identical to KEY_FORMAT in worker/src/index.js.
+const MEDIA_KEY_FORMAT =
+  /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
+
+function b64url(buf) {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Mints a capability token bound to one object key, one operation, one user and
+ * one expiry. The key itself is NOT carried in the token — the Worker already
+ * knows it from the request path and re-derives the signature over it, so a
+ * token cannot be replayed against a different object.
+ *
+ * Wire format: v1.<op>.<expiresAt>.<uidTag>.<sig>
+ */
+function signMediaToken({ op, key, uid, expiresAt }) {
+  const holder  = uidTag(uid); // pseudonymous — lets the Worker rate-limit per user
+  const payload = `v1|${op}|${expiresAt}|${holder}|${key}`;
+  const sig     = b64url(crypto.createHmac("sha256", MEDIA_TOKEN_SECRET).update(payload).digest());
+  return `v1.${op}.${expiresAt}.${holder}.${sig}`;
+}
+
+/**
+ * True if {@code uid} participates in the chat or group named by {@code scopeId}.
+ *
+ * The object-key middle segment is either a chats/{id} or a groups/{id}, so both
+ * collections are checked. Membership fields mirror firestore.rules:
+ * chats use `participants`, groups use `members`.
+ */
+async function callerMayAccessScope(uid, scopeId) {
+  if (!uid || !scopeId) return false;
+  try {
+    const [chatDoc, groupDoc] = await Promise.all([
+      db.collection("chats").doc(scopeId).get(),
+      db.collection("groups").doc(scopeId).get(),
+    ]);
+    if (chatDoc.exists) {
+      const participants = chatDoc.data().participants;
+      if (Array.isArray(participants) && participants.includes(uid)) return true;
+    }
+    if (groupDoc.exists) {
+      const members = groupDoc.data().members;
+      if (Array.isArray(members) && members.includes(uid)) return true;
+    }
+  } catch (e) {
+    // Fail closed on lookup errors — never mint a token we could not authorize.
+    console.error("callerMayAccessScope lookup failed:", e.message);
+    return false;
+  }
+  return false;
+}
 
 // ── Admin panel auth ──────────────────────────────────────────────────────────
 // Gates /admin/api/* (waitlist approval, account-lock unfreeze). A single
@@ -574,6 +652,42 @@ function getClientIp(req) {
     return entries[entries.length - 1].trim() || req.socket.remoteAddress || "unknown";
   }
   return req.socket.remoteAddress || "unknown";
+}
+
+// ── Log hygiene ───────────────────────────────────────────────────────────────
+// SEC-L01: raw client IPs were written to persistent logs. For a privacy tool
+// whose threat model includes log seizure/subpoena, an IP is directly
+// identifying and links an account to a physical location. Rate limiting only
+// needs a *stable* bucket key, not a reversible one, so logs get a keyed,
+// truncated digest while the in-memory limiter keeps using the real IP.
+//
+// The HMAC key is per-process and never persisted: restarting the server makes
+// old log tags uncorrelatable with new ones, which is the desired property.
+const LOG_PEPPER = crypto.randomBytes(32);
+
+function ipTag(ip) {
+  if (!ip || ip === "unknown") return "unknown";
+  return crypto.createHmac("sha256", LOG_PEPPER).update(String(ip)).digest("hex").slice(0, 12);
+}
+
+/** Pseudonymises a user id for logs — same rationale as {@link ipTag}. */
+function uidTag(uid) {
+  if (!uid) return "none";
+  return crypto.createHmac("sha256", LOG_PEPPER).update(String(uid)).digest("hex").slice(0, 12);
+}
+
+// SEC-L02: handlers responded with "Server error: " + e.message, echoing raw
+// exception text to the caller. Firestore/Firebase errors routinely embed
+// project ids, collection paths, index definitions and internal hostnames,
+// handing an attacker a free map of the backend. Full detail now stays in the
+// server log; the client gets a generic message plus a correlation id it can
+// quote in a support request.
+function sendServerError(res, tag, err, status = 500) {
+  const ref = crypto.randomBytes(6).toString("hex");
+  console.error(`${tag} error [ref=${ref}]:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return;
+  res.writeHead(status, { "Content-Type": "text/plain" });
+  res.end(`Server error (ref: ${ref})`);
 }
 
 function checkIpRateLimit(ip) {
@@ -1246,7 +1360,7 @@ document.getElementById("duressUidInput").addEventListener("keydown", (event) =>
 </html>
 `;
 
-// ── Security response headers ─────────────────────────────────────────────────
+// ── Security response headers ───────────────────────────────────────��─────────
 // Baseline defense-in-depth headers applied to *every* response via setHeader()
 // at the top of the request handler. Node merges these with the object passed to
 // res.writeHead(), and writeHead values take precedence — so the two HTML routes
@@ -1325,7 +1439,7 @@ http.createServer((req, res) => {
         // ── IP rate limit (checked before parsing body) ──────────────────────
         const clientIp = getClientIp(req);
         if (!checkIpRateLimit(clientIp)) {
-          console.warn(`mintToken: IP rate limit hit ip=${clientIp}`);
+          console.warn(`mintToken: IP rate limit hit ip=${ipTag(clientIp)}`);
           res.writeHead(429, { "Content-Type": "text/plain" });
           res.end("Too many requests from this IP — wait 15 min and retry");
           return;
@@ -1408,7 +1522,7 @@ http.createServer((req, res) => {
         // Token is minted only after the atomic identity-claim succeeds.
         const token = await admin.auth().createCustomToken(userId);
 
-        console.log(`mintToken: issued token for userId=${userId} newAccount=${isNewAccount}`);
+        console.log(`mintToken: issued token for userId=${uidTag(userId)} newAccount=${isNewAccount}`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ token }));
@@ -1416,7 +1530,9 @@ http.createServer((req, res) => {
         if (e.status === 403) {
           // Thrown from inside the Firestore transaction: either a key mismatch
           // (F2 fix) or a missing/unapproved waitlist request for a new account.
-          console.warn(`mintToken: 403 (${e.message}) for userId=${JSON.parse(body || "{}").userId}`);
+          let attemptedUid = "none";
+          try { attemptedUid = uidTag(JSON.parse(body || "{}").userId); } catch { /* unparsable body */ }
+          console.warn(`mintToken: 403 (${e.message}) for userId=${attemptedUid}`);
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end(e.message);
         } else {
@@ -1691,7 +1807,7 @@ http.createServer((req, res) => {
         }
 
         console.log(
-          `migrateUid: userId=${userId} oldUid=${oldUid} chats=${results.chatsMigrated} `
+          `migrateUid: userId=${uidTag(userId)} oldUid=${uidTag(oldUid)} chats=${results.chatsMigrated} `
           + `groups=${results.groupsMigrated} backupDocs=${results.backupDocsCopied}`
         );
 
@@ -1790,7 +1906,7 @@ http.createServer((req, res) => {
         if (partnerDisplayName) chatDocData["partnerName_" + myUid]      = partnerDisplayName;
 
         await db.collection("chats").doc(chatId).set(chatDocData, { merge: true });
-        console.log(`createChat: chatId=${chatId} participants=[${myUid},${partnerUid}]`);
+        console.log(`createChat: chatId=${chatId} participants=[${uidTag(myUid)},${uidTag(partnerUid)}]`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ chatId }));
@@ -1798,6 +1914,110 @@ http.createServer((req, res) => {
         console.error("createChat error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Internal server error");
+      }
+    });
+    return;
+  }
+
+  // ── POST /mediaToken — scoped capability token for the storage Worker ───────
+  //
+  // SEC-A01. Previously the Android app shipped WORKER_SECRET inside the APK and
+  // sent it as a static `Authorization: Bearer` on every Worker request. That
+  // single value was:
+  //   • extractable from any installed APK in minutes, and
+  //   • an *authentication* credential with no *authorization* attached —
+  //     it proved "some copy of the app" was calling, never "this user may
+  //     touch this object". Anyone holding it could overwrite or DELETE any
+  //     other user's media given its object key, and the key travels through
+  //     Firestore chat documents, so it is not a secret in any strong sense.
+  //
+  // The app now exchanges its Firebase ID token for a token scoped to exactly
+  // one (object key, operation) pair with a short expiry. The signing secret
+  // lives only on this server and in the Worker — never in the APK — so
+  // decompiling the client yields nothing reusable, and a leaked token is
+  // useless beyond one object, one verb, and a few minutes.
+  //
+  // Body (JSON): { key, op }  op ∈ read | write | delete
+  // Response:    { token, expiresAt }
+  if (req.method === "POST" && req.url === "/mediaToken") {
+    collectBody(req, res, async (body) => {
+      try {
+        if (!MEDIA_TOKEN_SECRET) {
+          // Fail closed: without the shared secret we cannot mint anything the
+          // Worker would trust, and silently falling back to the old static
+          // secret is what this change exists to remove.
+          console.error("mediaToken: MEDIA_TOKEN_SECRET is not configured");
+          res.writeHead(503, { "Content-Type": "text/plain" });
+          res.end("Media tokens unavailable");
+          return;
+        }
+
+        const authHeader = req.headers["authorization"] || "";
+        const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+        if (!idToken) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Missing Authorization header");
+          return;
+        }
+
+        let uid;
+        try {
+          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+        } catch {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Invalid or expired token");
+          return;
+        }
+
+        if (!checkAuthRateLimit(uid, "mediaToken")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded — slow down and retry");
+          return;
+        }
+
+        let parsed;
+        try { parsed = JSON.parse(body || "{}"); }
+        catch {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Malformed JSON body");
+          return;
+        }
+
+        const key = typeof parsed.key === "string" ? parsed.key : "";
+        const op  = typeof parsed.op  === "string" ? parsed.op  : "";
+
+        if (!MEDIA_OPS.has(op)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid op");
+          return;
+        }
+        // Same allow-list the Worker enforces. Validating here too means a
+        // malformed key never even gets a signature.
+        if (!MEDIA_KEY_FORMAT.test(key)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid key format");
+          return;
+        }
+
+        // ── Authorization: caller must belong to the conversation ───────────
+        // Key shape is <media|voice>/<chatId|groupId>/<uuid>.<ext>, so the
+        // middle segment names the conversation the object belongs to.
+        const scopeId = key.split("/")[1];
+        const allowed = await callerMayAccessScope(uid, scopeId);
+        if (!allowed) {
+          console.warn(`mediaToken: denied uid=${uidTag(uid)} scope=${scopeId} op=${op}`);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Not a participant of this conversation");
+          return;
+        }
+
+        const expiresAt = Date.now() + MEDIA_TOKEN_TTL_MS;
+        const token     = signMediaToken({ op, key, uid, expiresAt });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ token, expiresAt }));
+      } catch (e) {
+        sendServerError(res, "mediaToken", e);
       }
     });
     return;
@@ -2369,9 +2589,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ requests }));
       } catch (e) {
-        console.error("admin/api/waitlist error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/waitlist", e);
       }
     })();
     return;
@@ -2424,9 +2642,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
-        console.error("admin/api/waitlist/approve error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/waitlist/approve", e);
       }
     });
     return;
@@ -2451,9 +2667,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ accounts }));
       } catch (e) {
-        console.error("admin/api/locked error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/locked", e);
       }
     })();
     return;
@@ -2501,9 +2715,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
-        console.error("admin/api/locked/unfreeze error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/locked/unfreeze", e);
       }
     });
     return;
@@ -2529,9 +2741,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ accounts }));
       } catch (e) {
-        console.error("admin/api/duress/enrolled error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/duress/enrolled", e);
       }
     })();
     return;
@@ -2563,9 +2773,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ uid, accountExists, duressEligible }));
       } catch (e) {
-        console.error("admin/api/account/lookup error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/account/lookup", e);
       }
     })();
     return;
@@ -2616,9 +2824,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
-        console.error("admin/api/duress/enroll error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/duress/enroll", e);
       }
     });
     return;
@@ -2665,9 +2871,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
-        console.error("admin/api/duress/revoke error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/duress/revoke", e);
       }
     });
     return;
@@ -2694,9 +2898,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ entries }));
       } catch (e) {
-        console.error("admin/api/auditlog error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Server error: " + e.message);
+        sendServerError(res, "admin/api/auditlog", e);
       }
     })();
     return;

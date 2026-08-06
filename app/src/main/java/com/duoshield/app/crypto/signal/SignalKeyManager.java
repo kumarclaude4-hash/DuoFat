@@ -1,5 +1,7 @@
 package com.duoshield.app.crypto.signal;
 
+import com.duoshield.app.util.LogRedact;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
@@ -926,7 +928,7 @@ public final class SignalKeyManager {
                         new Handler(Looper.getMainLooper()).post(onSuccess);
                 })
                 .addOnFailureListener(e -> {
-                    Log.e(TAG, "Firestore upload failed for uid=" + uid, e);
+                    Log.e(TAG, "Firestore upload failed for uid=" + LogRedact.uid(uid), e);
                     if (onFailure != null)
                         new Handler(Looper.getMainLooper()).post(onFailure);
                 });

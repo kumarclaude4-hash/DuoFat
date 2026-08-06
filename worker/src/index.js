@@ -98,6 +98,101 @@ async function isAuthorized(request, env) {
   return match;
 }
 
+// ─── Scoped capability tokens (SEC-A01) ───────────────────────────────────────
+// The data plane (GET/PUT/DELETE on an object key) is authorized per object, not
+// by a shared bearer secret. The Android app never holds a long-lived credential:
+// it exchanges its Firebase ID token at the push server's POST /mediaToken for a
+// token bound to exactly one (key, operation) pair with a short expiry, and the
+// server only issues one after confirming the caller participates in that chat
+// or group.
+//
+// Why the old model was inadequate: WORKER_SECRET was compiled into every APK,
+// so it was extractable by any user, and it authenticated "a copy of the app"
+// rather than authorizing "this user for this object". Combined with object keys
+// that legitimately travel through Firestore chat documents, a holder could
+// read, overwrite or DELETE another user's media. Signing per object closes
+// that: the signature covers the key, so a token stolen for one object grants
+// nothing anywhere else.
+//
+// Set the same value here and on the push server:
+//   npx wrangler secret put MEDIA_TOKEN_SECRET
+//
+// Wire format: v1.<op>.<expiresAt>.<uidTag>.<base64url-hmac-sha256>
+// Signed payload: `v1|<op>|<expiresAt>|<uidTag>|<key>`
+const METHOD_TO_OP = { GET: 'read', PUT: 'write', DELETE: 'delete' };
+
+function b64urlToBytes(s) {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4));
+  const bin = atob(b64 + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacSha256(secret, message) {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(message)));
+}
+
+/**
+ * Verifies the capability token for this exact request.
+ *
+ * @returns {Promise<{ok: true, holder: string} | {ok: false, status: number, error: string}>}
+ */
+async function verifyMediaToken(request, env, key) {
+  if (!env.MEDIA_TOKEN_SECRET) {
+    console.error('MEDIA_TOKEN_SECRET is not configured — denying (fail closed)');
+    return { ok: false, status: 503, error: 'Storage auth not configured' };
+  }
+
+  const expectedOp = METHOD_TO_OP[request.method];
+  if (!expectedOp) return { ok: false, status: 405, error: 'Method not allowed' };
+
+  const header = request.headers.get('Authorization') ?? '';
+  if (!header.startsWith('Bearer ')) {
+    return { ok: false, status: 401, error: 'Missing capability token' };
+  }
+  const token = header.slice(7).trim();
+  const parts = token.split('.');
+  if (parts.length !== 5 || parts[0] !== 'v1') {
+    return { ok: false, status: 401, error: 'Malformed capability token' };
+  }
+
+  const [, op, expRaw, holder, sig] = parts;
+
+  // Bind the token to this verb. A read token must not be replayable as a delete.
+  if (op !== expectedOp) {
+    return { ok: false, status: 403, error: 'Token not valid for this operation' };
+  }
+
+  const expiresAt = safeInt(expRaw, 0);
+  if (expiresAt <= 0 || Date.now() > expiresAt) {
+    return { ok: false, status: 401, error: 'Capability token expired' };
+  }
+
+  // Recompute over the key from the request path — this is what scopes the
+  // token to a single object.
+  const payload  = `v1|${op}|${expiresAt}|${holder}|${key}`;
+  const expected = await hmacSha256(env.MEDIA_TOKEN_SECRET, payload);
+
+  let supplied;
+  try { supplied = b64urlToBytes(sig); }
+  catch { return { ok: false, status: 401, error: 'Malformed token signature' }; }
+
+  if (supplied.byteLength !== expected.byteLength) {
+    return { ok: false, status: 403, error: 'Invalid capability token' };
+  }
+  if (!(await crypto.subtle.timingSafeEqual(supplied, expected))) {
+    return { ok: false, status: 403, error: 'Invalid capability token' };
+  }
+
+  return { ok: true, holder };
+}
+
 // ─── KV helpers ───────────────────────────────────────────────────────────────
 function dayKey() {
   const d = new Date();

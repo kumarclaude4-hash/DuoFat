@@ -1,5 +1,7 @@
 package com.duoshield.app.ui;
 
+import com.duoshield.app.util.LogRedact;
+
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
@@ -186,7 +188,7 @@ public class CreateGroupActivity extends BaseActivity {
                       .addOnSuccessListener(vv -> guard.recordWrites(1));
                 }
             } catch (Exception e) {
-                android.util.Log.w(TAG, "Failed to encrypt group key for " + c.uid, e);
+                android.util.Log.w(TAG, "Failed to encrypt group key for " + LogRedact.uid(c.uid), e);
             }
         }
 
@@ -207,7 +209,7 @@ public class CreateGroupActivity extends BaseActivity {
                   .addOnSuccessListener(vv -> guard.recordWrites(1));
             }
         } catch (Exception e) {
-            android.util.Log.w(TAG, "Failed to encrypt group key for creator " + myUid, e);
+            android.util.Log.w(TAG, "Failed to encrypt group key for creator " + LogRedact.uid(myUid), e);
         }
 
         // ── 3. Persist group + members + own plaintext key to Room ──────────
