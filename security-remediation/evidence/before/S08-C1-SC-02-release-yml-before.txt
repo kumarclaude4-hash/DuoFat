@@ -1,0 +1,55 @@
+# Evidence: BEFORE state — S08-C1 / SC-02
+# Finding: Firebase Admin private key written into APK; B2/Worker secrets compiled into APK
+# Source file: .github/workflows/release.yml
+# Captured: 2026-08-07 (R1 execution)
+
+--- FINDING S08-C1: Write service-account.json step (lines ~55-65) ---
+
+      - name: Write service-account.json
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          mkdir -p app/src/main/assets
+          if [ -n "$SERVICE_ACCOUNT" ]; then
+            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
+          else
+            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
+            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+              > app/src/main/assets/service-account.json
+          fi
+
+VULNERABILITY: This step writes the Firebase Admin service-account private key into
+app/src/main/assets/service-account.json. Android's build system packages the entire
+assets/ directory verbatim into the APK. Neither R8 nor shrinkResources touches assets/.
+Every published release APK therefore contained this private key. Anyone downloading
+the APK can extract it with: unzip -p <apk> assets/service-account.json
+
+Admin SDK credentials bypass Firestore Security Rules entirely and can mint a custom
+token for any uid — full account takeover for any user, without their seed phrase.
+
+--- FINDING SC-02: B2/WORKER_SECRET in local.properties block (lines ~70-82) ---
+
+      - name: Write local.properties
+        env:
+          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+          B2_REGION:          ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+          WORKER_URL:         ${{ secrets.WORKER_URL }}
+          WORKER_SECRET:      ${{ secrets.WORKER_SECRET }}
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
+          echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
+          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                   >> local.properties
+          echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                       >> local.properties
+          echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
+          echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
+          echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
+          echo "worker.secret=${WORKER_SECRET:-}"                                             >> local.properties
+
+VULNERABILITY: B2_KEY_ID, B2_APPLICATION_KEY, and WORKER_SECRET are server-side secrets
+written into local.properties, which app/build.gradle reads and compiles into BuildConfig
+fields. These values are embedded in the APK's DEX and recoverable via strings(1) or
+apktool. The WORKER_SECRET allows direct access to all user media; the B2 credentials
+allow direct B2 bucket access.

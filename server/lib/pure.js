@@ -53,16 +53,133 @@ function getCookie(reqOrHeader, name) {
   return "";
 }
 
-// SSRF guard: block loopback, RFC-1918 private ranges, link-local, and cloud
-// metadata hostnames. Applied to the initial /linkPreview target AND to every
-// redirect hop, so a public host cannot bounce the fetch to an internal address.
+// SSRF guard — two-layer defence.
+//
+// Layer 1 (string predicate — pure, synchronous, testable):
+//   isBlockedPreviewHost(hostname) — blocks by name/literal before any I/O.
+//   Applied before the DNS lookup so obviously-internal hostnames are rejected
+//   without spending a network round trip.
+//
+// Layer 2 (DNS-resolving — async, authoritative):
+//   resolveAndCheckHost(hostname, dnsLookup) — resolves the hostname and
+//   checks EVERY returned address against the private/loopback ranges.
+//   This is the S04-H1 fix: a hostname whose name passes the string check
+//   but resolves to an RFC-1918 or loopback address is blocked at this layer.
+//   The caller must use the resolved address for the actual connection
+//   (via the `family` + `host` override on the fetch option) so the name
+//   cannot be re-resolved between check and use (DNS rebinding).
+//
+// Applied to the initial URL AND to every redirect hop.
+
+// ── Layer 1: synchronous string predicate ────────────────────────────────────
+
 function isBlockedPreviewHost(hostname) {
-  const host = String(hostname || "").toLowerCase();
-  return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/.test(host) ||
-    host === "metadata.google.internal" ||
-    host === "169.254.169.254" ||
-    host.endsWith(".internal") ||
-    host.endsWith(".local");
+  const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 brackets
+  if (!host) return true; // empty → block
+
+  // IPv6 literals
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  // IPv4-mapped IPv6: ::ffff:127.0.0.1 or ::ffff:7f00:1
+  if (/^::ffff:/.test(host)) {
+    const v4part = host.slice(7);
+    // ::ffff:127.0.0.1, ::ffff:10.x.x.x, ::ffff:192.168.x.x, ::ffff:172.{16-31}.x.x
+    if (isBlockedIPv4(v4part)) return true;
+    // hex notation: ::ffff:7f00:0001 (127.0.0.1) or ::ffff:c0a8:0001 (192.168.0.1)
+    if (/^[0-9a-f]{4}:[0-9a-f]{4}$/.test(v4part)) {
+      const [hi, lo] = v4part.split(":").map(h => parseInt(h, 16));
+      const a = (hi >> 8) & 0xff, b = hi & 0xff;
+      if (a === 127 || a === 10 || (a === 192 && b === 168) ||
+          (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)) return true;
+    }
+  }
+  // fc00::/7 — ULA (Unique Local Address)
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;
+  // fe80::/10 — link-local IPv6
+  if (/^fe[89ab][0-9a-f]:/.test(host)) return true;
+
+  // IPv4 literals
+  if (isBlockedIPv4(host)) return true;
+
+  // Well-known dangerous names
+  if (host === "localhost") return true;
+  if (host === "metadata.google.internal") return true;
+  if (host.endsWith(".internal")) return true;
+  if (host.endsWith(".local")) return true;
+  if (host.endsWith(".localhost")) return true;
+  if (host === "169.254.169.254") return true;  // already caught by isBlockedIPv4 but explicit
+
+  return false;
+}
+
+function isBlockedIPv4(addr) {
+  // Only evaluate dotted-decimal; do not call this on hostnames.
+  const parts = addr.split(".");
+  if (parts.length !== 4) return false;
+  const [a, b] = parts.map(Number);
+  if (parts.some(p => !Number.isInteger(Number(p)) || Number(p) < 0 || Number(p) > 255)) return false;
+  return (
+    a === 127 ||                              // 127.0.0.0/8   loopback
+    a === 10 ||                               // 10.0.0.0/8    RFC-1918
+    a === 0 ||                                // 0.0.0.0/8     "this" network
+    (a === 192 && b === 168) ||               // 192.168.0.0/16 RFC-1918
+    (a === 172 && b >= 16 && b <= 31) ||      // 172.16.0.0/12  RFC-1918
+    (a === 169 && b === 254) ||               // 169.254.0.0/16 link-local / IMDS
+    (a === 100 && b >= 64 && b <= 127) ||     // 100.64.0.0/10  CGNAT
+    a === 198 && b === 18 ||                  // 198.18.0.0/15  benchmark
+    a === 198 && b === 19 ||
+    (a === 240) ||                            // 240.0.0.0/4    reserved
+    a === 255                                 // 255.255.255.255 broadcast
+  );
+}
+
+// ── Layer 2: DNS-resolving predicate (async) ──────────────────────────────────
+//
+// S04-H1 FIX: resolves the hostname to all its addresses and blocks the request
+// if ANY resolved address falls in a private/loopback range.  This closes the
+// DNS rebinding / split-horizon attack vector that the string predicate alone
+// cannot address: a hostname whose TXT/A record is controlled by an attacker
+// can be made to return an internal address, passing the string check.
+//
+// The caller (fetchFollowingSafeRedirects in index.js) must:
+//   1. Call resolveAndCheckHost(hostname, dns.promises.lookup) BEFORE fetching.
+//   2. Use the returned {address, family} to pin the connection (via the
+//      `lookup` option on http.request or the equivalent) so the runtime
+//      does not re-resolve the name between check and connection.
+//
+// dnsLookup: a function with the signature of dns.promises.lookup(hostname, options)
+//   that returns { address: string, family: number }.
+//   Accept an injectable for testability.
+//
+// Returns { ok: true, address, family } or { ok: false, reason: string }.
+async function resolveAndCheckHost(hostname, dnsLookup) {
+  const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  // Layer-1 string check first — cheap.
+  if (isBlockedPreviewHost(host)) {
+    return { ok: false, reason: `Blocked by name: ${host}` };
+  }
+
+  let resolved;
+  try {
+    // all: true returns every address (IPv4 + IPv6); family: 0 means "any".
+    const results = await dnsLookup(hostname, { all: true, family: 0 });
+    resolved = Array.isArray(results) ? results : [results];
+  } catch (e) {
+    return { ok: false, reason: `DNS resolution failed: ${e.message}` };
+  }
+
+  if (!resolved || resolved.length === 0) {
+    return { ok: false, reason: "DNS resolution returned no addresses" };
+  }
+
+  for (const { address, family } of resolved) {
+    const addrStr = String(address || "").toLowerCase();
+    if (isBlockedPreviewHost(addrStr)) {
+      return { ok: false, reason: `Resolved address blocked: ${addrStr}` };
+    }
+  }
+
+  // Return the first resolved address so the caller can pin the connection.
+  return { ok: true, address: resolved[0].address, family: resolved[0].family };
 }
 
 // ── Fixed-window rate-limit evaluation (pure) ─────────────────────────────────
@@ -134,6 +251,8 @@ module.exports = {
   validAdminUid,
   getCookie,
   isBlockedPreviewHost,
+  isBlockedIPv4,
+  resolveAndCheckHost,
   evaluateFixedWindow,
   b2HmacKey,
   buildB2PresignUrl,

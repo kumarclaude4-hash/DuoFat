@@ -123,9 +123,12 @@ public class DisplayNameActivity extends AppCompatActivity {
 
                 // signInWithSeed spawns its own auth-token thread and delivers the
                 // callback on the main thread — so we wait on the lock here.
+                // S07-C1 FIX: pass the private key so AuthTokenHelper can sign
+                // the server challenge, proving possession of the seed phrase.
                 AuthTokenHelper.signInWithSeed(
                         userId,
                         identityKeyPair.getPublicKey().serialize(),
+                        identityKeyPair.getPrivateKey(),
                         waitlistRequestId,
                         new AuthTokenHelper.Callback() {
                             @Override public void onSuccess(String firebaseUid) {

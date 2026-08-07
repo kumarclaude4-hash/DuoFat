@@ -1,0 +1,24 @@
+# Evidence: BEFORE state — S08-H1 / S03-L1
+# Finding: WORKER_SECRET compiled into APK via BuildConfig
+# Source file: app/build.gradle
+# Captured: 2026-08-07 (R1 execution)
+
+--- FINDING S08-H1 / S03-L1: WORKER_SECRET in BuildConfig (lines ~70-77) ---
+
+        // Shared auth token for the Cloudflare Worker.
+        // Every Worker request (PUT/GET/DELETE/stats) must include:
+        //   Authorization: Bearer <WORKER_SECRET>
+        // Set in local.properties as `worker.secret=<token>`
+        // or via the WORKER_SECRET environment variable.
+        def workerSecret = (localProps.getProperty('worker.secret', '') ?: '').trim()
+        if (workerSecret.isEmpty()) workerSecret = (System.getenv('WORKER_SECRET') ?: '').trim()
+        buildConfigField "String", "WORKER_SECRET", "\"${workerSecret}\""
+
+VULNERABILITY: WORKER_SECRET is read from local.properties (written by the CI workflow
+per SC-02) and compiled into BuildConfig.WORKER_SECRET. The APK's DEX contains the
+literal secret value. Any user who extracts the APK (trivially, via GitHub Releases)
+can recover the secret and make direct authenticated requests to the Worker, bypassing
+per-object capability token authorization.
+
+The Worker /stats endpoint also accepts this secret directly (S08-H1), exposing
+global storage usage and request-count metrics to any APK holder.

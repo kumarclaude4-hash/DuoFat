@@ -2,6 +2,9 @@ const admin = require("firebase-admin");
 const http = require("http");
 const crypto = require("crypto");
 const pure = require("./lib/pure");
+// S07-C1 FIX: XEd25519 signature verification for Signal identity keys.
+// Converts Curve25519 pubkeys to Edwards form before verifying Ed25519 sigs.
+const xed25519 = require("./lib/xed25519");
 
 let serviceAccount;
 try {
@@ -342,6 +345,24 @@ db.collection("calls").onSnapshot(
 // Allows at most one token mint per userId per 60 seconds.
 const mintCooldown = new Map();
 
+// ── S07-C1 FIX: per-userId challenge store ────────────────────────────────────
+// /mintToken now requires a proof-of-possession: the client must sign a
+// server-issued nonce with their identity PRIVATE key.  A nonce is obtained
+// from /mintChallenge and is valid for CHALLENGE_TTL_MS (5 minutes).
+// After use (or expiry) the nonce is deleted so replay is impossible.
+// In-memory only; a server restart invalidates all pending challenges and the
+// client simply calls /mintChallenge again.
+const CHALLENGE_TTL_MS  = 5 * 60 * 1000; // 5 minutes
+const mintChallenges    = new Map();      // userId → { nonce: string, expiresAt: number }
+
+// Purge expired challenges every 10 minutes.
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, entry] of mintChallenges) {
+    if (entry.expiresAt <= now) mintChallenges.delete(uid);
+  }
+}, 10 * 60 * 1000);
+
 // ── Waitlist request-access rate limit (separate from mintToken's IP bucket) ──
 // /requestAccess creation bucket: strict — only 5 submissions per IP per 15 min.
 const WAITLIST_IP_WINDOW_MS = 15 * 60 * 1000;
@@ -386,7 +407,7 @@ function checkWaitlistPollRateLimit(ip) {
   return true;
 }
 
-// ── Per-IP rate limit ─────────────────────────────────────────────────────────
+// ── Per-IP rate limit ───────────────────────────────��─────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
 // Render appends its own entry to X-Forwarded-For; we use the RIGHTMOST value
 // (proxy-appended, not client-controlled) via getClientIp(). See CRIT-1 fix.
@@ -1421,7 +1442,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /mintToken ─────────────────────────────────────────────────────────
+  // ── POST /mintToken ────────────────────────────────���────────────────────────
   //
   // Body (JSON): { userId, identityPubKeyHex }
   //
@@ -1433,6 +1454,51 @@ http.createServer((req, res) => {
   //     transaction.  Mismatch → 403.
   //   • Rate limit: one successful mint per userId per 60 s (in-memory).
   //
+  // ── POST /mintChallenge ──────────────────────────────────────────────────────
+  //
+  // S07-C1 FIX — Step 1 of proof-of-possession.
+  //
+  // Body: { userId: string }
+  // Response: { nonce: string }   — 32-byte hex string
+  //
+  // Issues a one-time challenge nonce bound to the given userId.  The client
+  // must sign this nonce with their identity PRIVATE key and present the
+  // signature in the subsequent /mintToken call.  The nonce expires after
+  // CHALLENGE_TTL_MS (5 min) and is deleted on first use.
+  //
+  // Rate-limited by the same IP bucket as /mintToken.
+  if (req.method === "POST" && req.url === "/mintChallenge") {
+    collectBody(req, res, async (body) => {
+      try {
+        const clientIp = getClientIp(req);
+        if (!checkIpRateLimit(clientIp)) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Too many requests from this IP — wait 15 min and retry");
+          return;
+        }
+
+        const parsed = JSON.parse(body);
+        const { userId } = parsed;
+        if (!userId || typeof userId !== "string" || userId.length > 128) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid userId");
+          return;
+        }
+
+        // Issue (or replace) a challenge for this userId.
+        const nonce     = crypto.randomBytes(32).toString("hex");
+        const expiresAt = Date.now() + CHALLENGE_TTL_MS;
+        mintChallenges.set(userId, { nonce, expiresAt });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ nonce }));
+      } catch (e) {
+        sendServerError(res, "mintChallenge", e);
+      }
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/mintToken") {
     collectBody(req, res, async (body) => {
       try {
@@ -1445,20 +1511,182 @@ http.createServer((req, res) => {
           return;
         }
 
-        const { userId, identityPubKeyHex, waitlistRequestId } = JSON.parse(body);
-        if (!userId || typeof userId !== "string" ||
-            !identityPubKeyHex || typeof identityPubKeyHex !== "string") {
+        const parsed = JSON.parse(body);
+        const { userId, identityPubKeyHex, nonce, signatureHex, waitlistRequestId } = parsed;
+
+        if (!userId || typeof userId !== "string") {
           res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing or invalid userId / identityPubKeyHex");
+          res.end("Missing or invalid userId");
+          return;
+        }
+        if (!identityPubKeyHex || typeof identityPubKeyHex !== "string") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing identityPubKeyHex");
           return;
         }
 
-        // ── Per-userId cooldown (prevents rapid re-auth from same account) ───
-        // Set the cooldown timestamp synchronously, before the first `await`
-        // below, not after the token is minted. Setting it post-mint left a
-        // window where two concurrent requests for the same userId could both
-        // read the old timestamp and both pass the check before either write
-        // landed, bypassing the 60s limit entirely.
+        // ── S07-C1 FIX: proof-of-possession via challenge/signature ──────────
+        //
+        // The client MUST have obtained a nonce from /mintChallenge and signed it
+        // with their identity private key (Ed25519).  We verify the signature
+        // against the provided public key, then check that public key's hash
+        // against the stored record.  This proves the caller holds the private key
+        // that corresponds to the registered identity, which is derived from the
+        // seed phrase — a public value cannot be forged as a signature.
+        //
+        // S07-H1 / S02-L1 FIX: absence of a stored identity record is an explicit
+        // deny for existing-account paths.  The only path that may proceed without
+        // a pre-existing record is new-account creation (gated on a valid waitlist
+        // request consumed atomically in the same Firestore transaction).
+        //
+        // S02-M1 FIX: the per-userId cooldown is stamped AFTER authentication
+        // succeeds, not before.  Pre-auth cooldown stamping allowed an
+        // unauthenticated attacker to supply any victim userId and lock out that
+        // account's re-auth for 60 s.
+
+        if (!nonce || typeof nonce !== "string" ||
+            !signatureHex || typeof signatureHex !== "string") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing nonce or signatureHex — call /mintChallenge first");
+          return;
+        }
+
+        // ── Validate and consume the challenge nonce ─────────────────────────
+        const challenge = mintChallenges.get(userId);
+        if (!challenge) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("No active challenge for this userId — call /mintChallenge first");
+          return;
+        }
+        if (Date.now() > challenge.expiresAt) {
+          mintChallenges.delete(userId);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Challenge expired — call /mintChallenge again");
+          return;
+        }
+        if (nonce !== challenge.nonce) {
+          // Replay with a different nonce (or a nonce from a different challenge
+          // round): consume the entry so a flood cannot try many nonces.
+          mintChallenges.delete(userId);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Challenge nonce mismatch");
+          return;
+        }
+        // Consume on first use — prevents replay.
+        mintChallenges.delete(userId);
+
+        // ── Verify XEd25519 signature over the nonce ─────────────────────────
+        // Signal's identity key is Curve25519 (Montgomery form). The client
+        // signs with Curve.calculateSignature which uses XEd25519: the key is
+        // converted to Edwards form and a standard Ed25519 sign + domain prefix
+        // (32 × 0xFE) is applied.  server/lib/xed25519.js mirrors this transform
+        // so we can verify with Node's built-in ed25519 after conversion.
+        let sigValid = false;
+        try {
+          sigValid = xed25519.verifySignature(
+            Buffer.from(identityPubKeyHex, "hex"),   // 32-byte Curve25519 pubkey
+            Buffer.from(nonce, "utf8"),               // original nonce (prefix applied inside)
+            Buffer.from(signatureHex, "hex"),         // 64-byte XEd25519 signature
+          );
+        } catch (_) {
+          sigValid = false;
+        }
+        if (!sigValid) {
+          let attemptedUid = "none";
+          try { attemptedUid = uidTag(userId); } catch { /* ignore */ }
+          console.warn(`mintToken: signature verification failed userId=${attemptedUid}`);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Signature verification failed");
+          return;
+        }
+
+        // ── Compute hash of the provided public key ───────────────────────────
+        const incomingHash = sha256hex(identityPubKeyHex);
+
+        const idRef   = db.collection("identities").doc(userId);
+        const lockRef = db.collection("accountLock").doc(userId);
+
+        // ── Atomic Firestore transaction ──────────────────────────────────────
+        // Reads and checks identities/{userId} and accountLock/{userId}
+        // atomically.  Actions:
+        //   a) New account: consume waitlist request + write identity binding.
+        //   b) Existing account: verify hash matches stored record. Fail closed
+        //      if no stored record exists (S07-H1 / S02-L1 fix).
+        //   c) Either path: deny if accountLock/{userId}.locked == true (S06-H1).
+        //
+        // The token is minted only after this transaction succeeds, so there is
+        // no window between "verified identity" and "token issued".
+        let isNewAccount = false;
+        await db.runTransaction(async (tx) => {
+          const [idSnap, lockSnap] = await Promise.all([
+            tx.get(idRef),
+            tx.get(lockRef),
+          ]);
+
+          // S06-H1 FIX: accountLock is checked SERVER-SIDE inside the mint
+          // transaction, not client-side after the token is already issued.
+          // A locked account gets the same generic 403 as a key mismatch — no
+          // information about whether the account is locked, which uid is locked,
+          // or any other distinguishing signal.
+          if (lockSnap.exists && lockSnap.data().locked === true) {
+            throw Object.assign(new Error("Account locked"), { status: 403, generic: true });
+          }
+
+          if (!idSnap.exists) {
+            // New account path — invite-only.
+            if (!waitlistRequestId || typeof waitlistRequestId !== "string" ||
+                !/^[0-9a-f]{32}$/.test(waitlistRequestId)) {
+              throw Object.assign(new Error("Access request required"), { status: 403 });
+            }
+            const waitlistRef  = db.collection("waitlist").doc(waitlistRequestId);
+            const waitlistSnap = await tx.get(waitlistRef);
+            if (!waitlistSnap.exists || waitlistSnap.data().status !== "approved") {
+              throw Object.assign(new Error("Access request not approved"), { status: 403 });
+            }
+            tx.update(waitlistRef, {
+              status:       "used",
+              usedByUserId: userId,
+              usedAt:       FieldValue.serverTimestamp(),
+            });
+            // Store full public key hex (not just hash) so future logins can
+            // verify solely by signature without needing the hash comparison.
+            tx.set(idRef, {
+              uid:                 userId,
+              identityPubKeyHash:  incomingHash,
+              identityPubKeyHex:   identityPubKeyHex,
+              createdAt:           FieldValue.serverTimestamp(),
+            });
+            isNewAccount = true;
+          } else {
+            // Existing account path — verify the public key.
+            const data       = idSnap.data();
+            const storedHash = data.identityPubKeyHash;
+
+            // S07-H1 / S02-L1 FIX: fail CLOSED when no hash is stored.
+            // Previously: `if (storedHash && storedHash !== incomingHash)` — the
+            // guard only fired when storedHash was truthy, so a missing/null/empty
+            // hash allowed ANY public key through.  Now: absence of a stored hash
+            // is an explicit error.
+            if (!storedHash) {
+              throw Object.assign(
+                new Error("Identity record incomplete — contact support"),
+                { status: 403 }
+              );
+            }
+            if (storedHash !== incomingHash) {
+              throw Object.assign(new Error("Key mismatch"), { status: 403 });
+            }
+            // Opportunistic upgrade: persist full pubkey hex for future logins
+            // that may later drop the hash-comparison path.
+            if (!data.identityPubKeyHex) {
+              tx.update(idRef, { identityPubKeyHex: identityPubKeyHex });
+            }
+          }
+        });
+
+        // ── S02-M1 FIX: stamp cooldown AFTER authentication succeeds ─────────
+        // Previously stamped before the first await, which let an unauthenticated
+        // caller pin any victim's cooldown by supplying their userId.
         const now  = Date.now();
         const last = mintCooldown.get(userId) || 0;
         if (now - last < 60_000) {
@@ -1468,77 +1696,25 @@ http.createServer((req, res) => {
         }
         mintCooldown.set(userId, now);
 
-        const incomingHash = sha256hex(identityPubKeyHex);
-
-        const idRef = db.collection("identities").doc(userId);
-
-        // F2 fix: claim the identities slot atomically before minting the token.
-        // We run a Firestore transaction that either:
-        //   a) Creates the doc for a new account (first caller wins; second sees it exists
-        //      and verifies the hash — preventing concurrent first-claim races), or
-        //   b) Verifies the hash for an existing account.
-        // Only after the transaction succeeds do we mint the token, so there is no window
-        // between "account doesn't exist" and "doc written".
-        let isNewAccount = false;
-        await db.runTransaction(async (tx) => {
-          const snap = await tx.get(idRef);
-          if (!snap.exists) {
-            // New account — invite-only. Require an approved, not-yet-used
-            // waitlist request and consume it atomically alongside the
-            // identity claim so a token can never mint two accounts.
-            if (!waitlistRequestId || typeof waitlistRequestId !== "string" ||
-                !/^[0-9a-f]{32}$/.test(waitlistRequestId)) {
-              throw Object.assign(new Error("Access request required"), { status: 403 });
-            }
-            const waitlistRef = db.collection("waitlist").doc(waitlistRequestId);
-            const waitlistSnap = await tx.get(waitlistRef);
-            if (!waitlistSnap.exists || waitlistSnap.data().status !== "approved") {
-              throw Object.assign(new Error("Access request not approved"), { status: 403 });
-            }
-
-            tx.update(waitlistRef, {
-              status:       "used",
-              usedByUserId: userId,
-              usedAt:       FieldValue.serverTimestamp(),
-            });
-
-            // First claim — atomically write the identity binding
-            tx.set(idRef, {
-              uid:                userId,
-              identityPubKeyHash: incomingHash,
-              createdAt:          FieldValue.serverTimestamp(),
-            });
-            isNewAccount = true;
-          } else {
-            // Existing account — re-verify hash inside the transaction
-            const storedHash = snap.data().identityPubKeyHash;
-            if (storedHash && storedHash !== incomingHash) {
-              throw Object.assign(new Error("Key mismatch"), { status: 403 });
-            }
-          }
-        });
-
-        // Mint custom token — uid = userId (permanent, seed-derived)
-        // Token is minted only after the atomic identity-claim succeeds.
+        // Mint custom token — uid = userId (permanent, seed-derived).
+        // Issued only after signature verification AND atomic identity-claim.
         const token = await admin.auth().createCustomToken(userId);
 
-        console.log(`mintToken: issued token for userId=${uidTag(userId)} newAccount=${isNewAccount}`);
+        console.log(`mintToken: issued token uid=${uidTag(userId)} newAccount=${isNewAccount}`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ token }));
       } catch (e) {
         if (e.status === 403) {
-          // Thrown from inside the Firestore transaction: either a key mismatch
-          // (F2 fix) or a missing/unapproved waitlist request for a new account.
           let attemptedUid = "none";
-          try { attemptedUid = uidTag(JSON.parse(body || "{}").userId); } catch { /* unparsable body */ }
-          console.warn(`mintToken: 403 (${e.message}) for userId=${attemptedUid}`);
+          try { attemptedUid = uidTag(JSON.parse(body || "{}").userId); } catch { /* unparsable */ }
+          // e.generic: do not surface internal reason (accountLock) to the caller.
+          const msg = e.generic ? "Authentication failed" : e.message;
+          console.warn(`mintToken: 403 (${e.message}) userId=${attemptedUid}`);
           res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end(e.message);
+          res.end(msg);
         } else {
-          console.error("mintToken error:", e.message);
-          res.writeHead(500, { "Content-Type": "text/plain" });
-          res.end("Internal server error");
+          sendServerError(res, "mintToken", e);
         }
       }
     });
@@ -1657,7 +1833,10 @@ http.createServer((req, res) => {
 
         let decodedToken;
         try {
-          decodedToken = await admin.auth().verifyIdToken(idToken);
+          // S02-I3 FIX: pass checkRevoked=true so revoked tokens (e.g. from a
+          // duress wipe or an admin-forced sign-out) are rejected immediately
+          // rather than being accepted until their 1-hour JWT expiry.
+          decodedToken = await admin.auth().verifyIdToken(idToken, true);
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -1850,7 +2029,7 @@ http.createServer((req, res) => {
 
         let decodedToken;
         try {
-          decodedToken = await admin.auth().verifyIdToken(idToken);
+          decodedToken = await admin.auth().verifyIdToken(idToken, true); // S02-I3: checkRevoked
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -1962,7 +2141,7 @@ http.createServer((req, res) => {
 
         let uid;
         try {
-          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+          uid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2044,7 +2223,7 @@ http.createServer((req, res) => {
         }
         let turnUid;
         try {
-          turnUid = (await admin.auth().verifyIdToken(idToken)).uid;
+          turnUid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2218,7 +2397,7 @@ http.createServer((req, res) => {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
         let lpUid;
-        try { lpUid = (await admin.auth().verifyIdToken(tok)).uid; }
+        try { lpUid = (await admin.auth().verifyIdToken(tok, true)).uid; } // S02-I3: checkRevoked
         catch { res.writeHead(401); res.end("Invalid token"); return; }
         if (!checkAuthRateLimit(lpUid, "linkPreview")) {
           res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
@@ -2312,7 +2491,7 @@ http.createServer((req, res) => {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
         let callerUid;
-        try { callerUid = (await admin.auth().verifyIdToken(tok)).uid; }
+        try { callerUid = (await admin.auth().verifyIdToken(tok, true)).uid; } // S02-I3: checkRevoked
         catch { res.writeHead(401); res.end("Invalid token"); return; }
         if (!checkAuthRateLimit(callerUid, "removeGroupMember")) {
           res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
@@ -2375,7 +2554,7 @@ http.createServer((req, res) => {
 
         let uid;
         try {
-          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+          uid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch (_) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
