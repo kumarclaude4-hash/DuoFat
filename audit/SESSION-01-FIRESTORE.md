@@ -9,11 +9,13 @@ model (attacker holds ≥1 authenticated account, automates abuse, all client ch
 Then diffed the rules against the test suite to find behavior the tests do **not** pin down
 (gaps by omission). Only server / rule enforcement is treated as a control.
 
-**Result:** No unremediated **Critical**. **2 High**, **3 Medium**, **2 Low**, **2 Info**.
+**Result:** No unremediated **Critical**. **3 High**, **4 Medium**, **2 Low**, **2 Info**.
+Second-pass additions (marked `[P2]`): S01-H3 (chat `partnerName` spoofing via unrestricted
+chat doc update), S01-M4 (ex-member retains delete rights after removal on group messages).
 The prior review's field-scoping fixes (F19/F21/F27/F28, legacy denials, one-way lock latch)
-all hold. The new findings are **value-level** and **field-completeness** gaps that the
-existing tests never exercise — they only assert *which* keys change, never *what values*
-land or whether *content* fields are protected on update.
+all hold. The findings are **value-level** and **field-completeness** gaps the existing tests
+never exercise — they only assert *which* keys change, never *what values* land or whether
+*content* and *display* fields are protected on update.
 
 ---
 
@@ -22,8 +24,8 @@ land or whether *content* fields are protected on update.
 | Severity | Count | IDs |
 |---|---|---|
 | Critical | 0 | — |
-| High | 2 | S01-H1, S01-H2 |
-| Medium | 3 | S01-M1, S01-M2, S01-M3 |
+| High | 3 | S01-H1, S01-H2, S01-H3 `[P2]` |
+| Medium | 4 | S01-M1, S01-M2, S01-M3, S01-M4 `[P2]` |
 | Low | 2 | S01-L1, S01-L2 |
 | Info | 2 | S01-I1, S01-I2 |
 
@@ -256,6 +258,89 @@ acknowledged in the model rather than discovered later.
 
 ---
 
+---
+
+## S01-H3 `[P2]` — Chat doc update allows a participant to overwrite the partner's display name (`firestore.rules:52-60`)
+
+**Trust boundary:** TB-2. **Severity: High.**
+
+`/createChat` (`server/index.js:1905-1906`) writes two display-name fields onto the shared chat
+doc:
+
+```js
+chatDocData["partnerName_" + partnerUid] = myDisplayName;   // the name BOB sees for Alice
+chatDocData["partnerName_" + myUid]      = partnerDisplayName; // the name ALICE sees for Bob
+```
+
+The chat `update` rule (`:52-60`) blocks mutation of the *other* participant's `typing_`,
+`online_`, `lastSeen_`, and `unread_` fields — but the `partnerName_<uid>` fields are **not
+in the block-list**. Any participant can update them freely.
+
+**Exploit path:**
+1. Alice (attacker) is already in chat `chat_ab` with Bob.
+2. Alice issues `update chats/chat_ab { "partnerName_alice": "<targeted string>" }`.
+3. The update passes: Alice is a participant, `participants` is unchanged, and no blocked key
+   is touched.
+4. Bob's client now reads `partnerName_alice` as the display name it shows for Alice — changed
+   to attacker-chosen content without Bob's knowledge and without re-triggering `/createChat`.
+
+Unlike the S02-L2 issue (display names are stored at chat creation), this attack is **persistent
+and repeatable on a live chat** — the attacker can continuously update the name shown to the
+victim.
+
+**Why the tests miss it:** no test exercises a `partnerName_*` field update at all. The
+presence-spoofing tests (`rules.test.js:227-238`) only probe `lastMessage` updates and the
+typed-out presence keys; `partnerName_*` is a blind spot.
+
+**Fix:** add `partnerName_<otherUid>` to the blocked-keys list in the `allow update` rule, so
+each participant may only update their own `partnerName_*` key (the name *they* want the partner
+to see for them, i.e. their own display name), not the name attributed to the other party:
+
+```
+&& !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+     'partnerName_' + otherUid(resource.data.participants, request.auth.uid),
+     'typing_'      + otherUid(...),
+     ...
+   ]);
+```
+
+---
+
+## S01-M4 `[P2]` — Group message `delete` does not verify current membership; ex-members retain delete rights (`firestore.rules:137-138`)
+
+**Trust boundary:** TB-2. **Severity: Medium.**
+
+```
+allow delete: if request.auth != null
+              && resource.data.sender == request.auth.uid;
+```
+
+The rule checks only `sender == auth.uid` — there is **no membership check**. Compare the
+`read` and `create` rules above it (`:122-134`) which both call `get(groups/$(groupId)).data.members`.
+
+**Exploit path:** a member (Carol) is removed from group `group_1` (by the creator, updating
+the `members` array). Carol no longer satisfies `auth.uid in members` and cannot read or write
+new messages. But Carol can still issue `delete` on any message she previously sent — the rule
+lets her through because `sender == carol` and membership is not re-checked on delete.
+
+**Impact:** an ex-member can selectively expunge their own message history from a group after
+departure — potentially erasing evidence, silently removing information others have acted on, or
+destabilizing conversation continuity in an application where message integrity matters.
+
+**Why the tests miss it:** the group-messages test block (`rules.test.js:360-395`) has no delete
+test at all.
+
+**Fix:** mirror the read/create guard on delete:
+
+```
+allow delete: if request.auth != null
+              && resource.data.sender == request.auth.uid
+              && request.auth.uid in
+                 get(/databases/$(database)/documents/groups/$(groupId)).data.members;
+```
+
+---
+
 ## Verified-sound (no finding)
 
 These were probed and hold under the threat model:
@@ -276,7 +361,7 @@ These were probed and hold under the threat model:
   correctly owner-scoped; `backups` delete hard-denied (soft-delete model).
 - **Server-only collections** — `_server_health`, `_duressNonces`, `waitlist`, `adminAuditLog`,
   legacy `rooms`/`conversations` all `if false` to clients; tests confirm.
-- **Calls** — create gated on a pre-existing bilateral chat listing both parties; candidates + in-call
+- **Calls** ��� create gated on a pre-existing bilateral chat listing both parties; candidates + in-call
   chat restricted to the two participants. Sound given chat `create` is server-only.
 - **`identities` create/update** — first-claim wins, `uid` self-bound, `identityPubKeyHash`
   continuity enforced; cannot retarget another account. (Field-shape gap is S01-M2, not a binding break.)

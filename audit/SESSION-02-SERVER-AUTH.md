@@ -15,10 +15,12 @@ every endpoint directly with forged bodies/headers, automates abuse across many 
 and is willing to burn accounts. The Admin SDK bypasses Firestore rules, so this server code
 *is* the authorization boundary (TB-1/TB-3/TB-6).
 
-**Result:** 0 Critical / 0 High / 1 Medium / 3 Low / 3 Info. The core identity model is
-sound — a single mint path, atomic slot-claim + waitlist consumption, migration that cannot
-retarget another account, and correct token→uid binding on every endpoint. The findings are
-one targeted availability gap (pre-auth cooldown poisoning) plus defensive/hardening issues.
+**Result:** 0 Critical / 1 High / 1 Medium / 4 Low / 3 Info. Second-pass additions (marked
+`[P2]`): S02-H1 (migration blindly copies all user-doc fields — field-injection escalation
+path), S02-L4 (collectBody uses string `.length` not byte count — up to 2× body-size-cap
+bypass via multi-byte UTF-8). The core identity model is sound — a single mint path, atomic
+slot-claim + waitlist consumption, migration that cannot retarget another account, and correct
+token→uid binding on every endpoint.
 
 ---
 
@@ -192,6 +194,99 @@ hour on all these endpoints. Whether that matters depends on the account-lock/du
 (**Session 06** owns the latch). If lock is meant to be immediate, the high-value endpoints should
 verify with `checkRevoked: true` (or check a server-side lock flag) rather than trusting token
 lifetime. Recorded here as an auth-core observation.
+
+---
+
+---
+
+## S02-H1 `[P2]` — `migrateUid` copies `users/{oldUid}` verbatim; arbitrary fields injected by the attacker onto their old UID doc are promoted to the new deterministic UID doc
+
+**Location:** `server/index.js:1730-1736`
+
+```js
+const oldUserSnap = await db.collection("users").doc(oldUid).get();
+if (oldUserSnap.exists) {
+  const data = oldUserSnap.data();
+  if (data) {
+    await db.collection("users").doc(userId).set(data);   // ← no field allowlist
+```
+
+**Trust boundary:** TB-1/TB-6. **Severity: High.**
+
+`oldUid` is the caller's *current* Firebase UID, which is their *own* account — so
+`users/{oldUid}` is fully writeable by the caller before migration (`firestore.rules:9`:
+`allow write: if request.auth.uid == uid`). They can plant any Firestore fields they like on
+their own user doc, then call `/migrateUid` to have those fields transplanted verbatim onto the
+new deterministic `users/{userId}` doc with no field filtering.
+
+**Exploit path:**
+1. Before calling `/migrateUid`, the attacker writes their old user doc:
+   `users/{oldUid} = { displayName:"X", fcmToken:"...", isAdmin:true, role:"admin", verified:true, ... }`.
+2. `/migrateUid` calls `db.collection("users").doc(userId).set(data)` — all planted fields land
+   on the production `users/{userId}` doc, indistinguishable from server-written fields.
+3. Any server or client logic that reads `users/{userId}` and trusts a field like `isAdmin`,
+   `role`, or `verified` now grants the elevated role to the migrated account.
+
+**Current severity qualifier:** whether this is exploitable for privilege escalation today
+depends on which fields the app/server treat as authoritative from `users/{uid}`. If nothing
+currently reads `isAdmin`/`role` from `users`, the impact is confined to display-data injection
+(similar to S02-L2) — but the architectural hole is real and will become critical if any
+privileged field is ever added to user docs. Severity is rated **High** because the pattern is
+an unconditional field injection into a production identity document from an attacker-controlled
+source, and the cost of accidentally trusting one future field is account compromise.
+
+**Fix:** replace the blind `set(data)` with an explicit field allowlist:
+
+```js
+const ALLOWED_USER_FIELDS = new Set(['displayName', 'fcmToken', 'avatarUrl', 'createdAt']);
+const safeData = Object.fromEntries(
+  Object.entries(data).filter(([k]) => ALLOWED_USER_FIELDS.has(k))
+);
+await db.collection("users").doc(userId).set(safeData);
+```
+
+---
+
+## S02-L4 `[P2]` — `collectBody` measures string character count, not byte count; multi-byte UTF-8 allows up to ~2× bypass of the 64 KB body cap
+
+**Location:** `server/index.js:786`
+
+```js
+function collectBody(req, res, onComplete) {
+  let body = "";
+  ...
+  req.on("data", (chunk) => {
+    body += chunk;                          // Buffer coerced to UTF-16 JS string
+    if (body.length > MAX_BODY_BYTES) {     // ← .length = char count, not bytes
+```
+
+`body.length` on a JavaScript string counts UTF-16 code units, not bytes. A Node.js `Buffer`
+coerced to a string via `+=` is decoded as UTF-8; the resulting JS string has `.length` equal
+to the number of code points (or surrogate pairs for > U+FFFF), which is less than the byte
+count for any multi-byte sequence. A payload composed entirely of 2-byte UTF-8 sequences
+(e.g. `U+0080`–`U+07FF`) has a byte size twice its `.length`, so the 64 KB cap is effectively
+raised to ~128 KB for such payloads.
+
+**Compare:** `readBody` at `:754` correctly accumulates byte count separately:
+`bytes += chunk.length` (Buffer `.length` = bytes), checking bytes not the string — it is
+**not** affected.
+
+**Impact:** an attacker can send a ~128 KB JSON body through any `collectBody`-protected
+endpoint (`/mintToken`, `/migrateUid`, `/createChat`, `/mediaToken`, etc.), up to ~256 KB for
+4-byte sequences. This is not catastrophic — a 256 KB JSON object won't cause OOM — but it
+undermines the stated DoS defense and creates room for oversized field values to be written
+to Firestore (where documents have a 1 MB limit but any path is more expensive than expected).
+
+**Fix:** track byte count from the raw chunks, same as `readBody`:
+
+```js
+let bytes = 0;
+req.on("data", (chunk) => {
+  bytes += chunk.length;           // Buffer.length = bytes
+  body  += chunk;
+  if (bytes > MAX_BODY_BYTES) { ... }
+});
+```
 
 ---
 
