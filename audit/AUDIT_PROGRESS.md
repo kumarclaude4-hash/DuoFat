@@ -1,6 +1,6 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Session 04 (server egress & limits) complete — 3H / 3M / 4L / 3I_
+_Last updated: Session 05 (admin surface) complete — 3H / 3M / 4L / 3I_
 
 ## Overall status
 
@@ -11,7 +11,7 @@ _Last updated: Session 04 (server egress & limits) complete — 3H / 3M / 4L / 3
 | Trust boundaries identified | ✅ COMPLETE (TB-1 … TB-10) |
 | Attack surface inventoried | ✅ COMPLETE (`ATTACK_SURFACE.md`) |
 | Risk ranking | ✅ COMPLETE (`SESSION-00-RECON.md` §Risk Ranking) |
-| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) done; Session 04 next |
+| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) + S04 (0C/3H/3M/4L/3I) + S05 (0C/3H/3M/4L/3I) done; Session 06 next |
 
 **Estimated effort:** ~10 focused sessions (see plan below). Sessions 1–5 cover the
 server-authoritative trust boundaries (highest value under the threat model) and should
@@ -47,9 +47,9 @@ ultimately mediated by the same server/rules boundaries reviewed earlier.
 | 01 | Firestore rules | `firestore.rules` + `firestore-tests/` | ✅ DONE (P2) | `SESSION-01-FIRESTORE.md` | 0C / 3H / 4M / 2L / 2I |
 | 02 | Server auth core | `/mintToken` `/migrateUid` `/createChat`, identities | ✅ DONE (P2) | `SESSION-02-SERVER-AUTH.md` | 0C / 1H / 1M / 4L / 3I |
 | 03 | Media pipeline | `/mediaToken` + `worker/src/index.js` (TB-4/8/9) | ✅ DONE | `SESSION-03-MEDIA.md` | 0C / 3H / 3M / 4L / 3I |
-| 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ⛔ NOT STARTED | — | — |
-| 05 | Admin surface | `/admin/*` | ⛔ NOT STARTED | — | — |
-| 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, waitlist | ⛔ NOT STARTED | — | — |
+| 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ✅ DONE | `SESSION-04-EGRESS.md` | 0C / 3H / 3M / 4L / 3I |
+| 05 | Admin surface | `/admin/*`, `ADMIN_TOKEN`, sessions, audit log | ✅ DONE | `SESSION-05-ADMIN.md` | 0C / 3H / 3M / 4L / 3I |
+| 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, waitlist | 🔜 **NEXT** | — | — |
 | 07 | Client crypto | `crypto/**`, Signal, seed, group keys, backups | ⛔ NOT STARTED | — | — |
 | 08 | Client platform | manifest, deep links, SQLCipher, SecurePrefs, APK secrets | ⛔ NOT STARTED | — | — |
 | 09 | Supply chain / CI | deps, lockfiles, `.github/workflows/**` | ⛔ NOT STARTED | — | — |
@@ -71,6 +71,20 @@ gone from the app's runtime. But the token's **authorization input** is forgeabl
 (`SESSION-03-MEDIA.md` § S03-H1: any user can create `groups/{id}` with a chat's ID and self-assert
 membership), so SEC-A01 is **partially remediated, not resolved** — carry that status into
 Session 10.
+
+**Session 04 re-verification result (SSRF fix):** the redirect-revalidation half is confirmed
+correct — `fetchFollowingSafeRedirects` re-runs the host predicate on every hop and fails closed.
+The predicate itself is not: `isBlockedPreviewHost` never resolves DNS and misses most of IPv6
+(`SESSION-04-EGRESS.md` § S04-H1). The prior review's SSRF item is therefore **partially
+remediated, not resolved**. `S04-I2` is the outstanding second half of the SEC-A01 cleanup
+(dead B2 presign code + live B2 key still in the server env).
+
+**Session 05 re-rating of S04-M1 (action for Session 10):** Session 04 rated S04-M1 (IPv6 /64
+defeats every IP-keyed limit, including the admin lockout) as Medium, conditional on
+`ADMIN_TOKEN` being high-entropy. Session 05 found that **nothing validates, enforces, or even
+documents** its entropy (`SESSION-05-ADMIN.md` § S05-H1, § S05-I1) and there is no global
+failure counter and no logging of admin auth failures at all. **S04-M1 is re-rated High** for
+the final report.
 
 ## How to update this file
 

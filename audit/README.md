@@ -10,11 +10,11 @@ prior conversation context — and continue exactly where the previous session s
 
 1. **Read (≈15 min), in order:** `README.md` (this file) → `SESSION-00-RECON.md` → `ARCHITECTURE.md` → `ATTACK_SURFACE.md` → `AUDIT_PROGRESS.md`.
 2. **Internalize the threat model below.** Only server / Worker / Firestore-rule enforcement counts as a control; client-side checks never do.
-3. **Begin Session 01 — Firestore Authorization.** It is the first `NOT STARTED` row in `AUDIT_PROGRESS.md`.
-   - **Files:** `firestore.rules` (~392 lines) + `firestore-tests/rules.test.js` (read them together — the tests encode the intended contract).
-   - **Goal:** prove no authenticated attacker can abuse `create/read/update/delete` cross-user; then find rules the tests do *not* cover (gaps by omission).
-   - **Hotspots (from recon):** cross-user prekey / one-time-key writes, group-key substitution, presence-key diffing, `deletedForAll` gating, the `accountLock` latch, and the enumeration oracle at `firestore.rules:8` and `:253` (any authed user can read `users/{uid}` / `identities/{userId}` — rule whether that is an accepted trade-off).
-   - **Done when:** you create `SESSION-01-FIRESTORE.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 01 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
+3. **Sessions 01–05 are DONE** (`SESSION-01-FIRESTORE.md` … `SESSION-05-ADMIN.md`). Read the session reports covering the code you are about to touch, then **begin Session 06 — Duress & Locks**, the first `NEXT` row in `AUDIT_PROGRESS.md`.
+   - **Files:** `server/index.js` `/requestLockNonce` (`:2362`) + `/duress-lock` (`:2410`), `firestore.rules:321` (`duressEligibility`) / `:341` (`accountLock`) / `:360` (`_duressNonces`), and the Android `AccountLockWorker` / duress-PIN paths.
+   - **Goal:** verify the `accountLock` one-way latch end to end, the single-use nonce transaction, and whether *any* server path enforces `duressEligibility`.
+   - **Inherited from earlier sessions:** S04-L2 (no rate limit at all on the unauthenticated `/duress-lock`), S05-M2 (`duressEligibility` appears to be enforced nowhere server-side — confirm), and the raw-uid log at `:2398` (violates the `uidTag` policy at `:674`).
+   - **Done when:** you create `SESSION-06-DURESS.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 06 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
 4. **Caveat:** `docs/SECURITY_REVIEW_2026-08-04.md` items are marked *"claimed fixed — re-verify,"* not resolved. Do not trust that status for anything in your scope.
 
 ---
