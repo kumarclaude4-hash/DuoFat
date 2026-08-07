@@ -213,7 +213,13 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         final String[]  uidHolder = {null};
         final Exception[] authErr = {null};
 
-        AuthTokenHelper.signInWithSeed(derivedUserId, pubKeyBytes, new AuthTokenHelper.Callback() {
+        // S07-C1 FIX: pass identityKeyPair.getPrivateKey() so the client can
+        // sign the server's challenge nonce, proving seed-phrase possession.
+        AuthTokenHelper.signInWithSeed(
+                derivedUserId,
+                pubKeyBytes,
+                identityKeyPair.getPrivateKey(),
+                new AuthTokenHelper.Callback() {
             @Override public void onSuccess(String uid) {
                 synchronized (authLock) { uidHolder[0] = uid; authLock.notifyAll(); }
             }

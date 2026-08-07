@@ -8,6 +8,8 @@ import com.duoshield.app.BuildConfig;
 import com.google.firebase.auth.FirebaseAuth;
 
 import org.json.JSONObject;
+import org.signal.libsignal.protocol.ecc.Curve;
+import org.signal.libsignal.protocol.ecc.ECPrivateKey;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -25,12 +27,13 @@ import java.nio.charset.StandardCharsets;
  * <p>All network I/O is performed on the calling thread.  The callback is
  * always delivered on the <strong>main thread</strong>.
  *
- * <h3>Security</h3>
- * The server verifies {@code identityPubKeyHex} against the stored
- * {@code identityPubKeyHash} before minting a token.  For brand-new accounts
- * (no Firestore identity record yet) the token is minted unconditionally
- * because the userId is derived from a 128-bit-entropy seed that only the
- * legitimate user knows.
+ * <h3>Security (S07-C1 fix)</h3>
+ * Token minting is gated on proof of possession of the identity private key:
+ * the server issues a one-time challenge nonce via {@code /mintChallenge}, the
+ * client signs it using XEd25519 ({@code Curve.calculateSignature}), and the
+ * server verifies the signature against the stored public key before minting.
+ * This prevents account takeover via the public identity key (which any peer
+ * can read from Firestore {@code identities/{uid}}).
  */
 public final class AuthTokenHelper {
 
@@ -54,37 +57,46 @@ public final class AuthTokenHelper {
     }
 
     /**
-     * Derives a Firebase custom token for the given userId and signs in.
-     * Must NOT be called on the main thread.
+     * S07-C1 FIX — primary entry point. Requires the identity private key so
+     * the client can prove possession of the seed phrase via a server challenge.
      *
-     * @param userId               deterministic account ID (e.g. "ABCDE-FGHIJ-KLM")
-     * @param identityPubKeyBytes  raw bytes of the Signal identity public key
+     * <p>Two-step flow:
+     * <ol>
+     *   <li>POST /mintChallenge → server issues a one-time nonce.</li>
+     *   <li>Client signs the nonce with {@code identityPrivKey} using XEd25519
+     *       ({@code Curve.calculateSignature}).</li>
+     *   <li>POST /mintToken with nonce + signatureHex → server verifies and mints.</li>
+     * </ol>
+     *
+     * @param userId               deterministic account ID derived from the seed phrase
+     * @param identityPubKeyBytes  raw 32-byte Curve25519 identity public key
+     * @param identityPrivKey      Curve25519 identity private key (for XEd25519 signing)
+     * @param waitlistRequestId    approved access-request token for new accounts, or null
      * @param cb                   result callback, always invoked on the main thread
      */
     public static void signInWithSeed(String userId,
                                       byte[] identityPubKeyBytes,
-                                      Callback cb) {
-        signInWithSeed(userId, identityPubKeyBytes, null, cb);
-    }
-
-    /**
-     * Same as {@link #signInWithSeed(String, byte[], Callback)}, but also passes
-     * a waitlist request id. Only meaningful for brand-new accounts — the server
-     * ignores it entirely for accounts that already have an identity record, so
-     * restoring an existing account should pass {@code null}.
-     *
-     * @param waitlistRequestId approved access-request token from
-     *                          {@code RequestAccessActivity}, or null
-     */
-    public static void signInWithSeed(String userId,
-                                      byte[] identityPubKeyBytes,
+                                      ECPrivateKey identityPrivKey,
                                       String waitlistRequestId,
                                       Callback cb) {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             try {
+                Log.i(TAG, "signInWithSeed: requesting challenge from server…");
+                String nonce = fetchChallenge(userId);
+
+                Log.i(TAG, "signInWithSeed: signing challenge with identity key…");
+                // XEd25519: Curve.calculateSignature produces a 64-byte signature
+                // over the nonce bytes using the Curve25519 private key in signing mode.
+                // The server verifies with the matching Montgomery→Edwards conversion.
+                byte[] signatureBytes = Curve.calculateSignature(
+                        identityPrivKey,
+                        nonce.getBytes(StandardCharsets.UTF_8));
+                String signatureHex = toHex(signatureBytes);
+
                 Log.i(TAG, "signInWithSeed: fetching custom token…");
-                String customToken = fetchCustomToken(userId, toHex(identityPubKeyBytes), waitlistRequestId);
+                String customToken = fetchCustomToken(
+                        userId, toHex(identityPubKeyBytes), nonce, signatureHex, waitlistRequestId);
                 Log.i(TAG, "signInWithSeed: token received, signing in with Firebase…");
                 String uid = doSignIn(customToken);
                 Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS");
@@ -96,9 +108,70 @@ public final class AuthTokenHelper {
         }, "auth-token").start();
     }
 
+    /**
+     * Convenience overload for account restoration (no waitlist request needed).
+     */
+    public static void signInWithSeed(String userId,
+                                      byte[] identityPubKeyBytes,
+                                      ECPrivateKey identityPrivKey,
+                                      Callback cb) {
+        signInWithSeed(userId, identityPubKeyBytes, identityPrivKey, null, cb);
+    }
+
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private static String fetchCustomToken(String userId, String pubKeyHex, String waitlistRequestId) throws Exception {
+    /**
+     * S07-C1 FIX — Step 1: obtain a one-time challenge nonce from the server.
+     * The nonce is valid for 5 minutes; the client must sign and submit it
+     * before it expires.
+     */
+    private static String fetchChallenge(String userId) throws Exception {
+        String serverUrl = BuildConfig.PUSH_SERVER_URL;
+        if (serverUrl == null || serverUrl.isEmpty()) {
+            throw new Exception("PUSH_SERVER_URL is not configured.");
+        }
+        String endpoint = (serverUrl.endsWith("/") ? serverUrl : serverUrl + "/") + "mintChallenge";
+        Log.d(TAG, "fetchChallenge: POST " + endpoint);
+
+        JSONObject body = new JSONObject();
+        body.put("userId", userId);
+        byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
+
+        URL url = new URL(endpoint);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+            try (OutputStream os = conn.getOutputStream()) { os.write(bodyBytes); }
+
+            int code = conn.getResponseCode();
+            if (code == 429) throw new Exception(
+                    "Too many sign-in attempts. Please wait a moment and try again.");
+            if (code != 200) throw new Exception("Challenge server returned HTTP " + code);
+
+            try (InputStream is = conn.getInputStream()) {
+                JSONObject resp = new JSONObject(readFully(is));
+                String nonce = resp.getString("nonce");
+                if (nonce == null || nonce.isEmpty())
+                    throw new Exception("Server returned empty challenge nonce.");
+                return nonce;
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /**
+     * S07-C1 FIX — Step 3: exchange the signed challenge for a custom token.
+     * The server verifies the XEd25519 signature before minting.
+     */
+    private static String fetchCustomToken(String userId, String pubKeyHex,
+                                           String nonce, String signatureHex,
+                                           String waitlistRequestId) throws Exception {
         String serverUrl = BuildConfig.PUSH_SERVER_URL;
         if (serverUrl == null || serverUrl.isEmpty()) {
             throw new Exception("PUSH_SERVER_URL is not configured. "
@@ -113,6 +186,8 @@ public final class AuthTokenHelper {
         JSONObject body = new JSONObject();
         body.put("userId",            userId);
         body.put("identityPubKeyHex", pubKeyHex);
+        body.put("nonce",             nonce);
+        body.put("signatureHex",      signatureHex);
         if (waitlistRequestId != null && !waitlistRequestId.isEmpty()) {
             body.put("waitlistRequestId", waitlistRequestId);
         }

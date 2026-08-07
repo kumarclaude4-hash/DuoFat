@@ -52,37 +52,38 @@ jobs:
           fi
           printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
 
-      - name: Write service-account.json
-        env:
-          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
-        run: |
-          mkdir -p app/src/main/assets
-          if [ -n "$SERVICE_ACCOUNT" ]; then
-            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
-          else
-            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
-            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
-              > app/src/main/assets/service-account.json
-          fi
+      # S08-C1 / SC-02 FIX: The Firebase Admin service-account private key must
+      # NEVER be written into app/src/main/assets/ — Android packages assets/
+      # verbatim so the key would ship in every published APK, giving anyone who
+      # downloads the APK full Admin SDK authority over the entire Firestore
+      # database, bypassing all Firestore Security Rules.
+      #
+      # The service-account key is a SERVER-ONLY credential. It belongs in the
+      # server's runtime environment (Render / Cloud Run env var), not in the
+      # Android client build at all. The Android app never needs Admin SDK access;
+      # it communicates with the push server over the verified /mintToken and
+      # related endpoints, which perform all Admin SDK calls server-side.
+      #
+      # The Write service-account.json step has been permanently removed.
+      # If any Firebase initialisation code in the app still reads this file,
+      # that code must be removed — the app uses the google-services.json
+      # configuration (non-privileged client config) for Firebase client SDK init.
 
       - name: Write local.properties
         env:
-          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
-          B2_REGION:          ${{ secrets.B2_REGION }}
-          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
-          WORKER_URL:         ${{ secrets.WORKER_URL }}
-          WORKER_SECRET:      ${{ secrets.WORKER_SECRET }}
+          PUSH_SERVER_URL: ${{ secrets.PUSH_SERVER_URL }}
+          WORKER_URL:      ${{ secrets.WORKER_URL }}
         run: |
+          # SC-02 FIX: B2_KEY_ID, B2_APPLICATION_KEY, and WORKER_SECRET are
+          # server-side / Worker-side secrets. They must NOT be compiled into the
+          # Android APK via BuildConfig. The client communicates with the Worker
+          # through per-object capability tokens minted by the push server; it
+          # never needs a shared B2 or Worker credential.
+          #
+          # Only genuinely non-secret public-endpoint URLs are written here.
           echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
-          echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
-          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                   >> local.properties
-          echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                       >> local.properties
-          echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
-          echo "worker.secret=${WORKER_SECRET:-}"                                             >> local.properties
 
       - name: Decode keystore
         env:

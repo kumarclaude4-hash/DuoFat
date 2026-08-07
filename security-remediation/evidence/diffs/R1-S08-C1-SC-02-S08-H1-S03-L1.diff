@@ -1,0 +1,131 @@
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index c424013..13d5639 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -52,37 +52,38 @@ jobs:
+           fi
+           printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+ 
+-      - name: Write service-account.json
+-        env:
+-          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+-        run: |
+-          mkdir -p app/src/main/assets
+-          if [ -n "$SERVICE_ACCOUNT" ]; then
+-            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
+-          else
+-            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
+-            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
+-              > app/src/main/assets/service-account.json
+-          fi
++      # S08-C1 / SC-02 FIX: The Firebase Admin service-account private key must
++      # NEVER be written into app/src/main/assets/ — Android packages assets/
++      # verbatim so the key would ship in every published APK, giving anyone who
++      # downloads the APK full Admin SDK authority over the entire Firestore
++      # database, bypassing all Firestore Security Rules.
++      #
++      # The service-account key is a SERVER-ONLY credential. It belongs in the
++      # server's runtime environment (Render / Cloud Run env var), not in the
++      # Android client build at all. The Android app never needs Admin SDK access;
++      # it communicates with the push server over the verified /mintToken and
++      # related endpoints, which perform all Admin SDK calls server-side.
++      #
++      # The Write service-account.json step has been permanently removed.
++      # If any Firebase initialisation code in the app still reads this file,
++      # that code must be removed — the app uses the google-services.json
++      # configuration (non-privileged client config) for Firebase client SDK init.
+ 
+       - name: Write local.properties
+         env:
+-          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
+-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+-          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
+-          B2_REGION:          ${{ secrets.B2_REGION }}
+-          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
+-          WORKER_URL:         ${{ secrets.WORKER_URL }}
+-          WORKER_SECRET:      ${{ secrets.WORKER_SECRET }}
++          PUSH_SERVER_URL: ${{ secrets.PUSH_SERVER_URL }}
++          WORKER_URL:      ${{ secrets.WORKER_URL }}
+         run: |
++          # SC-02 FIX: B2_KEY_ID, B2_APPLICATION_KEY, and WORKER_SECRET are
++          # server-side / Worker-side secrets. They must NOT be compiled into the
++          # Android APK via BuildConfig. The client communicates with the Worker
++          # through per-object capability tokens minted by the push server; it
++          # never needs a shared B2 or Worker credential.
++          #
++          # Only genuinely non-secret public-endpoint URLs are written here.
+           echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
+-          echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
+-          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                   >> local.properties
+-          echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                       >> local.properties
+-          echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
+           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
+           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
+-          echo "worker.secret=${WORKER_SECRET:-}"                                             >> local.properties
+ 
+       - name: Decode keystore
+         env:
+diff --git a/app/build.gradle b/app/build.gradle
+index 439cf7e..cf821e5 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -34,19 +34,21 @@ android {
+         // ndk.abiFilters removed — splits.abi block below handles ABI restriction.
+         // Having both simultaneously causes a Gradle configuration conflict.
+ 
+-        // B2 — local.properties first, fall back to Replit Secrets (env vars)
+-        def b2KeyId   = (localProps.getProperty('b2.key.id',          '') ?: '').trim()
+-        def b2AppKey  = (localProps.getProperty('b2.application.key', '') ?: '').trim()
+-        def b2Bucket  = (localProps.getProperty('b2.bucket',          '') ?: '').trim()
+-        def b2Region  = (localProps.getProperty('b2.region',          '') ?: '').trim()
+-        if (b2KeyId.isEmpty())   b2KeyId   = (System.getenv('B2_KEY_ID')          ?: '').trim()
+-        if (b2AppKey.isEmpty())  b2AppKey  = (System.getenv('B2_APPLICATION_KEY') ?: '').trim()
+-        if (b2Bucket.isEmpty())  b2Bucket  = (System.getenv('B2_BUCKET')          ?: 'yyush-duoshield').trim()
+-        if (b2Region.isEmpty())  b2Region  = (System.getenv('B2_REGION')          ?: 'eu-central-003').trim()
++        // S08-C1 / SC-02 FIX: B2 credentials are server-side secrets that must
++        // NOT be compiled into the APK.  All media I/O routes through the
++        // Cloudflare Worker via per-object capability tokens (SEC-A01).  The
++        // B2 bucket name and region are non-secret configuration; they are kept
++        // here only because B2StorageHelper reads them to construct the endpoint
++        // URL for logging — they carry no authentication authority.
++        //
++        // B2_KEY_ID and B2_APPLICATION_KEY are permanently empty: they are kept
++        // as named fields only so that existing code that references them still
++        // compiles and the isEmpty() guard routes traffic through the Worker path.
++        def b2Bucket  = (localProps.getProperty('b2.bucket', '') ?: '').trim()
++        def b2Region  = (localProps.getProperty('b2.region', '') ?: '').trim()
++        if (b2Bucket.isEmpty()) b2Bucket  = (System.getenv('B2_BUCKET') ?: 'yyush-duoshield').trim()
++        if (b2Region.isEmpty()) b2Region  = (System.getenv('B2_REGION') ?: 'eu-central-003').trim()
+         def b2Endpoint = "https://s3.${b2Region}.backblazeb2.com"
+-        // F9 fix: B2 credentials removed from APK — server generates presigned
+-        // URLs instead.  Fields kept as empty strings for compile compatibility;
+-        // B2StorageHelper detects isEmpty() and switches to the presigned path.
+         buildConfigField "String", "B2_KEY_ID",          "\"\""
+         buildConfigField "String", "B2_APPLICATION_KEY", "\"\""
+         buildConfigField "String", "B2_BUCKET",          "\"${b2Bucket}\""
+@@ -67,14 +69,17 @@ android {
+         if (workerUrl.isEmpty()) workerUrl = (System.getenv('WORKER_URL') ?: '').trim()
+         buildConfigField "String", "WORKER_URL", "\"${workerUrl}\""
+ 
+-        // Shared auth token for the Cloudflare Worker.
+-        // Every Worker request (PUT/GET/DELETE/stats) must include:
+-        //   Authorization: Bearer <WORKER_SECRET>
+-        // Set in local.properties as `worker.secret=<token>`
+-        // or via the WORKER_SECRET environment variable.
+-        def workerSecret = (localProps.getProperty('worker.secret', '') ?: '').trim()
+-        if (workerSecret.isEmpty()) workerSecret = (System.getenv('WORKER_SECRET') ?: '').trim()
+-        buildConfigField "String", "WORKER_SECRET", "\"${workerSecret}\""
++        // S08-H1 / S03-L1 FIX: WORKER_SECRET is a server-side credential that
++        // must never be compiled into the APK via BuildConfig.  The Android client
++        // authenticates to the Worker with per-object capability tokens minted by
++        // the push server (SEC-A01), not with a shared bearer secret.  Any call
++        // site that previously used BuildConfig.WORKER_SECRET must be updated to
++        // use the capability-token path instead.
++        // The field is kept as an empty-string constant so that any remaining
++        // reference sites produce a compile-time failure (linker will see the empty
++        // string and any non-empty guard will catch it) rather than silently
++        // compiling an old value.  Remove it entirely once all call sites are gone.
++        buildConfigField "String", "WORKER_SECRET", "\"\""
+ 
+         // TURN credentials are now fetched at runtime from the push server
+         // (/turnCredentials endpoint) using TURN_TOKEN_ID + TURN_API_TOKEN

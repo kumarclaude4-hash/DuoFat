@@ -34,19 +34,21 @@ android {
         // ndk.abiFilters removed — splits.abi block below handles ABI restriction.
         // Having both simultaneously causes a Gradle configuration conflict.
 
-        // B2 — local.properties first, fall back to Replit Secrets (env vars)
-        def b2KeyId   = (localProps.getProperty('b2.key.id',          '') ?: '').trim()
-        def b2AppKey  = (localProps.getProperty('b2.application.key', '') ?: '').trim()
-        def b2Bucket  = (localProps.getProperty('b2.bucket',          '') ?: '').trim()
-        def b2Region  = (localProps.getProperty('b2.region',          '') ?: '').trim()
-        if (b2KeyId.isEmpty())   b2KeyId   = (System.getenv('B2_KEY_ID')          ?: '').trim()
-        if (b2AppKey.isEmpty())  b2AppKey  = (System.getenv('B2_APPLICATION_KEY') ?: '').trim()
-        if (b2Bucket.isEmpty())  b2Bucket  = (System.getenv('B2_BUCKET')          ?: 'yyush-duoshield').trim()
-        if (b2Region.isEmpty())  b2Region  = (System.getenv('B2_REGION')          ?: 'eu-central-003').trim()
+        // S08-C1 / SC-02 FIX: B2 credentials are server-side secrets that must
+        // NOT be compiled into the APK.  All media I/O routes through the
+        // Cloudflare Worker via per-object capability tokens (SEC-A01).  The
+        // B2 bucket name and region are non-secret configuration; they are kept
+        // here only because B2StorageHelper reads them to construct the endpoint
+        // URL for logging — they carry no authentication authority.
+        //
+        // B2_KEY_ID and B2_APPLICATION_KEY are permanently empty: they are kept
+        // as named fields only so that existing code that references them still
+        // compiles and the isEmpty() guard routes traffic through the Worker path.
+        def b2Bucket  = (localProps.getProperty('b2.bucket', '') ?: '').trim()
+        def b2Region  = (localProps.getProperty('b2.region', '') ?: '').trim()
+        if (b2Bucket.isEmpty()) b2Bucket  = (System.getenv('B2_BUCKET') ?: 'yyush-duoshield').trim()
+        if (b2Region.isEmpty()) b2Region  = (System.getenv('B2_REGION') ?: 'eu-central-003').trim()
         def b2Endpoint = "https://s3.${b2Region}.backblazeb2.com"
-        // F9 fix: B2 credentials removed from APK — server generates presigned
-        // URLs instead.  Fields kept as empty strings for compile compatibility;
-        // B2StorageHelper detects isEmpty() and switches to the presigned path.
         buildConfigField "String", "B2_KEY_ID",          "\"\""
         buildConfigField "String", "B2_APPLICATION_KEY", "\"\""
         buildConfigField "String", "B2_BUCKET",          "\"${b2Bucket}\""
@@ -67,14 +69,17 @@ android {
         if (workerUrl.isEmpty()) workerUrl = (System.getenv('WORKER_URL') ?: '').trim()
         buildConfigField "String", "WORKER_URL", "\"${workerUrl}\""
 
-        // Shared auth token for the Cloudflare Worker.
-        // Every Worker request (PUT/GET/DELETE/stats) must include:
-        //   Authorization: Bearer <WORKER_SECRET>
-        // Set in local.properties as `worker.secret=<token>`
-        // or via the WORKER_SECRET environment variable.
-        def workerSecret = (localProps.getProperty('worker.secret', '') ?: '').trim()
-        if (workerSecret.isEmpty()) workerSecret = (System.getenv('WORKER_SECRET') ?: '').trim()
-        buildConfigField "String", "WORKER_SECRET", "\"${workerSecret}\""
+        // S08-H1 / S03-L1 FIX: WORKER_SECRET is a server-side credential that
+        // must never be compiled into the APK via BuildConfig.  The Android client
+        // authenticates to the Worker with per-object capability tokens minted by
+        // the push server (SEC-A01), not with a shared bearer secret.  Any call
+        // site that previously used BuildConfig.WORKER_SECRET must be updated to
+        // use the capability-token path instead.
+        // The field is kept as an empty-string constant so that any remaining
+        // reference sites produce a compile-time failure (linker will see the empty
+        // string and any non-empty guard will catch it) rather than silently
+        // compiling an old value.  Remove it entirely once all call sites are gone.
+        buildConfigField "String", "WORKER_SECRET", "\"\""
 
         // TURN credentials are now fetched at runtime from the push server
         // (/turnCredentials endpoint) using TURN_TOKEN_ID + TURN_API_TOKEN
