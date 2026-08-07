@@ -1,6 +1,6 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Sessions 01 + 02 second pass — 4 new findings added_
+_Last updated: Session 03 (media pipeline) complete — 3H / 3M / 4L / 3I_
 
 ## Overall status
 
@@ -11,7 +11,7 @@ _Last updated: Sessions 01 + 02 second pass — 4 new findings added_
 | Trust boundaries identified | ✅ COMPLETE (TB-1 … TB-10) |
 | Attack surface inventoried | ✅ COMPLETE (`ATTACK_SURFACE.md`) |
 | Risk ranking | ✅ COMPLETE (`SESSION-00-RECON.md` §Risk Ranking) |
-| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) done [2nd pass]; Session 03 next |
+| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) done; Session 04 next |
 
 **Estimated effort:** ~10 focused sessions (see plan below). Sessions 1–5 cover the
 server-authoritative trust boundaries (highest value under the threat model) and should
@@ -46,7 +46,7 @@ ultimately mediated by the same server/rules boundaries reviewed earlier.
 | 00 | Reconnaissance | Whole repo map | ✅ DONE | `SESSION-00-RECON.md` | mapping only |
 | 01 | Firestore rules | `firestore.rules` + `firestore-tests/` | ✅ DONE (P2) | `SESSION-01-FIRESTORE.md` | 0C / 3H / 4M / 2L / 2I |
 | 02 | Server auth core | `/mintToken` `/migrateUid` `/createChat`, identities | ✅ DONE (P2) | `SESSION-02-SERVER-AUTH.md` | 0C / 1H / 1M / 4L / 3I |
-| 03 | Media pipeline | `/mediaToken` + `worker/src/index.js` (TB-4/9) | ⛔ NOT STARTED | — | — |
+| 03 | Media pipeline | `/mediaToken` + `worker/src/index.js` (TB-4/8/9) | ✅ DONE | `SESSION-03-MEDIA.md` | 0C / 3H / 3M / 4L / 3I |
 | 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ⛔ NOT STARTED | — | — |
 | 05 | Admin surface | `/admin/*` | ⛔ NOT STARTED | — | — |
 | 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, waitlist | ⛔ NOT STARTED | — | — |
@@ -64,6 +64,13 @@ code contains the fail-closed Worker auth, per-object capability tokens, redirec
 SSRF guard, transactional duress-lock, and bounded body readers. **Treat these as "claimed
 fixed" and independently re-verify each in the relevant session** — do not carry them forward
 as resolved.
+
+**Session 03 re-verification result (SEC-A01):** the per-object capability-token *cryptography*
+and its fail-closed posture are confirmed correct, and the shared data-plane secret is genuinely
+gone from the app's runtime. But the token's **authorization input** is forgeable
+(`SESSION-03-MEDIA.md` § S03-H1: any user can create `groups/{id}` with a chat's ID and self-assert
+membership), so SEC-A01 is **partially remediated, not resolved** — carry that status into
+Session 10.
 
 ## How to update this file
 
