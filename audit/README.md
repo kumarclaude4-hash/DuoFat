@@ -10,11 +10,11 @@ prior conversation context — and continue exactly where the previous session s
 
 1. **Read (≈15 min), in order:** `README.md` (this file) → `SESSION-00-RECON.md` → `ARCHITECTURE.md` → `ATTACK_SURFACE.md` → `AUDIT_PROGRESS.md`.
 2. **Internalize the threat model below.** Only server / Worker / Firestore-rule enforcement counts as a control; client-side checks never do.
-3. **Begin Session 01 — Firestore Authorization.** It is the first `NOT STARTED` row in `AUDIT_PROGRESS.md`.
-   - **Files:** `firestore.rules` (~392 lines) + `firestore-tests/rules.test.js` (read them together — the tests encode the intended contract).
-   - **Goal:** prove no authenticated attacker can abuse `create/read/update/delete` cross-user; then find rules the tests do *not* cover (gaps by omission).
-   - **Hotspots (from recon):** cross-user prekey / one-time-key writes, group-key substitution, presence-key diffing, `deletedForAll` gating, the `accountLock` latch, and the enumeration oracle at `firestore.rules:8` and `:253` (any authed user can read `users/{uid}` / `identities/{userId}` — rule whether that is an accepted trade-off).
-   - **Done when:** you create `SESSION-01-FIRESTORE.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 01 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
+3. **Sessions 01–06 are DONE** (`SESSION-01-FIRESTORE.md` … `SESSION-06-DURESS.md`). Read the session reports covering the code you are about to touch, then **begin Session 07 — Client Crypto**, the first `NEXT` row in `AUDIT_PROGRESS.md`.
+   - **Files:** `app/src/main/java/com/duoshield/app/crypto/**` (Signal integration, `SignalKeyManager`), the seed-phrase derivation behind `RestoreFromSeedActivity` / `AuthTokenHelper`, group-key handling, and `backup/**`.
+   - **Goal:** the threat model says client-side checks are never controls — so score these bugs by their effect on **other** users' confidentiality (key substitution, group-key sharing, backup blob crypto), not on the local user's own plaintext.
+   - **Inherited from earlier sessions:** S01's cross-user prekey / one-time-key write gaps and group-key substitution, S03-H1 (`groups/{id}` self-asserted membership — the same collection client crypto trusts), and S06-I3 (duress-PIN deniability depends on `SecurePrefs` being genuinely hardware-backed — verify that here).
+   - **Done when:** you create `SESSION-07-CLIENT-CRYPTO.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 07 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
 4. **Caveat:** `docs/SECURITY_REVIEW_2026-08-04.md` items are marked *"claimed fixed — re-verify,"* not resolved. Do not trust that status for anything in your scope.
 
 ---
