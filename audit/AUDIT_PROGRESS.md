@@ -1,6 +1,6 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Session 01 (Firestore authorization)_
+_Last updated: Session 02 (Server auth & identity core)_
 
 ## Overall status
 
@@ -11,7 +11,7 @@ _Last updated: Session 01 (Firestore authorization)_
 | Trust boundaries identified | ✅ COMPLETE (TB-1 … TB-10) |
 | Attack surface inventoried | ✅ COMPLETE (`ATTACK_SURFACE.md`) |
 | Risk ranking | ✅ COMPLETE (`SESSION-00-RECON.md` §Risk Ranking) |
-| **Vulnerability assessment** | 🟡 **IN PROGRESS** — Session 01 done (0C / 2H / 3M / 2L / 2I); Session 02 next |
+| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/2H/3M/2L/2I) + S02 (0C/0H/1M/3L/3I) done; Session 03 next |
 
 **Estimated effort:** ~10 focused sessions (see plan below). Sessions 1–5 cover the
 server-authoritative trust boundaries (highest value under the threat model) and should
@@ -45,7 +45,7 @@ ultimately mediated by the same server/rules boundaries reviewed earlier.
 |---|---|---|---|---|---|
 | 00 | Reconnaissance | Whole repo map | ✅ DONE | `SESSION-00-RECON.md` | mapping only |
 | 01 | Firestore rules | `firestore.rules` + `firestore-tests/` | ✅ DONE | `SESSION-01-FIRESTORE.md` | 0C / 2H / 3M / 2L / 2I |
-| 02 | Server auth core | `/mintToken` `/migrateUid` `/createChat`, identities | ⛔ NOT STARTED | — | — |
+| 02 | Server auth core | `/mintToken` `/migrateUid` `/createChat`, identities | ✅ DONE | `SESSION-02-SERVER-AUTH.md` | 0C / 0H / 1M / 3L / 3I |
 | 03 | Media pipeline | `/mediaToken` + `worker/src/index.js` (TB-4/9) | ⛔ NOT STARTED | — | — |
 | 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ⛔ NOT STARTED | — | — |
 | 05 | Admin surface | `/admin/*` | ⛔ NOT STARTED | — | — |
