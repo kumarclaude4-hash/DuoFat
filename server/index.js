@@ -407,7 +407,7 @@ function checkWaitlistPollRateLimit(ip) {
   return true;
 }
 
-// ── Per-IP rate limit ─────────────────────────────────────────────────────────
+// ── Per-IP rate limit ───────────────────────────────��─────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
 // Render appends its own entry to X-Forwarded-For; we use the RIGHTMOST value
 // (proxy-appended, not client-controlled) via getClientIp(). See CRIT-1 fix.
@@ -1442,7 +1442,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /mintToken ─────────────────────────────────────────────────────────
+  // ── POST /mintToken ────────────────────────────────���────────────────────────
   //
   // Body (JSON): { userId, identityPubKeyHex }
   //
@@ -1833,7 +1833,10 @@ http.createServer((req, res) => {
 
         let decodedToken;
         try {
-          decodedToken = await admin.auth().verifyIdToken(idToken);
+          // S02-I3 FIX: pass checkRevoked=true so revoked tokens (e.g. from a
+          // duress wipe or an admin-forced sign-out) are rejected immediately
+          // rather than being accepted until their 1-hour JWT expiry.
+          decodedToken = await admin.auth().verifyIdToken(idToken, true);
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2026,7 +2029,7 @@ http.createServer((req, res) => {
 
         let decodedToken;
         try {
-          decodedToken = await admin.auth().verifyIdToken(idToken);
+          decodedToken = await admin.auth().verifyIdToken(idToken, true); // S02-I3: checkRevoked
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2138,7 +2141,7 @@ http.createServer((req, res) => {
 
         let uid;
         try {
-          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+          uid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2220,7 +2223,7 @@ http.createServer((req, res) => {
         }
         let turnUid;
         try {
-          turnUid = (await admin.auth().verifyIdToken(idToken)).uid;
+          turnUid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch (authErr) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
@@ -2394,7 +2397,7 @@ http.createServer((req, res) => {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
         let lpUid;
-        try { lpUid = (await admin.auth().verifyIdToken(tok)).uid; }
+        try { lpUid = (await admin.auth().verifyIdToken(tok, true)).uid; } // S02-I3: checkRevoked
         catch { res.writeHead(401); res.end("Invalid token"); return; }
         if (!checkAuthRateLimit(lpUid, "linkPreview")) {
           res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
@@ -2488,7 +2491,7 @@ http.createServer((req, res) => {
         const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
         if (!tok) { res.writeHead(401); res.end("Unauthorized"); return; }
         let callerUid;
-        try { callerUid = (await admin.auth().verifyIdToken(tok)).uid; }
+        try { callerUid = (await admin.auth().verifyIdToken(tok, true)).uid; } // S02-I3: checkRevoked
         catch { res.writeHead(401); res.end("Invalid token"); return; }
         if (!checkAuthRateLimit(callerUid, "removeGroupMember")) {
           res.writeHead(429); res.end("Rate limit exceeded — retry in 60 s"); return;
@@ -2551,7 +2554,7 @@ http.createServer((req, res) => {
 
         let uid;
         try {
-          uid = (await admin.auth().verifyIdToken(idToken)).uid;
+          uid = (await admin.auth().verifyIdToken(idToken, true)).uid; // S02-I3: checkRevoked
         } catch (_) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Invalid or expired token");
