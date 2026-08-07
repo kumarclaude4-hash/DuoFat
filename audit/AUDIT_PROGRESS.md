@@ -1,6 +1,6 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Session 05 (admin surface) complete — 3H / 3M / 4L / 3I_
+_Last updated: Session 06 (duress & locks) complete — 3H / 3M / 4L / 3I_
 
 ## Overall status
 
@@ -11,7 +11,7 @@ _Last updated: Session 05 (admin surface) complete — 3H / 3M / 4L / 3I_
 | Trust boundaries identified | ✅ COMPLETE (TB-1 … TB-10) |
 | Attack surface inventoried | ✅ COMPLETE (`ATTACK_SURFACE.md`) |
 | Risk ranking | ✅ COMPLETE (`SESSION-00-RECON.md` §Risk Ranking) |
-| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) + S04 (0C/3H/3M/4L/3I) + S05 (0C/3H/3M/4L/3I) done; Session 06 next |
+| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) + S04 (0C/3H/3M/4L/3I) + S05 (0C/3H/3M/4L/3I) + S06 (0C/3H/3M/4L/3I) done; Session 07 next |
 
 **Estimated effort:** ~10 focused sessions (see plan below). Sessions 1–5 cover the
 server-authoritative trust boundaries (highest value under the threat model) and should
@@ -49,8 +49,8 @@ ultimately mediated by the same server/rules boundaries reviewed earlier.
 | 03 | Media pipeline | `/mediaToken` + `worker/src/index.js` (TB-4/8/9) | ✅ DONE | `SESSION-03-MEDIA.md` | 0C / 3H / 3M / 4L / 3I |
 | 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ✅ DONE | `SESSION-04-EGRESS.md` | 0C / 3H / 3M / 4L / 3I |
 | 05 | Admin surface | `/admin/*`, `ADMIN_TOKEN`, sessions, audit log | ✅ DONE | `SESSION-05-ADMIN.md` | 0C / 3H / 3M / 4L / 3I |
-| 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, waitlist | 🔜 **NEXT** | — | — |
-| 07 | Client crypto | `crypto/**`, Signal, seed, group keys, backups | ⛔ NOT STARTED | — | — |
+| 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, duress wipe | ✅ DONE | `SESSION-06-DURESS.md` | 0C / 3H / 3M / 4L / 3I |
+| 07 | Client crypto | `crypto/**`, Signal, seed, group keys, backups | 🔜 **NEXT** | — | — |
 | 08 | Client platform | manifest, deep links, SQLCipher, SecurePrefs, APK secrets | ⛔ NOT STARTED | — | — |
 | 09 | Supply chain / CI | deps, lockfiles, `.github/workflows/**` | ⛔ NOT STARTED | — | — |
 | 10 | Synthesis | regression vs `docs/SECURITY_REVIEW_2026-08-04.md`, final report | ⛔ NOT STARTED | — | — |
@@ -85,6 +85,16 @@ defeats every IP-keyed limit, including the admin lockout) as Medium, conditiona
 documents** its entropy (`SESSION-05-ADMIN.md` § S05-H1, § S05-I1) and there is no global
 failure counter and no logging of admin auth failures at all. **S04-M1 is re-rated High** for
 the final report.
+
+**Session 06 result (duress feature):** the duress subsystem's internals are well built (uid-bound
+single-use nonce, atomic consume-and-lock transaction, correct one-way latch in the rules, good
+timing parity on the restore gate), but **neither of its two advertised guarantees currently
+holds** (`SESSION-06-DURESS.md`). Three independent defeats: S06-H1 `accountLock` is never checked
+by `/mintToken`, so the lock is a client-side advisory check that runs *after* the session is
+minted; S06-H2 the wipe leaves plaintext `account_lock_<uid>` WorkManager records that prove a
+duress code was entered, breaking plausible deniability; S06-H3 an offline trigger wipes locally
+but never locks, and the attacker controls connectivity. S06-H1 is the same *enforcement-location*
+bug class as the S01/S03 `groups` gap — group them in the final report.
 
 ## How to update this file
 

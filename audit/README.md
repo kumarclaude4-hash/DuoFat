@@ -10,11 +10,11 @@ prior conversation context — and continue exactly where the previous session s
 
 1. **Read (≈15 min), in order:** `README.md` (this file) → `SESSION-00-RECON.md` → `ARCHITECTURE.md` → `ATTACK_SURFACE.md` → `AUDIT_PROGRESS.md`.
 2. **Internalize the threat model below.** Only server / Worker / Firestore-rule enforcement counts as a control; client-side checks never do.
-3. **Sessions 01–05 are DONE** (`SESSION-01-FIRESTORE.md` … `SESSION-05-ADMIN.md`). Read the session reports covering the code you are about to touch, then **begin Session 06 — Duress & Locks**, the first `NEXT` row in `AUDIT_PROGRESS.md`.
-   - **Files:** `server/index.js` `/requestLockNonce` (`:2362`) + `/duress-lock` (`:2410`), `firestore.rules:321` (`duressEligibility`) / `:341` (`accountLock`) / `:360` (`_duressNonces`), and the Android `AccountLockWorker` / duress-PIN paths.
-   - **Goal:** verify the `accountLock` one-way latch end to end, the single-use nonce transaction, and whether *any* server path enforces `duressEligibility`.
-   - **Inherited from earlier sessions:** S04-L2 (no rate limit at all on the unauthenticated `/duress-lock`), S05-M2 (`duressEligibility` appears to be enforced nowhere server-side — confirm), and the raw-uid log at `:2398` (violates the `uidTag` policy at `:674`).
-   - **Done when:** you create `SESSION-06-DURESS.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 06 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
+3. **Sessions 01–06 are DONE** (`SESSION-01-FIRESTORE.md` … `SESSION-06-DURESS.md`). Read the session reports covering the code you are about to touch, then **begin Session 07 — Client Crypto**, the first `NEXT` row in `AUDIT_PROGRESS.md`.
+   - **Files:** `app/src/main/java/com/duoshield/app/crypto/**` (Signal integration, `SignalKeyManager`), the seed-phrase derivation behind `RestoreFromSeedActivity` / `AuthTokenHelper`, group-key handling, and `backup/**`.
+   - **Goal:** the threat model says client-side checks are never controls — so score these bugs by their effect on **other** users' confidentiality (key substitution, group-key sharing, backup blob crypto), not on the local user's own plaintext.
+   - **Inherited from earlier sessions:** S01's cross-user prekey / one-time-key write gaps and group-key substitution, S03-H1 (`groups/{id}` self-asserted membership — the same collection client crypto trusts), and S06-I3 (duress-PIN deniability depends on `SecurePrefs` being genuinely hardware-backed — verify that here).
+   - **Done when:** you create `SESSION-07-CLIENT-CRYPTO.md` (findings as `path:line` + exploit path + severity + fix), flip the Session 07 row in `AUDIT_PROGRESS.md` to DONE, and record severity counts.
 4. **Caveat:** `docs/SECURITY_REVIEW_2026-08-04.md` items are marked *"claimed fixed — re-verify,"* not resolved. Do not trust that status for anything in your scope.
 
 ---
