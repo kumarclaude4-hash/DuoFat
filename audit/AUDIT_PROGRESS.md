@@ -1,6 +1,7 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Session 06 (duress & locks) complete — 3H / 3M / 4L / 3I_
+_Last updated: **AUDIT COMPLETE** — Session 10 (synthesis & regression) closed out all ten sessions.
+Final report: [`SESSION-10-SYNTHESIS.md`](./SESSION-10-SYNTHESIS.md)._
 
 ## Overall status
 
@@ -11,11 +12,18 @@ _Last updated: Session 06 (duress & locks) complete — 3H / 3M / 4L / 3I_
 | Trust boundaries identified | ✅ COMPLETE (TB-1 … TB-10) |
 | Attack surface inventoried | ✅ COMPLETE (`ATTACK_SURFACE.md`) |
 | Risk ranking | ✅ COMPLETE (`SESSION-00-RECON.md` §Risk Ranking) |
-| **Vulnerability assessment** | 🟡 **IN PROGRESS** — S01 (0C/3H/4M/2L/2I) + S02 (0C/1H/1M/4L/3I) [2nd pass] + S03 (0C/3H/3M/4L/3I) + S04 (0C/3H/3M/4L/3I) + S05 (0C/3H/3M/4L/3I) + S06 (0C/3H/3M/4L/3I) done; Session 07 next |
+| **Vulnerability assessment** | ✅ **COMPLETE** — all 10 sessions done |
+| **Regression vs prior review** | ✅ COMPLETE — 8 fixed / 4 partial / 11 open (`SESSION-10-SYNTHESIS.md` §4) |
+| **Final report** | ✅ COMPLETE (`SESSION-10-SYNTHESIS.md`) |
 
-**Estimated effort:** ~10 focused sessions (see plan below). Sessions 1–5 cover the
-server-authoritative trust boundaries (highest value under the threat model) and should
-come before any client-only deep dive.
+**Audit total: 4 Critical / 28 High / 28 Medium / 34 Low / 23 Informational — 117 findings.**
+After applying the cross-session re-ratings (`SESSION-10-SYNTHESIS.md` §7): 4C / 29H / 27M / 34L / 23I.
+
+**The two findings that matter most:** `S08-C1` (Firebase Admin service-account private key ships in
+every release APK — Admin SDK bypasses Firestore rules entirely, which invalidates the controls
+Sessions 01–06 assessed) and `S07-C1` (`/mintToken` accepts a public value as proof of account
+ownership — takeover without the seed phrase). Until both are closed, the other 115 findings are
+secondary. See `SESSION-10-SYNTHESIS.md` §8 for the P0 remediation list.
 
 ## Recommended audit order (why this sequence)
 
@@ -50,10 +58,13 @@ ultimately mediated by the same server/rules boundaries reviewed earlier.
 | 04 | Server egress & limits | `/linkPreview` SSRF, `/turnCredentials`, rate limits, body/IP | ✅ DONE | `SESSION-04-EGRESS.md` | 0C / 3H / 3M / 4L / 3I |
 | 05 | Admin surface | `/admin/*`, `ADMIN_TOKEN`, sessions, audit log | ✅ DONE | `SESSION-05-ADMIN.md` | 0C / 3H / 3M / 4L / 3I |
 | 06 | Duress & locks | `/requestLockNonce` `/duress-lock`, `accountLock`, duress wipe | ✅ DONE | `SESSION-06-DURESS.md` | 0C / 3H / 3M / 4L / 3I |
-| 07 | Client crypto | `crypto/**`, Signal, seed, group keys, backups | 🔜 **NEXT** | — | — |
-| 08 | Client platform | manifest, deep links, SQLCipher, SecurePrefs, APK secrets | ⛔ NOT STARTED | — | — |
-| 09 | Supply chain / CI | deps, lockfiles, `.github/workflows/**` | ⛔ NOT STARTED | — | — |
-| 10 | Synthesis | regression vs `docs/SECURITY_REVIEW_2026-08-04.md`, final report | ⛔ NOT STARTED | — | — |
+| 07 | Client crypto | `crypto/**`, Signal, seed, group keys, backups | ✅ DONE | `SESSION-07-CLIENT-CRYPTO.md` | **1C** / 3H / 3M / 4L / 3I |
+| 08 | Client platform | manifest, deep links, SQLCipher, SecurePrefs, APK secrets | ✅ DONE | `SESSION-08-CLIENT-PLATFORM.md` | **1C** / 5H / 3M / 4L / 3I |
+| 09 | Supply chain / CI | deps, lockfiles, `.github/workflows/**` | ✅ DONE | `SESSION-09-SUPPLY-CHAIN-CI.md` | **2C** / 4H / 4M / 2L / 0I |
+| 10 | Synthesis | regression vs `docs/SECURITY_REVIEW_2026-08-04.md`, final report | ✅ DONE | `SESSION-10-SYNTHESIS.md` | 0C / 0H / 1M / 2L / 0I (new) |
+
+> **Note on Session 09's IDs:** it labels its findings `SC-01 … SC-12` rather than `S09-*`.
+> Session 10 preserves that scheme when citing them.
 
 ## Prior-work note (must be re-verified, not assumed)
 
@@ -96,8 +107,51 @@ duress code was entered, breaking plausible deniability; S06-H3 an offline trigg
 but never locks, and the attacker controls connectivity. S06-H1 is the same *enforcement-location*
 bug class as the S01/S03 `groups` gap — group them in the final report.
 
+**Session 07 result (first Critical):** the cryptographic core is correct — HKDF domain separation,
+BIP39 parameters, prekey signing, per-address session locking, TOFU integrity and group-key rotation
+all verified sound. But `S07-C1` shows `/mintToken` authenticates an account with a value the client
+publishes publicly, so any user can mint a Firebase session for any account whose Account ID they
+know, **without the seed phrase**. This was in Session 02's scope and was missed there. It also
+answers `S06-I3`: `SecurePrefs` is **not** reliably hardware-backed (`S07-M1`), so the duress-PIN
+deniability claim is unsupported on any device below tier 1.
+
+**Session 08 result (second Critical, larger):** `S08-C1` — `release.yml` writes the project's
+Firebase **Admin service-account private key** into `app/src/main/assets/` immediately before
+`assembleRelease`. Android packages `assets/` verbatim, so R8 and `shrinkResources` never touch it,
+and the key ships inside every APK on GitHub Releases. Admin SDK credentials bypass Firestore rules
+entirely and can mint a token for any uid. **This invalidates the controls Sessions 01–06 audited** —
+they can be reached around rather than through. Session 08 also re-rated `S07-M1` up to `S08-H5`: the
+`SecurePrefs` plaintext fallback holds the identity key, the backup key **and** the SQLCipher
+passphrase.
+
+**Session 09 result (two more Criticals):** `SC-02` confirms the credential exposure from the
+workflow end — the full backend set (GCP service account, B2 key pair, `WORKER_SECRET`) is injected
+into the client build. `SC-01` is the vendored libsignal JAR: the committed strip script removes 6
+entries but the shipped artifact has 10 removed, so **the artifact in the repository was not produced
+by the procedure in the repository**. The current blob was empirically verified to be a clean subset
+of upstream (zero classes added, zero modified) — the finding is that nothing can detect the next one.
+Session 10 independently re-confirmed the hash.
+
+**Session 10 result (audit complete):** regression pass over all 23 items of
+`docs/SECURITY_REVIEW_2026-08-04.md` — **8 genuinely fixed, 4 partial, 11 still open**. Where the
+prior review named a specific local defect it was fixed properly (legacy rules now deny-all, Worker
+fails closed, duress-lock is transactional, `DatabaseKeyProvider` has a real durability contract, the
+F23 safety-number fix, `Server error:` leakage closed, `Log.v/d/i` stripped in release). Where it
+named a *class* of defect, the instance was fixed and the class was not, so it reappeared larger.
+Two of its "Verified solid (no finding)" entries were **wrong** (`/mintToken`, admin token gating).
+Three original findings: `S10-N1` (Firebase App Check absent entirely — never raised in any prior
+session; makes S03-H1/H2/H3 and S01-H1 scriptable), `S10-N2` (peer uid in release logcat, violating
+the project's own proguard policy), `S10-N3` (deleted media can survive in the B2 cold tier when a
+delete races the nightly migration). Also consolidated the 117 findings into **eight cross-cutting
+themes** — the dominant one being that DuoShield *builds mechanisms carefully and places them
+incorrectly*.
+
 ## How to update this file
 
 At the end of each session: set the row to ✅ DONE, link its `SESSION-NN-*.md`, and record
 the count by severity (e.g. `1C / 2H / 3M`). If a Critical is found mid-map, note it at the
 top of `SESSION-00-RECON.md` immediately.
+
+**The assessment is now complete.** If work resumes, it should be *remediation verification* against
+`SESSION-10-SYNTHESIS.md` §8 (P0 first), not a new discovery session — and per §4's lesson, verify
+fixes against source rather than trusting commit titles.
