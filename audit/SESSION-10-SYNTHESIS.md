@@ -131,23 +131,36 @@ prioritized accordingly.
 # id, phone number, message body or object key into it.
 ```
 
-Two `Log.e` call sites break it:
+**Five** surviving `Log.w`/`Log.e` call sites in `DuoShieldSignalStore.java` break it:
 
 ```java
 private static String toKey(SignalProtocolAddress address) {
     return address.getName() + "." + address.getDeviceId();   // :293 — name IS the peer uid
 }
 ...
+Log.w(TAG, "Identity key changed for " + address + " — storing new key (TOFU).");    // :133
+Log.w(TAG, "Identity key changed for " + address.getName() ...);                     // :172
+Log.e(TAG, "Failed to deserialise stored identity for " + address, e);               // :190
 Log.e(TAG, "Session deserialisation failed for " + key + " — returning fresh.", e);  // :307
 Log.e(TAG, "Failed to store session for " + key, e);                                 // :320
 ```
 
-`key` is `<peer uid>.<deviceId>`. Both survive R8 and run in release builds. Any app holding
+`key` is `<peer uid>.<deviceId>`, and `SignalProtocolAddress.toString()` likewise embeds
+`getName()` — so `:133` and `:190`, which interpolate the address object directly, leak the same
+uid as the explicit `getName()` at `:172`. All five are `Log.w`/`Log.e`, so all five survive R8's
+`assumenosideeffects` (which strips only `v/d/i`) and run in release builds. Any app holding
 `READ_LOGS`, any ADB-connected host, and any crash-report path that captures logcat therefore
 receives the identity of a conversation partner — precisely the metadata the proguard comment says
-"none of it belongs in a shipped build." Every other kept `Log.e` in the codebase that touches a
-uid routes it through `LogRedact.uid()` (e.g. `SignalKeyManager.java:931`), so the helper and the
-convention both already exist; these two sites just miss it.
+"none of it belongs in a shipped build."
+
+Worth noting *what* leaks at `:133`/`:172`: those fire on **identity-key change**, so the log does
+not merely name a peer, it records that a peer's key rotated and when — the exact event a
+key-substitution attack (`S01-H2`) produces. The `Log.d` sites in the same file (`:247`, `:285`,
+`:439`) are correctly stripped and carry only key IDs.
+
+Every other kept `Log.e` in the codebase that touches a uid routes it through `LogRedact.uid()`
+(e.g. `SignalKeyManager.java:931`), so the helper and the convention both already exist; this one
+file misses them.
 
 Severity is Low because it needs local access and leaks metadata rather than content. It compounds
 **S06-H2** (plaintext `account_lock_<uid>` WorkManager records defeating duress deniability) — both
@@ -155,41 +168,74 @@ are on-device residue that proves who the user was talking to — and note that 
 call site as **S07-L4** (`loadSession` silently substituting a fresh session), so one edit fixes
 both the silent-substitution log and the leak.
 
-**Recommendation:** wrap both in `LogRedact.uid(address.getName())`. Then add a CI grep asserting
-that no `Log.w`/`Log.e` interpolates a bare uid, so the policy in the proguard file is enforced
-rather than merely written down.
+**Recommendation:** route all five through `LogRedact.uid(...)` — for `:133` and `:190`, log
+`LogRedact.uid(address.getName()) + "." + address.getDeviceId()` rather than the address object,
+since passing the object is what makes the leak easy to miss on review. Then add a CI grep
+asserting that no `Log.w`/`Log.e` interpolates a bare uid, a bare `key`, or a
+`SignalProtocolAddress`, so the policy in the proguard file is enforced rather than merely written
+down. Without that grep this recurs: the policy comment predates these five sites.
 
 ### S10-N3 — Media deleted by a user can survive forever in the B2 cold tier when the delete races the nightly migration
 
-**Severity: Low** · `worker/src/index.js:530-548` (DELETE), `:624-651` (scheduled migration)
+**Severity: Low** · `worker/src/index.js:530-548` (DELETE), `:646-665` (scheduled migration guard)
 
 Prior review item #4 (Worker tiering not concurrency-safe) is now **substantially** fixed, and the
-fix is good: the migration re-`HEAD`s R2 and compares `httpEtag` against the value read before the
-B2 PUT, deleting from R2 only when unchanged (`:96-106` of the scheduled block), and the client
-DELETE fires an unconditional best-effort B2 delete alongside its R2 delete specifically to catch
-the both-tiers window. Both race guards are deliberate and documented.
+fix is good: the migration re-`HEAD`s R2 at `:654` and compares `httpEtag` against the value read
+before the B2 PUT, deleting from R2 only when unchanged (`:655-657`), and the client DELETE fires an
+unconditional best-effort B2 delete at `:546-548` alongside its R2 delete specifically to catch the
+both-tiers window. Both race guards are deliberate and documented in comments that name the exact
+interleaving each defends against. This finding is *not* a claim that those guards are wrong.
 
 One ordering survives. The migration's steps are `get R2 → PUT B2 → HEAD R2 → delete R2`. A client
 DELETE arriving after the migration's `get` but before its `PUT` sees the object still present in
 R2, takes the R2 branch, deletes from R2, and fires its B2 delete — which finds nothing and 404s
 harmlessly. The migration's `PUT` then lands, **recreating the object in B2**. The migration's
-subsequent `HEAD` finds R2 empty and takes the `else` branch ("deleted concurrently — nothing left
-in R2"), so it never revisits B2. The object is now in cold storage, unreferenced, and no later
-cron run will look at it again: Step 1 iterates `HOT_BUCKET`, and Step 3 only totals B2 bytes for
-the counter.
+subsequent `HEAD` at `:654` finds R2 empty and falls to the `else` branch at `:663` ("deleted
+concurrently — nothing left in R2, nothing to count"), which is correct about the byte counter but
+never revisits the B2 copy it just wrote. The object is now in cold storage, unreferenced, and no
+later cron run will look at it again: Step 1 iterates `HOT_BUCKET`, and Step 3 only totals B2 bytes
+for the counter.
 
-Consequence: ciphertext the user asked to delete persists indefinitely. It is ciphertext, and the
-window is one PUT's duration on the one night an object crosses the 30-day boundary, so this is
-Low. But "delete for everyone" is a user-facing promise in a product built on metadata resistance,
-and the residue is silent — nothing logs it and the reconciliation in Step 3 will happily count the
-orphan as legitimate usage, which also means it quietly consumes the B2 budget tracked against
-**S03-H3**.
+The DELETE handler's B2 cleanup cannot help here, precisely because it is correct: it fires
+*before* the migration's PUT, so there is nothing yet to delete. The two guards are individually
+sound and each closes the window the other opens — except in this one ordering, where the DELETE's
+compensating write happens too early and the migration's happens not at all.
 
-**Recommendation:** make the migration's B2 PUT conditional on the R2 object still existing at
-write time, or simpler and fully sufficient here — move the `HEAD`/etag comparison to *before* the
-B2 PUT as well as after it, and on the `else` (concurrently-deleted) branch issue a compensating B2
-delete instead of doing nothing. That single `else`-branch delete closes the window at the cost of
-one subrequest on a path that already budgets three per migration.
+This is also observable, not merely theoretical residue: `GET` checks R2 first and falls back to B2
+at `:505`, so a request for the deleted key **still serves the media** from cold tier with
+`X-Storage-Tier: cold`.
+
+Consequence: ciphertext the user asked to delete persists indefinitely and remains retrievable.
+
+**Why this stays Low rather than Medium**, despite content the user deleted still being served: an
+attacker cannot *force* the interleaving. The window is one B2 PUT's duration, on the single night
+an object crosses the 30-day boundary, and hitting it requires the victim to delete in that exact
+window. Retrieval afterwards still requires both the object key and a valid media token, so this
+does not widen who can reach the data — it only means one specific object was not actually deleted.
+It is a durability/promise failure, not an access-control failure.
+
+It is still worth fixing: "delete for everyone" is a user-facing promise in a product built on
+metadata resistance, and the residue is **silent** — nothing logs it, and the Step 3 reconciliation
+at `:679` will count the orphan as legitimate usage, so it quietly consumes the B2 budget tracked
+against **S03-H3** while making the leak invisible to the very metric that would reveal it.
+
+**Recommendation:** one line, in the `else` branch at `:663`. It has already correctly *detected*
+the concurrent delete — it just needs to act on it:
+
+```js
+} else {
+  // Deleted concurrently. We already wrote the B2 copy above, and the
+  // client's DELETE ran before that PUT, so its B2 cleanup was a no-op.
+  // Undo our own write, or the object survives deletion in cold tier.
+  ctx.waitUntil(b2.fetch(b2Url(env, obj.key), { method: 'DELETE' }).catch(() => {}));
+}
+```
+
+Cost is one subrequest on a branch that is rare by construction. The alternative — re-`HEAD`ing
+before the PUT as well as after — narrows the window but does not close it, since the object can
+always be deleted between that check and the PUT. Compensating after the fact is the correct shape
+here because the migration is the party that created the orphan and is the only party that knows it
+did.
 
 ---
 
