@@ -1,6 +1,6 @@
 # DuoShield Audit — Progress Tracker
 
-_Last updated: Session 03 (media pipeline) complete — 3H / 3M / 4L / 3I_
+_Last updated: Session 04 (server egress & limits) complete — 3H / 3M / 4L / 3I_
 
 ## Overall status
 
