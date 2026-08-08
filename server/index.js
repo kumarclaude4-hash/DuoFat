@@ -985,6 +985,13 @@ async function api(path, opts) {
   let res;
   try {
     res = await fetch(path, Object.assign({}, opts, {
+      // The admin API authenticates via the HttpOnly duoshield_admin_session
+      // cookie set at login. Older Android WebViews / in-app browsers (and some
+      // privacy browsers) historically default fetch() credentials to "omit",
+      // which strips that cookie and makes every /admin/api/* call 401 — the
+      // panel then looks "static": buttons highlight on tap but nothing loads.
+      // Send credentials explicitly so the session cookie is always attached.
+      credentials: "same-origin",
       headers: Object.assign({ "x-admin-token": TOKEN, "Content-Type": "application/json" }, (opts && opts.headers) || {}),
       signal: controller.signal,
     }));
@@ -1031,7 +1038,7 @@ function refreshAll() {
   return Promise.all([loadWaitlist(), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
 }
 
-// ── "Last updated" indicator ────────────────────────────────────────────────���
+// ── "Last updated" indicator ────────────────────────────────────────────────�����
 function markUpdated() {
   const el = document.getElementById("lastUpdated");
   if (el) el.textContent = "Updated " + new Date().toLocaleTimeString();
@@ -1463,6 +1470,9 @@ const SESSION_AUTHENTICATED = __ADMIN_AUTHENTICATED__;
 if (SESSION_AUTHENTICATED) {
   showApp();
   refreshAll().then(markUpdated).catch(() => {});
+  // Turn auto-refresh on by default so requests submitted from the app appear
+  // in the panel on their own, without the operator having to tap Refresh.
+  toggleAutoRefresh();
 } else {
   const loginError = new URLSearchParams(location.search).get("error");
   if (loginError === "invalid") document.getElementById("gateErr").textContent = "Invalid admin token.";
