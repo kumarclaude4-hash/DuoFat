@@ -581,7 +581,13 @@ const validAdminUid = pure.validAdminUid;
 function adminSessionCookie(sessionId, req, maxAgeSeconds) {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
   const isHttps = forwardedProto === "https" || Boolean(req.socket.encrypted);
-  return `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${maxAgeSeconds}; HttpOnly;${isHttps ? " Secure;" : ""} SameSite=Strict`;
+  // SameSite=Lax (not Strict): some Android browsers/in-app webviews decline to
+  // attach a Strict cookie on the very next top-level navigation after the
+  // login POST redirects to GET /admin, which silently drops the session and
+  // looks like "nothing happens" after entering the correct token. Lax still
+  // withholds the cookie on cross-site requests (the CSRF protection we
+  // actually need) while reliably surviving same-site redirect navigation.
+  return `duoshield_admin_session=${encodeURIComponent(sessionId)}; Path=/admin; Max-Age=${maxAgeSeconds}; HttpOnly;${isHttps ? " Secure;" : ""} SameSite=Lax`;
 }
 
 const getCookie = pure.getCookie;
@@ -624,6 +630,10 @@ function requireAdminAuth(req, res) {
   const tokenValid = supplied && safeTokenEqual(supplied, ADMIN_TOKEN);
   if (!tokenValid && !hasValidAdminSession(req)) {
     recordAdminAuthFailure(ip);
+    // Logged so an unexpected mass-401 (e.g. the in-memory session map was
+    // wiped by a restart between login and this call) is visible in Render
+    // logs instead of silently bouncing the browser back to the login gate.
+    console.warn(`admin api: 401 ip=${ip} path=${req.url} hasCookie=${Boolean(getCookie(req, "duoshield_admin_session"))}`);
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Invalid admin token");
     return false;
@@ -2506,6 +2516,7 @@ http.createServer((req, res) => {
       const supplied = (params.get("token") || "").trim();
       const ip = getClientIp(req);
       if (adminIpLocked(ip)) {
+        console.warn(`admin login: locked out ip=${ip}`);
         res.writeHead(303, { "Location": "/admin?error=locked", "Cache-Control": "no-store" });
         res.end();
         return;
@@ -2518,11 +2529,13 @@ http.createServer((req, res) => {
       }
       if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
         recordAdminAuthFailure(ip);
+        console.warn(`admin login: invalid token ip=${ip} suppliedLen=${supplied.length}`);
         res.writeHead(303, { "Location": "/admin?error=invalid", "Cache-Control": "no-store" });
         res.end();
         return;
       }
       const sessionId = createAdminSession();
+      console.log(`admin login: success ip=${ip}`);
       res.writeHead(303, {
         Location: "/admin",
         "Cache-Control": "no-store",
