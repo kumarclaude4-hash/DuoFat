@@ -135,7 +135,29 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
     }
 
-    // ── App PIN logic ─────────────────────────────────────────────────────────
+    // ── App PIN logic ────────────────────────────────────────────────────────
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Re-read the server-side enrollment flag every time this screen is shown,
+        // then re-render from the callback. Without this, an enrollment granted by
+        // the operator while the account was already signed in would not surface
+        // until the next full sign-in — the enrollment would look like a no-op to
+        // the user. This also picks up the reverse cases: a revoked account loses
+        // the row, and returning from ManageUnlockCodesActivity after a second
+        // code was saved re-evaluates the row, which then hides for good.
+        refreshPinStatus();
+        DuressManager.refreshEligibility(this, () -> {
+            // Only the row is re-evaluated here, never the full PIN UI state —
+            // this callback lands asynchronously and applyPinUiState() clears the
+            // PIN entry fields, which would wipe anything the user started typing
+            // in the meantime.
+            if (!isFinishing() && !isDestroyed()) {
+                refreshManageUnlockCodesRow(PinManager.hasPinSet(this));
+            }
+        });
+    }
 
     private void saveAppPin() {
         String pin     = etNewPin.getText().toString().trim();
@@ -170,9 +192,12 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
             runOnUiThread(() -> {
                 if (btnSetPin != null) btnSetPin.setEnabled(true);
                 if (clashWithDuress) {
+                    // Deliberately says nothing about *why* — "another unlock code"
+                    // confirmed to anyone testing PINs here that a second code
+                    // exists and that they'd just guessed it.
                     refreshPinStatus();
                     Toast.makeText(this,
-                        "This PIN is already in use as another unlock code. Choose a different one.",
+                        "That PIN can't be used. Choose a different one.",
                         Toast.LENGTH_LONG).show();
                 } else {
                     if (etNewPin != null) etNewPin.setText("");
@@ -189,12 +214,14 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
             Toast.makeText(this, R.string.settings_pin_no_pin, Toast.LENGTH_SHORT).show();
             return;
         }
-        if (DuressManager.hasDuressPin(this)) {
-            promptOtherUnlockCode(() ->
-                promptCurrentPin("Enter your app PIN to confirm", this::doClearPin));
-        } else {
-            promptCurrentPin("Enter your current PIN to clear it", this::doClearPin);
-        }
+        // Identical prompt whether or not a second code is configured. The old
+        // "you have more than one unlock code configured — enter the other one"
+        // confirmation was the single loudest disclosure left in the app: it told
+        // anyone holding the primary PIN that a second code existed, which is an
+        // invitation to demand it. Reaching this screen already requires being
+        // past the lock screen, so gating the clear on the second code bought
+        // nothing that wasn't already lost at that point.
+        promptCurrentPin("Enter your current PIN to clear it", this::doClearPin);
     }
 
     private void doClearPin() {
@@ -206,36 +233,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         DuressManager.clearDuressPin(this);
         applyPinUiState(false);
         Toast.makeText(this, R.string.settings_pin_cleared, Toast.LENGTH_SHORT).show();
-    }
-
-    private void promptOtherUnlockCode(Runnable onVerified) {
-        EditText etEntry = new EditText(this);
-        etEntry.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        etEntry.setHint("Other unlock code");
-        etEntry.setMaxLines(1);
-
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
-        container.setPadding(pad * 2, pad, pad * 2, 0);
-        container.addView(etEntry);
-
-        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Confirm your other code")
-                .setMessage("You have more than one unlock code configured. Enter the other one to continue.")
-                .setView(container)
-                .setPositiveButton("Confirm", (d, w) -> {
-                    String entered = etEntry.getText().toString().trim();
-                    bgExecutor.execute(() -> {
-                        boolean ok = DuressManager.isDuressPin(this, entered);
-                        runOnUiThread(() -> {
-                            if (ok) onVerified.run();
-                            else Toast.makeText(this, "Incorrect code.", Toast.LENGTH_SHORT).show();
-                        });
-                    });
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
     }
 
     private void promptCurrentPin(String title, Runnable onVerified) {
@@ -283,13 +280,40 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (layoutPinSet != null) {
             layoutPinSet.setVisibility(pinSet ? View.VISIBLE : View.GONE);
         }
-        if (rowManageUnlockCodes != null) {
-            rowManageUnlockCodes.setVisibility(pinSet ? View.VISIBLE : View.GONE);
-        }
+        refreshManageUnlockCodesRow(pinSet);
         Button cancel = findViewById(R.id.btnCancelPinForm);
         if (cancel != null) cancel.setVisibility(View.GONE);
         if (etNewPin != null) etNewPin.setText("");
         if (etConfirmPin != null) etConfirmPin.setText("");
+    }
+
+    /**
+     * Shows the "Manage unlock codes" entry point only in the one state where it
+     * has anything to offer:
+     *
+     * <ul>
+     *   <li><b>No app PIN</b> — there is no lock screen for a second code to work
+     *       at, so nothing to configure.</li>
+     *   <li><b>Not enrolled server-side</b> — the capability does not exist for
+     *       this account. No row, so no dead-end screen and no hint that such a
+     *       thing is even possible. An account created by anyone probing the app
+     *       is never enrolled and never sees this.</li>
+     *   <li><b>Already configured</b> — the row disappears and does not come back.
+     *       From that point the second code exists <em>only</em> as a salted hash
+     *       in {@link com.duoshield.app.util.SecurePrefs} and one branch in
+     *       {@code LockScreenActivity}. Nothing in the running app names it,
+     *       lists it, indicates it is set, or offers to change it.</li>
+     * </ul>
+     *
+     * <p>Enrollment is what makes the row appear; using it is what makes the row
+     * — and every other reference to the feature — vanish.
+     */
+    private void refreshManageUnlockCodesRow(boolean pinSet) {
+        if (rowManageUnlockCodes == null) return;
+        boolean offerSecondCode = pinSet
+                && DuressManager.isDuressEligibleCached(this)
+                && !DuressManager.hasDuressPin(this);
+        rowManageUnlockCodes.setVisibility(offerSecondCode ? View.VISIBLE : View.GONE);
     }
 
     private void enterChangePinMode() {

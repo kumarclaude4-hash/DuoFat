@@ -358,11 +358,36 @@ public class DuressManager {
      * is left untouched either way.
      */
     public static void refreshEligibility(Context context) {
+        refreshEligibility(context, null);
+    }
+
+    /**
+     * Same as {@link #refreshEligibility(Context)}, but invokes {@code onComplete}
+     * on the main thread once the cached flag has been updated (or the attempt
+     * has failed and the previous value has been kept).
+     *
+     * <h3>Why a callback is needed</h3>
+     * Enrollment is granted out-of-band by the operator, which means it almost
+     * always lands while the account is <em>already signed in</em>. Refreshing
+     * only at sign-in left a freshly-enrolled account unable to see the option
+     * until it signed out and back in — the enrollment appeared to do nothing.
+     * Screens that surface the option call this on resume and re-render from the
+     * callback, so an enrollment granted seconds ago is visible on the next
+     * visit to the screen.
+     *
+     * <p>Revocation travels the same path: a later refresh that reads
+     * {@code eligible == false} flips the cached value back off.
+     *
+     * @param onComplete run on the main thread after the cache write; may be null
+     */
+    public static void refreshEligibility(Context context, Runnable onComplete) {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-        if (user == null) return;
+        String key = user != null ? eligibilityCacheKey() : null;
+        if (user == null || key == null) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
         String uid = user.getUid();
-        String key = eligibilityCacheKey();
-        if (key == null) return;
         Context appCtx = context.getApplicationContext();
         FirebaseFirestore.getInstance()
                 .collection("duressEligibility")
@@ -371,9 +396,18 @@ public class DuressManager {
                 .addOnSuccessListener(snap -> {
                     boolean eligible = snap != null && snap.exists()
                             && Boolean.TRUE.equals(snap.getBoolean("eligible"));
+                    // .apply() is deliberate: it updates the in-memory map
+                    // synchronously (so the callback below re-reads the new value
+                    // via isDuressEligibleCached) while the disk write happens off
+                    // the main thread. .commit() here would block the UI thread on
+                    // an EncryptedSharedPreferences write for a single boolean.
                     SecurePrefs.get(appCtx).edit().putBoolean(key, eligible).apply();
+                    if (onComplete != null) onComplete.run();
                 })
-                .addOnFailureListener(e -> { /* keep last-known cached value */ });
+                .addOnFailureListener(e -> {
+                    /* keep last-known cached value */
+                    if (onComplete != null) onComplete.run();
+                });
     }
 
     // ── Lock-nonce helper ─────────────────────────────────────────────────────

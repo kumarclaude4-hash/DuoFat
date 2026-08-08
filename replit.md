@@ -81,6 +81,14 @@ page JavaScript, local storage, or a URL. Panels:
   grant or revoke `duressEligibility/{uid}`. Enrollment is refused for a UID with no
   matching account — no phantom eligibility docs.
 
+  App-side pickup: `DuressManager.refreshEligibility()` runs on sign-in **and** on
+  resume of `SecurityPrivacySettingsActivity` / `ManageUnlockCodesActivity`, so an
+  enrollment granted while the account is already signed in appears the next time the
+  user opens Security & Privacy — no sign-out required. Revocation travels the same
+  path. Once the user actually sets a second code, the "Manage unlock codes" row is
+  hidden permanently and nothing in the running app references the feature again; it
+  only exists as a hash in `SecurePrefs` and one branch in `LockScreenActivity`.
+
 All actions were previously Firebase-console-only by design; this panel doesn't change
 the access model (Firestore rules still deny clients read/write on the underlying
 collections) — it just gives the operator a UI instead of hand-editing documents.
