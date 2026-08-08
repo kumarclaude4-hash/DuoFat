@@ -899,9 +899,9 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
         <div class="sub last-updated" id="lastUpdated" aria-live="polite"></div>
       </div>
       <div class="header-actions">
-        <button class="action" type="button" id="autoRefreshBtn" aria-pressed="false" onclick="toggleAutoRefresh()">Auto-refresh: Off</button>
-        <button class="action" type="button" onclick="reload(this, refreshAll)">Refresh all</button>
-        <button class="action" type="button" onclick="logout()">Sign out</button>
+        <button class="action" type="button" id="autoRefreshBtn" aria-pressed="false">Auto-refresh: Off</button>
+        <button class="action" type="button" id="refreshAllBtn">Refresh all</button>
+        <button class="action" type="button" id="signOutBtn">Sign out</button>
       </div>
     </header>
 
@@ -913,7 +913,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </div>
 
     <section>
-      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" onclick="reload(this, loadWaitlist)">Refresh</button></div>
+      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" id="waitlistRefreshBtn">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>Request ID</th><th>Requested</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="waitlistBody"></tbody></table></div>
         <div class="loading" id="waitlistLoading">Loading…</div>
@@ -922,7 +922,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Locked accounts</h2><button class="action refresh" type="button" onclick="reload(this, loadLocked)">Refresh</button></div>
+      <div class="section-head"><h2>Locked accounts</h2><button class="action refresh" type="button" id="lockedRefreshBtn">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>UID</th><th>Locked at</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="lockedBody"></tbody></table></div>
         <div class="loading" id="lockedLoading">Loading…</div>
@@ -931,13 +931,13 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Duress PIN enrollment</h2><button class="action refresh" type="button" onclick="reload(this, loadDuressEnrolled)">Refresh</button></div>
+      <div class="section-head"><h2>Duress PIN enrollment</h2><button class="action refresh" type="button" id="duressRefreshBtn">Refresh</button></div>
       <div class="section-help">Search a real account UID first. Enable makes the secondary-PIN setup available in the app; it does not set a PIN for the user.</div>
       <div class="section-body">
       <div class="search-row">
         <label class="sr-only" for="duressUidInput">Account UID</label>
         <input class="search-input" id="duressUidInput" type="text" placeholder="Search by account UID" autocomplete="off" spellcheck="false">
-        <button class="action primary" id="duressSearchButton" type="button" onclick="searchDuressAccount()">Search account</button>
+        <button class="action primary" id="duressSearchButton" type="button">Search account</button>
       </div>
       <div id="duressSearchResult" class="search-result" hidden>
           <div>
@@ -954,7 +954,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Audit log</h2><button class="action refresh" type="button" onclick="reload(this, loadAuditLog)">Refresh</button></div>
+      <div class="section-head"><h2>Audit log</h2><button class="action refresh" type="button" id="auditRefreshBtn">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead><tbody id="auditBody"></tbody></table></div>
         <div class="loading" id="auditLoading">Loading…</div>
@@ -1342,7 +1342,7 @@ async function enrollDuress(uid, btn) {
 }
 
 async function revokeDuress(uid, btn, fromSearch) {
-  if (!confirm("Revoke duress PIN eligibility for " + uid + "?\nThey will lose access to the secondary-PIN feature.")) return;
+  if (!confirm("Revoke duress PIN eligibility for " + uid + "?\\nThey will lose access to the secondary-PIN feature.")) return;
   const resetLabel = fromSearch ? "Disable" : "Revoke";
   btn.disabled = true;
   btn.textContent = "Revoking…";
@@ -1485,6 +1485,26 @@ document.getElementById("gateForm").addEventListener("submit", () => {
   btn.disabled = true;
   btn.textContent = "Verifying…";
 });
+
+// ── Toolbar / section-refresh button wiring ──────────────────────────────────
+// These buttons cannot use inline onclick="" attributes: the /admin page ships a
+// strict CSP (script-src 'nonce-...' with no 'unsafe-inline'/'unsafe-hashes'),
+// under which browsers refuse to run inline event-handler attributes. That made
+// the panel look "logged in but frozen" — data loaded via this nonced script, but
+// every tap on Refresh / Sign out / Search / Auto-refresh did nothing. Binding
+// here, inside the nonced script, is CSP-compliant and works on touch + desktop.
+function bindClick(id, handler) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("click", handler);
+}
+bindClick("autoRefreshBtn", () => toggleAutoRefresh());
+bindClick("refreshAllBtn", function () { reload(this, refreshAll); });
+bindClick("signOutBtn", () => logout());
+bindClick("waitlistRefreshBtn", function () { reload(this, loadWaitlist); });
+bindClick("lockedRefreshBtn", function () { reload(this, loadLocked); });
+bindClick("duressRefreshBtn", function () { reload(this, loadDuressEnrolled); });
+bindClick("duressSearchButton", () => searchDuressAccount());
+bindClick("auditRefreshBtn", function () { reload(this, loadAuditLog); });
 
 document.getElementById("duressUidInput").addEventListener("keydown", (event) => {
   if (!sessionActive) return;
