@@ -873,7 +873,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 </head>
 <body>
 
-  <div class="gate" id="gate">
+  <div class="gate" id="gate" style="__GATE_STYLE__">
     <div class="brand-mark" aria-hidden="true">DS</div>
     <h1>DuoShield Admin</h1>
     <div class="sub">Secure operator access for waitlist, account locks, and duress PIN eligibility.</div>
@@ -882,10 +882,10 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
       <input type="password" id="tokenInput" name="token" placeholder="Enter admin token" autofocus autocomplete="current-password" required>
       <button type="submit" id="unlockBtn">Unlock dashboard</button>
     </form>
-    <div class="err" id="gateErr" role="alert"></div>
+    <div class="err" id="gateErr" role="alert">__GATE_ERROR__</div>
   </div>
 
-  <main id="app">
+  <main id="app" style="__APP_STYLE__">
     <header class="app-header">
       <div>
         <div class="eyebrow">Operator console</div>
@@ -2566,6 +2566,28 @@ http.createServer((req, res) => {
     // Generate a fresh 128-bit nonce for each response so the inline <script>
     // tag is the only code the browser will execute (blocks injected scripts).
     const nonce = crypto.randomBytes(16).toString("base64");
+
+    // The gate's open/closed state and any login error are rendered directly
+    // into the HTML here, not left for the inline <script> to decide after
+    // the page loads. On some mobile browsers the inline script can be
+    // delayed or fail to run at all (slow CPU, a content blocker, an in-app
+    // webview) after the POST /admin/login redirect lands back on this page.
+    // When that happens the old JS-only approach silently re-showed an empty,
+    // error-less gate — a correct token looked like it "did nothing" and a
+    // wrong one gave no feedback. Baking the real state into the markup means
+    // the right screen (and the right error) shows up even if no JS runs at
+    // all; the script below still runs its own checks, but only as a
+    // (harmless, idempotent) enhancement on top of this.
+    const ADMIN_LOGIN_ERRORS = {
+      invalid: "Invalid admin token.",
+      locked: "Too many failed attempts. Wait 15 minutes and try again.",
+      unconfigured: "Admin panel is not configured on the server.",
+    };
+    const errorParam = new URL(req.url, "http://localhost").searchParams.get("error");
+    const gateError = !authenticated && Object.prototype.hasOwnProperty.call(ADMIN_LOGIN_ERRORS, errorParam)
+      ? ADMIN_LOGIN_ERRORS[errorParam]
+      : "";
+
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Security-Policy": buildAdminCsp(nonce),
@@ -2577,6 +2599,9 @@ http.createServer((req, res) => {
       ADMIN_PAGE_HTML
         .replace("__ADMIN_AUTHENTICATED__", String(authenticated))
         .replace("__SCRIPT_NONCE__", nonce)
+        .replace("__GATE_STYLE__", authenticated ? "display:none" : "")
+        .replace("__APP_STYLE__", authenticated ? "display:block" : "display:none")
+        .replace("__GATE_ERROR__", gateError)
     );
     return;
   }
