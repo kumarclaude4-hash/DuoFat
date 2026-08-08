@@ -64,13 +64,10 @@
     <string name="app_pin_desc">Lock app with a PIN on resume</string>
     <string name="self_destruct">Self-destruct timer</string>
     <string name="self_destruct_desc">Auto-delete messages after a set time</string>
-    <string name="duress_pin">Duress PIN</string>
-    <string name="duress_pin_desc">Silently logs you out when entered at lock screen</string>
     <string name="set_pin">Set PIN</string>
     <string name="clear_pin">Clear PIN</string>
     <string name="hint_new_pin">New PIN (4–6 digits)</string>
     <string name="hint_confirm_pin">Confirm PIN</string>
-    <string name="hint_duress_pin">Duress PIN (4–6 digits)</string>
     <string name="pin_status_set">PIN is set</string>
     <string name="pin_status_not_set">No PIN set</string>
     <string name="export_chat">Export chat</string>
@@ -225,10 +222,6 @@
     <string name="settings_pin_no_pin">No app PIN is set.</string>
     <string name="settings_pin_too_short">PIN must be 4–6 digits.</string>
     <string name="settings_pin_mismatch">PINs don\'t match. Try again.</string>
-    <string name="settings_pin_clash">App PIN cannot be the same as your duress PIN.</string>
-    <string name="settings_duress_set">Duress PIN set. Keep it secret.</string>
-    <string name="settings_duress_too_short">Duress PIN must be 4–6 digits.</string>
-    <string name="settings_duress_wrong">Incorrect duress PIN.</string>
     <string name="settings_pin_wrong">Incorrect PIN.</string>
     <string name="settings_name_empty">Name cannot be empty.</string>
     <string name="settings_name_updated">Name updated.</string>

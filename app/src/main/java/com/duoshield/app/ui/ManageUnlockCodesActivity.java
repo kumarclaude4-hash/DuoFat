@@ -68,6 +68,21 @@ public class ManageUnlockCodesActivity extends BaseActivity {
         refreshListPanel();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Pull the server-side enrollment flag again on every visit. Enrollment is
+        // granted out-of-band by the operator, so it normally lands while the
+        // account is already signed in; refreshing only at sign-in meant a
+        // just-enrolled user opened this screen and found nothing here. Only the
+        // list panel is re-rendered, so a refresh landing mid-flow cannot yank the
+        // entry or explanation panel out from under the user.
+        DuressManager.refreshEligibility(this, () -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (panelList.getVisibility() == View.VISIBLE) refreshListPanel();
+        });
+    }
+
     private void refreshListPanel() {
         boolean hasSecondary = DuressManager.hasDuressPin(this);
         // No-trace: the secondary-code row is never shown, configured or not.
@@ -142,7 +157,16 @@ public class ManageUnlockCodesActivity extends BaseActivity {
             DuressManager.setDuressPin(this, codeToSave);
             runOnUiThread(() -> {
                 Toast.makeText(this, "Code saved.", Toast.LENGTH_SHORT).show();
-                showListPanel();
+                // Leave the screen entirely rather than returning to the list.
+                // Returning would show a bare "CODES / Primary code · Active" list
+                // with the add button now gone — an empty space where an option used
+                // to be, which is itself a tell. Settings re-evaluates on resume and
+                // the entry row is gone by the time the user lands back there, so
+                // this screen is unreachable from now on.
+                pendingCode = null;
+                etNewCode.setText("");
+                etConfirmCode.setText("");
+                finish();
             });
         });
     }
