@@ -865,7 +865,12 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   .err { min-height:19px; color:var(--danger); font-size:13px; margin-top:10px; }
   .toast { position:fixed; right:18px; bottom:18px; z-index:10; max-width:min(420px,calc(100% - 36px)); padding:12px 15px; border:1px solid var(--line); border-radius:10px; background:#182434; box-shadow:0 12px 30px rgba(0,0,0,.3); font-size:13px; }
   .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow-wrap:anywhere; }
+  .mono.copyable { cursor:pointer; border-radius:4px; transition:color .12s ease,background .12s ease; }
+  .mono.copyable:hover { color:var(--accent-strong); background:rgba(0,201,224,.08); }
+  .mono.copyable:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .last-updated { margin-top:6px; font-size:12px; color:var(--muted); min-height:15px; }
   .refresh { margin-left:auto; }
+  .refresh:disabled { opacity:.6; cursor:wait; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   @media (max-width:760px) { #app{width:min(calc(100% - 20px),620px);padding-top:18px}.app-header{flex-direction:column}.header-actions{width:100%}.header-actions .action{flex:1}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.section-head{padding:15px 14px 12px}.section-help,.section-body{padding-left:14px;padding-right:14px}.table-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px}.table-scroll table{min-width:570px}.search-row{align-items:stretch;flex-direction:column}.search-row .action{width:100%}.search-result{align-items:flex-start;flex-direction:column}.search-result .action{width:100%} }
   @media (max-width:390px) { .gate{width:calc(100% - 20px);padding:24px 18px}.stats{gap:8px}.stat{padding:13px}.stat-value{font-size:21px} }
@@ -891,9 +896,11 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
         <div class="eyebrow">Operator console</div>
         <h1>DuoShield Admin</h1>
         <div class="sub">Manage access and duress-PIN eligibility without opening the Firebase console.</div>
+        <div class="sub last-updated" id="lastUpdated" aria-live="polite"></div>
       </div>
       <div class="header-actions">
-        <button class="action" type="button" onclick="refreshAll()">Refresh all</button>
+        <button class="action" type="button" id="autoRefreshBtn" aria-pressed="false" onclick="toggleAutoRefresh()">Auto-refresh: Off</button>
+        <button class="action" type="button" onclick="reload(this, refreshAll)">Refresh all</button>
         <button class="action" type="button" onclick="logout()">Sign out</button>
       </div>
     </header>
@@ -906,7 +913,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </div>
 
     <section>
-      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" onclick="loadWaitlist()">Refresh</button></div>
+      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" onclick="reload(this, loadWaitlist)">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>Request ID</th><th>Requested</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="waitlistBody"></tbody></table></div>
         <div class="loading" id="waitlistLoading">Loading…</div>
@@ -915,7 +922,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Locked accounts</h2><button class="action refresh" type="button" onclick="loadLocked()">Refresh</button></div>
+      <div class="section-head"><h2>Locked accounts</h2><button class="action refresh" type="button" onclick="reload(this, loadLocked)">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>UID</th><th>Locked at</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="lockedBody"></tbody></table></div>
         <div class="loading" id="lockedLoading">Loading…</div>
@@ -924,7 +931,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Duress PIN enrollment</h2><button class="action refresh" type="button" onclick="loadDuressEnrolled()">Refresh</button></div>
+      <div class="section-head"><h2>Duress PIN enrollment</h2><button class="action refresh" type="button" onclick="reload(this, loadDuressEnrolled)">Refresh</button></div>
       <div class="section-help">Search a real account UID first. Enable makes the secondary-PIN setup available in the app; it does not set a PIN for the user.</div>
       <div class="section-body">
       <div class="search-row">
@@ -947,7 +954,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <div class="section-head"><h2>Audit log</h2><button class="action refresh" type="button" onclick="loadAuditLog()">Refresh</button></div>
+      <div class="section-head"><h2>Audit log</h2><button class="action refresh" type="button" onclick="reload(this, loadAuditLog)">Refresh</button></div>
       <div class="section-body">
         <div class="table-scroll"><table><thead><tr><th>Action</th><th>Target</th><th>Admin IP</th><th>When</th></tr></thead><tbody id="auditBody"></tbody></table></div>
         <div class="loading" id="auditLoading">Loading…</div>
@@ -1023,6 +1030,112 @@ function setCount(name, value) {
 function refreshAll() {
   return Promise.all([loadWaitlist(), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
 }
+
+// ── "Last updated" indicator ────────────────────────────────────────────────���
+function markUpdated() {
+  const el = document.getElementById("lastUpdated");
+  if (el) el.textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+// ── Refresh buttons: shared loading feedback ─────────────────────────────────
+// Wraps a section (or "refresh all") load call so the triggering button shows a
+// busy state and the "Last updated" stamp advances on success.
+async function reload(btn, fn) {
+  let prev;
+  if (btn) { prev = btn.textContent; btn.disabled = true; btn.textContent = "Refreshing…"; }
+  try {
+    await fn();
+    markUpdated();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev || "Refresh"; }
+  }
+}
+
+// ── Auto-refresh toggle (every 30s) ──────────────────────────────────────────
+let autoRefreshTimer = null;
+function toggleAutoRefresh() {
+  const btn = document.getElementById("autoRefreshBtn");
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+    if (btn) { btn.textContent = "Auto-refresh: Off"; btn.classList.remove("primary"); btn.setAttribute("aria-pressed", "false"); }
+    toast("Auto-refresh disabled");
+  } else {
+    autoRefreshTimer = setInterval(() => {
+      if (sessionActive) refreshAll().then(markUpdated).catch(() => {});
+    }, 30000);
+    if (btn) { btn.textContent = "Auto-refresh: On"; btn.classList.add("primary"); btn.setAttribute("aria-pressed", "true"); }
+    toast("Auto-refresh every 30s");
+  }
+}
+
+// ── Click-to-copy for identifiers (UIDs, request IDs, IPs) ───────────────────
+// Copies to the clipboard, with an execCommand fallback for older webviews.
+function copyText(text) {
+  const done = () => toast("Copied to clipboard");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-1000px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); done(); } catch (_) { toast("Copy failed"); }
+  ta.remove();
+}
+function copyValue(el) {
+  const val = (((el.dataset && el.dataset.full) || el.textContent) || "").trim();
+  if (!val || val === "—") return;
+  copyText(val);
+}
+
+// Mark a monospace identifier cell as copyable (idempotent). New table rows are
+// decorated automatically by the observer below; static nodes call this directly.
+function decorateCopyable(el) {
+  if (!el || (el.dataset && el.dataset.copyReady)) return;
+  const val = (((el.dataset && el.dataset.full) || el.textContent) || "").trim();
+  if (!val || val === "—") return;
+  el.dataset.copyReady = "1";
+  el.classList.add("copyable");
+  el.setAttribute("role", "button");
+  el.setAttribute("tabindex", "0");
+  el.setAttribute("title", "Click to copy");
+  el.setAttribute("aria-label", "Copy identifier to clipboard");
+}
+function scanCopyables(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  scope.querySelectorAll(".mono").forEach(decorateCopyable);
+}
+// Any .mono cell added to the DOM (every rendered table row) becomes copyable.
+new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      if (node.matches && node.matches(".mono")) decorateCopyable(node);
+      if (node.querySelectorAll) scanCopyables(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener("click", (e) => {
+  const cell = e.target.closest && e.target.closest(".mono.copyable");
+  if (cell) copyValue(cell);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const cell = e.target.closest && e.target.closest(".mono.copyable");
+  if (!cell) return;
+  e.preventDefault();
+  copyValue(cell);
+});
 
 async function loadWaitlist() {
   setLoading("waitlist", true);
@@ -1184,7 +1297,10 @@ async function searchDuressAccount() {
       return;
     }
     duressSearchUid = uid;
-    document.getElementById("duressSearchUid").textContent = uid;
+    const duressUidCell = document.getElementById("duressSearchUid");
+    duressUidCell.textContent = uid;
+    duressUidCell.dataset.full = uid;
+    decorateCopyable(duressUidCell);
     document.getElementById("duressSearchStatus").textContent =
       data.duressEligible ? "Duress PIN: enabled" : "Duress PIN: not enabled";
     const btn = document.getElementById("duressSearchAction");
@@ -1259,6 +1375,7 @@ async function loadAuditLog() {
       const targetTd = document.createElement("td");
       targetTd.className = "mono";
       targetTd.textContent = e.requestId ? e.requestId.slice(0, 12) + "…" : (e.uid || "—");
+      targetTd.dataset.full = e.requestId || e.uid || "";
       tr.appendChild(targetTd);
 
       const ipTd = document.createElement("td");
@@ -1320,6 +1437,12 @@ function forceLogout(showMessage = true) {
   sessionActive = false;
   clearTimeout(inactivityTimer);
   clearInterval(countdownTimer);
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+    const autoBtn = document.getElementById("autoRefreshBtn");
+    if (autoBtn) { autoBtn.textContent = "Auto-refresh: Off"; autoBtn.classList.remove("primary"); autoBtn.setAttribute("aria-pressed", "false"); }
+  }
   document.getElementById("inactivityBanner").hidden = true;
   document.getElementById("app").style.display = "none";
   document.getElementById("gate").style.display = "block";
@@ -1339,10 +1462,7 @@ function forceLogout(showMessage = true) {
 const SESSION_AUTHENTICATED = __ADMIN_AUTHENTICATED__;
 if (SESSION_AUTHENTICATED) {
   showApp();
-  loadWaitlist();
-  loadLocked();
-  loadDuressEnrolled();
-  loadAuditLog();
+  refreshAll().then(markUpdated).catch(() => {});
 } else {
   const loginError = new URLSearchParams(location.search).get("error");
   if (loginError === "invalid") document.getElementById("gateErr").textContent = "Invalid admin token.";
@@ -1838,7 +1958,7 @@ http.createServer((req, res) => {
   // Auth: Firebase ID token in Authorization: Bearer <token> header.
   //
   // Security model:
-  //   • Verifies the token with Firebase Admin SDK (auth.uid must equal myUid).
+  //   �� Verifies the token with Firebase Admin SDK (auth.uid must equal myUid).
   //   • Verifies both UIDs exist in identities/{uid} (registered DuoShield accounts).
   //   • Uses set({ merge: true }) so both sides can call this independently and the
   //     result is idempotent (both writes converge on the same chatId doc).
@@ -2614,18 +2734,25 @@ http.createServer((req, res) => {
     (async () => {
       if (!requireAdminAuth(req, res)) return;
       try {
+        // Single-field filter only — deliberately NO `.orderBy("createdAt")`
+        // here. Combining a `where` on `status` with an `orderBy` on a
+        // different field is a Firestore composite query that fails with
+        // FAILED_PRECONDITION unless a composite index has been manually
+        // deployed, which would leave this table silently empty. We instead
+        // fetch by status (no index needed) and sort newest-first in memory.
         const snap = await db.collection("waitlist")
           .where("status", "==", "pending")
-          .orderBy("createdAt", "desc")
           .limit(200)
           .get();
         const requests = snap.docs.map((d) => {
           const data = d.data();
+          const createdMs = data.createdAt && data.createdAt.toMillis ? data.createdAt.toMillis() : 0;
           const createdAt = data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : null;
-          return { requestId: d.id, createdAt };
+          return { requestId: d.id, createdAt, createdMs };
         });
+        requests.sort((a, b) => b.createdMs - a.createdMs);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ requests }));
+        res.end(JSON.stringify({ requests: requests.map(({ createdMs, ...r }) => r) }));
       } catch (e) {
         sendServerError(res, "admin/api/waitlist", e);
       }
