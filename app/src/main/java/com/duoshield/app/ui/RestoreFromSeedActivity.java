@@ -77,15 +77,22 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     private static final String KEY_ECDH_SHARED    = "ecdh_shared_key";
     private static final String KEY_DISAPPEAR_MS   = "disappear_ms";
 
-    /**
-     * Single generic failure message for any restore-time credential mismatch —
-     * wrong seed, wrong Account ID, or an account whose seed derivation simply
-     * doesn't line up. Deliberately does not distinguish which factor was wrong;
-     * doing so would hand an attacker holding a coerced seed phrase a signal
-     * about what to try next.
-     */
-    private static final String GENERIC_RESTORE_FAILURE =
-            "Restore failed. Please check your Account ID and recovery phrase and try again.";
+  /**
+   * Single generic failure message for any restore-time credential mismatch —
+   * wrong seed, wrong Account ID, a locked account, or an account that simply
+   * doesn't exist. Deliberately does not distinguish which of those it is;
+   * doing so would hand an attacker holding a coerced seed phrase a signal
+   * about what to try next.
+   *
+   * <p>"The account does not exist" was chosen deliberately over a vaguer
+   * "restore failed, check your details" wording: it reads as a dead end
+   * rather than an invitation to keep retrying, and it is the one explanation
+   * that is simultaneously true-sounding for a wrong seed, a wrong Account ID,
+   * and an account that is actually locked — there is no version of this
+   * screen where a locked account's owner benefits from the attacker knowing
+   * the account is real but inaccessible instead of believing it never existed.
+   */
+  private static final String GENERIC_RESTORE_FAILURE = "The account does not exist.";
 
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
