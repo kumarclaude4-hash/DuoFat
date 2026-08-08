@@ -1031,7 +1031,7 @@ function refreshAll() {
   return Promise.all([loadWaitlist(), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
 }
 
-// ── "Last updated" indicator ─────────────────────────────────────────────────
+// ── "Last updated" indicator ────────────────────────────────────────────────���
 function markUpdated() {
   const el = document.getElementById("lastUpdated");
   if (el) el.textContent = "Updated " + new Date().toLocaleTimeString();
@@ -2734,18 +2734,25 @@ http.createServer((req, res) => {
     (async () => {
       if (!requireAdminAuth(req, res)) return;
       try {
+        // Single-field filter only — deliberately NO `.orderBy("createdAt")`
+        // here. Combining a `where` on `status` with an `orderBy` on a
+        // different field is a Firestore composite query that fails with
+        // FAILED_PRECONDITION unless a composite index has been manually
+        // deployed, which would leave this table silently empty. We instead
+        // fetch by status (no index needed) and sort newest-first in memory.
         const snap = await db.collection("waitlist")
           .where("status", "==", "pending")
-          .orderBy("createdAt", "desc")
           .limit(200)
           .get();
         const requests = snap.docs.map((d) => {
           const data = d.data();
+          const createdMs = data.createdAt && data.createdAt.toMillis ? data.createdAt.toMillis() : 0;
           const createdAt = data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : null;
-          return { requestId: d.id, createdAt };
+          return { requestId: d.id, createdAt, createdMs };
         });
+        requests.sort((a, b) => b.createdMs - a.createdMs);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ requests }));
+        res.end(JSON.stringify({ requests: requests.map(({ createdMs, ...r }) => r) }));
       } catch (e) {
         sendServerError(res, "admin/api/waitlist", e);
       }
