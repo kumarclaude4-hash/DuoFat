@@ -115,6 +115,24 @@ public class SplashActivity extends AppCompatActivity {
     }
 
     private void navigate() {
+        // S06-M5 / S06-H3: resume any interrupted teardown and drain any pending
+        // account-lock intent BEFORE the auth-state check below runs, so routing
+        // decisions are made against a state where both are already resolved for
+        // this launch, rather than racing them. Both do blocking I/O — per their
+        // javadocs they must not run on the main thread — hence the background
+        // thread. DuressManager.isResetPending()/PendingLockStore-backed reads are
+        // what feed the routing decision below, not this thread's completion.
+        new Thread(() -> {
+            try {
+                com.duoshield.app.security.DuressManager.resumeInterruptedResetIfNeeded(
+                        SplashActivity.this);
+                com.duoshield.app.security.DuressManager.drainPendingLockIntent(
+                        SplashActivity.this);
+            } catch (Exception e) {
+                Log.w(TAG, "Startup resume/drain failed (non-fatal): " + e.getMessage());
+            }
+        }, "splash-resume-drain").start();
+
         // addAuthStateListener fires immediately if auth state is already
         // known, preventing a false-logout on cold start (see splash-auth-fix
         // memory entry).
@@ -127,12 +145,21 @@ public class SplashActivity extends AppCompatActivity {
                 FirebaseUser      user          = auth.getCurrentUser();
                 SharedPreferences prefs         = getSharedPreferences(PREFS, MODE_PRIVATE);
                 String            myUid         = prefs.getString("my_uid", null);
-                boolean           wipeInProgress = prefs.getBoolean("duress_wipe_in_progress", false);
+                // S06-M5: isResetPending() also checks PendingLockStore's wipe-surviving
+                // marker, not just this legacy plaintext flag — see DuressManager's
+                // javadoc on why the legacy-only check could never see an interruption
+                // that happened after step 4 of the wipe destroyed this very prefs file.
+                boolean           wipeInProgress = com.duoshield.app.security.DuressManager
+                        .isResetPending(SplashActivity.this);
                 boolean           explicitSignout = prefs.getBoolean(BaseActivity.KEY_EXPLICIT_SIGNOUT, false);
 
-                // Log the routing decision so field issues are diagnosable via adb logcat.
-                Log.i(TAG, "navigate: firebaseUser=" + (user != null ? user.getUid() : "null")
-                        + "  my_uid=" + myUid
+                // Log the routing decision so field issues are diagnosable via adb
+                // logcat — but never with a raw uid (S06-M3 client / S06-L4). A cleartext
+                // "firebaseUser=<uid>" line in a bug report or logcat dump is a direct
+                // statement of account identity, exactly what LogRedact exists to avoid.
+                Log.i(TAG, "navigate: firebaseUser=" + com.duoshield.app.util.LogRedact.uid(
+                                user != null ? user.getUid() : null)
+                        + "  hasMyUid=" + (myUid != null)
                         + "  wipeInProgress=" + wipeInProgress
                         + "  explicitSignout=" + explicitSignout);
 

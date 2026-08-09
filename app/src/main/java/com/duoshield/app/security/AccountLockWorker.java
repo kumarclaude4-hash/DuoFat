@@ -44,11 +44,20 @@ import java.util.concurrent.TimeUnit;
  * <h3>Clearing the flag</h3>
  * Clearing an {@code accountLock} doc is a manual, out-of-band operation
  * (Firebase console / Admin SDK only — see Firestore rules).
+ *
+ * <h3>No uid anywhere in this job (S06-H2)</h3>
+ * The nonce is already uid-bound server-side ({@code /requestLockNonce} records which
+ * uid issued it, and {@code /duress-lock} looks that up — see server/index.js), so this
+ * job never needs a uid to do its work and none is accepted, stored in {@link Data}, or
+ * used as a WorkManager tag. WorkManager persists both a job's input {@link Data} and
+ * its tags in its own SQLite database ({@code androidx.work.workdb}), which lives
+ * outside every store {@code WipeHelper.eraseLocalData()} touches — a tag like
+ * {@code "account_lock_<uid>"} (the previous design) would survive a duress wipe
+ * indefinitely in plaintext, naming exactly the account that was just wiped.
  */
 public class AccountLockWorker extends Worker {
 
     private static final String TAG        = "AccountLockWorker";
-    private static final String DATA_UID   = "uid";
     private static final String DATA_NONCE = "nonce";
 
     /** Jitter window: 5-40 seconds, matching FcmUnregisterWorker. */
@@ -64,21 +73,19 @@ public class AccountLockWorker extends Worker {
      * one-time nonce. The nonce must have been obtained via {@code /requestLockNonce}
      * while the Firebase session was still live (before sign-out and wipe).
      */
-    public static void enqueue(Context ctx, String uid, String nonce) {
-        if (uid == null || uid.isEmpty() || nonce == null || nonce.isEmpty()) {
-            Log.w(TAG, "enqueue skipped — missing uid or nonce.");
+    public static void enqueue(Context ctx, String nonce) {
+        if (nonce == null || nonce.isEmpty()) {
+            Log.w(TAG, "enqueue skipped — missing nonce.");
             return;
         }
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
         Data input = new Data.Builder()
-                .putString(DATA_UID, uid)
                 .putString(DATA_NONCE, nonce)
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AccountLockWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .setInputData(input)
-                .addTag("account_lock_" + uid)
                 .build();
         WorkManager.getInstance(ctx.getApplicationContext()).enqueue(request);
         Log.d(TAG, "AccountLockWorker enqueued (nonce-based retry).");
@@ -87,9 +94,8 @@ public class AccountLockWorker extends Worker {
     @NonNull
     @Override
     public Result doWork() {
-        String uid   = getInputData().getString(DATA_UID);
         String nonce = getInputData().getString(DATA_NONCE);
-        if (uid == null || uid.isEmpty() || nonce == null || nonce.isEmpty()) {
+        if (nonce == null || nonce.isEmpty()) {
             Log.w(TAG, "Missing input data — dropping job.");
             return Result.success();
         }
@@ -122,11 +128,20 @@ public class AccountLockWorker extends Worker {
                 int code = conn.getResponseCode();
                 if (code == 200 || code == 204) {
                     Log.d(TAG, "Account lock confirmed by push server.");
+                    // S06-H3: this worker can complete independently of
+                    // DuressManager.drainPendingLockIntent() (e.g. it was already
+                    // in flight when the app relaunched and drained). Clear the
+                    // durable intent here too so the two paths cannot both believe
+                    // they still owe a retry.
+                    PendingLockStore.clearLockIntent(getApplicationContext());
                     return Result.success();
                 }
                 if (code == 400 || code == 403) {
                     // Invalid / already-consumed nonce — retrying cannot recover this.
+                    // Already-consumed means the lock already landed via another path,
+                    // so it is safe (and correct) to drop the durable intent here too.
                     Log.w(TAG, "Push server rejected nonce (HTTP " + code + ") — dropping job.");
+                    PendingLockStore.clearLockIntent(getApplicationContext());
                     return Result.success();
                 }
                 if (code == 401) {
@@ -134,6 +149,9 @@ public class AccountLockWorker extends Worker {
                     // No path to obtain a fresh credential exists post-wipe; drop the job.
                     // The synchronous lock write (step 1a in DuressManager) was already
                     // attempted; if that also failed the account was offline for >24 h.
+                    // Deliberately NOT clearing the durable intent here: hasLockIntent()
+                    // continues to report "believed unlocked" so this failure surfaces
+                    // (S06-L4) instead of the app quietly deciding it doesn't matter.
                     Log.w(TAG, "Lock nonce expired (HTTP 401) — no retry path available post-wipe; dropping.");
                     return Result.success();
                 }

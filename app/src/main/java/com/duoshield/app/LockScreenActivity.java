@@ -173,6 +173,21 @@ public class LockScreenActivity extends AppCompatActivity {
             return;
         }
 
+        // S06-L5: a persisted, exponential-backoff delay between attempts, so an
+        // accidental keypad mash (child, pocket, curious colleague) cannot realistically
+        // reach the secondary code's keyspace and trigger an unrecoverable duress wipe.
+        // This only gates how soon the next attempt may be *submitted* — a deliberate,
+        // correct entry is still accepted immediately whenever it happens.
+        long remainingMs = PinManager.getLockoutRemainingMs(this);
+        if (remainingMs > 0) {
+            long secs = (remainingMs + 999) / 1000;
+            tvError.setText("Too many attempts. Try again in " + secs + "s.");
+            tvError.setVisibility(View.VISIBLE);
+            pinBuffer.setLength(0);
+            pinDotsView.setFilledCount(0);
+            return;
+        }
+
         isVerifying = true;
         setInputEnabled(false);
         tvError.setText("Verifying…");
@@ -191,7 +206,11 @@ public class LockScreenActivity extends AppCompatActivity {
 
             runOnUiThread(() -> {
                 if (duress) {
-                    DuressManager.performLogout(this);
+                    PinManager.clearFailedAttempts(this);
+                    // The entered PIN is captured here — the plaintext never leaves this
+                    // call stack — so DuressManager can promote it to the primary/device
+                    // gate PIN before anything is wiped (S06-C1's promote-and-rotate).
+                    DuressManager.performLogout(this, entered);
                     return;
                 }
 
@@ -201,8 +220,10 @@ public class LockScreenActivity extends AppCompatActivity {
                 hideScanAnim();
 
                 if (correct) {
+                    PinManager.clearFailedAttempts(this);
                     unlock();
                 } else {
+                    PinManager.recordFailedAttempt(this);
                     handleWrongPin();
                 }
             });
