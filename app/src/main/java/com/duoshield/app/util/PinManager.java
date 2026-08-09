@@ -99,9 +99,86 @@ public class PinManager {
             if (hasDevicePinSet(ctx)) {
                 setDevicePin(ctx, pin);
             }
+
+            // S06-I3 / constant-work timing parity: every account must have a
+            // slot-B decoy of identical shape to a real secondary code the
+            // moment a primary PIN exists, so an account with a secondary code
+            // and one without perform the same single PBKDF2 derivation on
+            // every unlock attempt. This was previously dead code — nothing
+            // called it — so the two-derivation timing tell it exists to close
+            // was still observable. Fully qualified to avoid a hard compile-time
+            // dependency between the util and security packages.
+            com.duoshield.app.security.DuressManager.ensureSecondarySlotInitialized(ctx);
         } catch (Exception e) {
             android.util.Log.e("PinManager", "Failed to store PIN hash", e);
         }
+    }
+
+    // ── Wrong-PIN lockout (S06-L5) ───────────────────────────────────────────
+    //
+    // LockScreenActivity has no attempt limit by design — an exact match on the
+    // secondary code is the only signal that triggers a duress wipe, and a
+    // guess-count fallback was deliberately removed (see LockScreenActivity's
+    // class javadoc) because it created false-positive lockouts. But that also
+    // means anyone who picks up the device and mashes the keypad — a child, a
+    // pocket, a curious colleague — can eventually type the secondary code by
+    // accident, wiping the device and permanently locking the account pending
+    // manual operator action. This adds a persisted, exponential-backoff delay
+    // between attempts so accidental keypad mashing cannot realistically reach
+    // the secondary code's keyspace, without ever refusing a *deliberate*
+    // correct entry — the backoff only gates how soon the *next* attempt may be
+    // submitted, never which PIN is accepted.
+    private static final String KEY_FAIL_COUNT_PREFIX    = "pin_fail_count_";
+    private static final String KEY_FAIL_UNTIL_PREFIX     = "pin_fail_until_";
+    private static final int    LOCKOUT_THRESHOLD         = 5;
+    private static final long   LOCKOUT_BASE_MS           = 2_000L;
+    private static final long   LOCKOUT_MAX_MS            = 5 * 60_000L;
+
+    private static String failCountKey(Context ctx) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? KEY_FAIL_COUNT_PREFIX + user.getUid() : KEY_FAIL_COUNT_PREFIX + "device";
+    }
+
+    private static String failUntilKey(Context ctx) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? KEY_FAIL_UNTIL_PREFIX + user.getUid() : KEY_FAIL_UNTIL_PREFIX + "device";
+    }
+
+    /** Milliseconds the caller must still wait before the next attempt is allowed, or 0. */
+    public static long getLockoutRemainingMs(Context ctx) {
+        try {
+            long until = SecurePrefs.get(ctx).getLong(failUntilKey(ctx), 0L);
+            return Math.max(0L, until - System.currentTimeMillis());
+        } catch (Exception e) { return 0L; }
+    }
+
+    /**
+     * Records a wrong PIN attempt and — once {@link #LOCKOUT_THRESHOLD} is reached —
+     * sets an exponentially growing lockout window, capped at {@link #LOCKOUT_MAX_MS}.
+     * Persisted, so a force-stop or reboot mid-lockout does not reset the counter.
+     */
+    public static void recordFailedAttempt(Context ctx) {
+        try {
+            SharedPreferences sp = SecurePrefs.get(ctx);
+            int count = sp.getInt(failCountKey(ctx), 0) + 1;
+            SharedPreferences.Editor ed = sp.edit().putInt(failCountKey(ctx), count);
+            if (count >= LOCKOUT_THRESHOLD) {
+                int overBy = count - LOCKOUT_THRESHOLD;
+                long backoff = Math.min(LOCKOUT_MAX_MS, LOCKOUT_BASE_MS << Math.min(overBy, 10));
+                ed.putLong(failUntilKey(ctx), System.currentTimeMillis() + backoff);
+            }
+            ed.apply();
+        } catch (Exception ignored) {}
+    }
+
+    /** Clears the attempt counter and any active lockout — call on a correct PIN. */
+    public static void clearFailedAttempts(Context ctx) {
+        try {
+            SecurePrefs.get(ctx).edit()
+                    .remove(failCountKey(ctx))
+                    .remove(failUntilKey(ctx))
+                    .apply();
+        } catch (Exception ignored) {}
     }
 
     /**

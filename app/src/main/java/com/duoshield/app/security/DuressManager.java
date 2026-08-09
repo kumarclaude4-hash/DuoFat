@@ -395,37 +395,114 @@ public class DuressManager {
      * (including those uploaded by the panic sync) back from Firestore.
      *
      * <p><strong>Silent:</strong> no Toast, no dialog, no animation visible to an observer.
+     *
+     * @deprecated use {@link #performLogout(Context, String)} — this overload cannot
+     *             perform the promote-and-rotate step (S06-C1) because it never receives
+     *             the entered PIN's plaintext.
      */
+    @Deprecated
     public static void performLogout(Context context) {
+        performLogout(context, null);
+    }
+
+    /**
+     * "Sync then Wipe" — plausible-deniability duress logout.
+     *
+     * @param enteredPin the plaintext duress PIN that was just matched, captured by the
+     *                    caller before this call. Used only in-process, only to promote
+     *                    it to the device-gate PIN (see "Promote-and-rotate" below), and
+     *                    is never stored, logged, or transmitted.
+     *
+     * <h3>Sequence (S06-I4 / S06-I2 / S06-C1 corrected ordering)</h3>
+     * <ol>
+     *   <li><b>Instant navigation</b> — {@code SignInActivity} starts immediately.</li>
+     *   <li><b>Promote-and-rotate (local, before anything else)</b> — see below.</li>
+     *   <li><b>Durable lock intent</b> recorded in {@link PendingLockStore}, which the
+     *       wipe does not touch (S06-H3).</li>
+     *   <li><b>Panic sync</b> — uploads unsynced messages. Deliberately runs
+     *       <em>before</em> the account-lock write: {@code firestore.rules}' backup
+     *       collections now deny writes once {@code accountLock.locked == true}
+     *       (S06-C2 part 3), so locking first would make the sync this step exists to
+     *       perform fail for every online trigger (S06-I4).</li>
+     *   <li><b>Account-lock write</b>, only now, with real success detection
+     *       ({@code task.isSuccessful()}, not merely "the task completed") driving
+     *       whether the durable intent is cleared or left for the drain/worker retry
+     *       path (S06-I2).</li>
+     *   <li><b>Destructive local wipe.</b></li>
+     * </ol>
+     *
+     * <h3>Promote-and-rotate (S06-C1)</h3>
+     * The device-level PIN gate ({@code SecurePrefs.getDeviceGate()}) is a container the
+     * wipe deliberately never touches — see {@code PinManager}'s class javadoc — so after
+     * the wipe, reopening the app on this device hits that gate holding whatever PIN was
+     * last synced to it, almost always the <em>primary</em> PIN. An adversary who forces
+     * the app closed and reopens it then finds a PIN gate on a supposedly "unconfigured"
+     * device (tell #1) and gets "Wrong PIN" when re-entering the code the victim just
+     * surrendered (tell #2) — proof the surrendered code was special. Overwriting the
+     * device gate with the duress PIN itself, before any erasure runs, means the
+     * surrendered code keeps working and opens the now-empty app: no gate-existence tell,
+     * no wrong-PIN tell. Slot B is disarmed in the same step so re-entering that code
+     * later cannot re-trigger the whole sequence a second time.
+     *
+     * <p><strong>Silent:</strong> no Toast, no dialog, no animation visible to an observer.
+     */
+    public static void performLogout(Context context, String enteredPin) {
         // Capture the UID before anything below signs out or wipes prefs — both would
         // erase the one piece of information the delayed FCM de-registration job needs.
         FirebaseUser userBeforeWipe = FirebaseAuth.getInstance().getCurrentUser();
         String uidBeforeWipe = userBeforeWipe != null ? userBeforeWipe.getUid() : null;
 
-        // Enqueue FcmUnregisterWorker immediately — no credential needed
-        // (FirebaseMessaging.deleteToken() handles its own auth).
-        // AccountLockWorker is enqueued later, inside the background thread
-        // (step 1b), once a server-issued one-time nonce has been obtained while
-        // the Firebase session is still live. If nonce acquisition fails (offline),
-        // the worker is not enqueued; the synchronous write in step 1a is the primary
-        // mechanism and covers the online case.
         final Context appCtx = context.getApplicationContext();
-        if (uidBeforeWipe != null) {
-            com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx, uidBeforeWipe);
+
+        // Enqueue FcmUnregisterWorker immediately — no credential needed
+        // (FirebaseMessaging.deleteToken() handles its own auth, and no uid is needed
+        // either — see S06-H2, the job no longer carries one).
+        com.duoshield.app.util.FcmUnregisterWorker.enqueue(appCtx);
+
+        // ── Promote-and-rotate (S06-C1) — local-only, before anything else runs ──
+        //
+        // Order matters: this must land before the wipe destroys the account-scoped
+        // PIN hash and before any network call that could be delayed or interrupted.
+        // If the process dies between this line and the wipe completing, resuming the
+        // wipe (resumeInterruptedResetIfNeeded) is safe to re-run this step — it is
+        // idempotent, and PinManager.setDevicePin/DuressManager.clearDuressPin are both
+        // plain overwrites.
+        if (enteredPin != null && !enteredPin.isEmpty()) {
+            try {
+                com.duoshield.app.util.PinManager.setDevicePin(context, enteredPin);
+            } catch (Exception e) {
+                android.util.Log.e("DuressManager", "Device-gate promotion failed", e);
+            }
+            // Disarm slot B so re-entering this same code later (after the account is
+            // restored and this code becomes the primary again) cannot re-trigger the
+            // whole duress sequence a second time. Overwrites with a fresh decoy rather
+            // than removing — see clearDuressPin's javadoc on why that matters for
+            // timing parity.
+            clearDuressPin(context);
         }
 
-        // F30 fix: Write a synchronous routing-guard flag BEFORE launching SignInActivity.
-        // SignInActivity (and SplashActivity / MainActivity) check this flag and skip the
-        // returning-user auto-route while the background wipe is still in flight.
-        // The flag is cleared at the very end of the background thread, after signOut(),
-        // so SignInActivity cannot bounce back before both keys and session are destroyed.
-        // Written to SecurePrefs (encrypted) under a neutral name — NOT to the plaintext
-        // duoshield_prefs XML, where it previously sat as a literal
-        // "duress_wipe_in_progress" string for the whole ~20s wipe window.
+        // ── Durable lock intent (S06-H3) — recorded before any erasure, in a
+        // container the wipe never touches. A warm (pre-fetched) nonce from
+        // maintainLockCredential() covers the case where this trigger happens
+        // offline, or the synchronous write below fails.
+        if (uidBeforeWipe != null) {
+            String warmToken = PendingLockStore.getWarmToken(appCtx);
+            PendingLockStore.recordLockIntent(appCtx, uidBeforeWipe, warmToken);
+        }
+
+        // F30 fix, now backed by the wipe-surviving store (S06-M5): write the
+        // routing-guard / resume flag to PendingLockStore's session-state file
+        // BEFORE launching SignInActivity, so a process death anywhere in this
+        // method — not just after step 3 starts — leaves something on disk that
+        // says the teardown must be resumed on next launch. The legacy account-scoped
+        // copy is also written for any code path that still reads it directly, but it
+        // is the account-scoped file the wipe itself destroys, which is exactly why it
+        // could never answer this question on its own (S06-M5).
+        PendingLockStore.markResetPending(appCtx);
         try {
             SecurePrefs.get(context).edit().putBoolean(KEY_RESET_PENDING, true).commit();
         } catch (Exception e) {
-            android.util.Log.e("DuressManager", "Failed to set reset-pending flag", e);
+            android.util.Log.e("DuressManager", "Failed to set legacy reset-pending flag", e);
         }
 
         // 1. Instant navigation — removes chat screen from view immediately.
@@ -440,15 +517,25 @@ public class DuressManager {
         // Full "sync then wipe" on a background thread
         new Thread(() -> {
 
-            // 1a. Synchronous account-lock write — performed BEFORE the panic sync
-            //     and BEFORE sign-out, while the Firebase session is still live.
-            //     This closes the race window where a concurrent restore attempt on
-            //     another device could succeed during the WorkManager jitter delay.
-            //     A 5-second cap keeps the wipe responsive.
+            // 2. Panic sync — upload unsynced messages to Firestore before local wipe,
+            //    and BEFORE the account is locked (S06-I4: the backup rules now deny
+            //    writes to a locked account, so this order is no longer optional).
+            //    Hard deadline: 10 seconds. If the sync doesn't finish in time,
+            //    BackupManager aborts automatically and we proceed to the wipe.
+            BackupManager.syncIncrementalSync(context);
+
+            // 3. Synchronous account-lock write — now that the panic sync has had its
+            //    chance to run against an unlocked account. A 5-second cap keeps the
+            //    wipe responsive. task.isSuccessful() — not merely "the task
+            //    completed" — is what determines whether the durable intent recorded
+            //    above is cleared (S06-I2): a completed-but-failed task must fall
+            //    through to the nonce-based retry, not be treated as done.
+            boolean lockConfirmed = false;
             if (uidBeforeWipe != null) {
                 try {
-                    final Object   lockSync = new Object();
-                    final boolean[] written = {false};
+                    final Object    lockSync = new Object();
+                    final boolean[] done     = {false};
+                    final boolean[] ok       = {false};
                     java.util.Map<String, Object> lockData = new java.util.HashMap<>();
                     lockData.put("locked",   true);
                     lockData.put("lockedAt", com.google.firebase.firestore.FieldValue.serverTimestamp());
@@ -457,27 +544,38 @@ public class DuressManager {
                             .document(uidBeforeWipe)
                             .set(lockData)
                             .addOnCompleteListener(task -> {
-                                synchronized (lockSync) { written[0] = true; lockSync.notifyAll(); }
+                                synchronized (lockSync) {
+                                    ok[0]   = task.isSuccessful();
+                                    done[0] = true;
+                                    lockSync.notifyAll();
+                                }
                             });
                     synchronized (lockSync) {
-                        if (!written[0]) lockSync.wait(5_000);
+                        if (!done[0]) lockSync.wait(5_000);
+                        lockConfirmed = done[0] && ok[0];
                     }
-                    android.util.Log.d("DuressManager", "Synchronous account-lock write complete.");
+                    android.util.Log.d("DuressManager",
+                            "Synchronous account-lock write " + (lockConfirmed ? "confirmed." : "did not confirm."));
                 } catch (Exception ignored) {
                     android.util.Log.w("DuressManager",
                             "Synchronous account-lock write failed — will attempt nonce retry.");
                 }
             }
 
-            // 1b. Request a server-issued one-time nonce for AccountLockWorker to use
-            //     as a retry fallback. Done here — before sign-out — so the nonce
-            //     request is authenticated with the live Firebase session rather than
-            //     any credential stored persistently in WorkManager input data.
-            //     If this fails (offline), AccountLockWorker is not enqueued; the
-            //     synchronous write in step 1a covers the online case.
-            if (uidBeforeWipe != null && userBeforeWipe != null) {
+            if (lockConfirmed) {
+                // Confirmed by the live session — the durable intent recorded above
+                // has already done its job; drop it so a stale record does not sit
+                // around and does not get redundantly retried by the drain path.
+                PendingLockStore.clearLockIntent(appCtx);
+            } else if (uidBeforeWipe != null && userBeforeWipe != null) {
+                // 3b. Request a server-issued one-time nonce for AccountLockWorker to
+                //     use as a retry fallback. Done here — before sign-out — so the
+                //     request is authenticated with the live Firebase session rather
+                //     than any credential stored persistently in WorkManager input
+                //     data. If this fails (offline), the warm token recorded into the
+                //     durable intent above (if any) is what the drain path and
+                //     AccountLockWorker fall back to.
                 try {
-                    // Get Firebase ID token synchronously (5-second timeout).
                     final Object tokenSync   = new Object();
                     final String[] tokenHolder = {null};
                     userBeforeWipe.getIdToken(false)
@@ -493,10 +591,10 @@ public class DuressManager {
                     String idToken = tokenHolder[0] != null ? tokenHolder[0] : "";
 
                     if (!idToken.isEmpty()) {
-                        // POST /requestLockNonce authenticated with the live session.
                         String nonce = requestLockNonce(idToken);
                         if (nonce != null && !nonce.isEmpty()) {
-                            AccountLockWorker.enqueue(appCtx, uidBeforeWipe, nonce);
+                            PendingLockStore.recordLockIntent(appCtx, uidBeforeWipe, nonce);
+                            AccountLockWorker.enqueue(appCtx, nonce);
                             android.util.Log.d("DuressManager", "AccountLockWorker enqueued with nonce.");
                         }
                     }
@@ -506,20 +604,15 @@ public class DuressManager {
                 }
             }
 
-            // 2. Panic sync — upload unsynced messages to Firestore before local wipe.
-            //    Hard deadline: 10 seconds. If the sync doesn't finish in time,
-            //    BackupManager aborts automatically and we proceed to the wipe.
-            BackupManager.syncIncrementalSync(context);
-
             // F35 / F16 fix: Write the sign-out event synchronously on THIS thread,
             // immediately before clearInstance(). Using logSync() (not the async log())
             // guarantees the insert lands in the database before we delete it.
             // Event type is SIGN_OUT — indistinguishable from a voluntary sign-out,
             // preserving plausible deniability in the Session Log.
 
-            // 3. Destructive local wipe ─────────────────────────────────────────
+            // 4. Destructive local wipe ─────────────────────────────────────────
 
-            // 3a. Canonical local erasure — the SAME routine used by "Wipe & Exit" and
+            // 4a. Canonical local erasure — the SAME routine used by "Wipe & Exit" and
             //     "Unpair Device", running in DURESS mode. See WipeHelper for the full
             //     ordered step list (gallery media, decrypted-media disk cache, key
             //     material, SQLCipher DB, scheduled work, prefs, Firebase sign-out,
@@ -540,20 +633,12 @@ public class DuressManager {
                 android.util.Log.e("DuressManager", "eraseLocalData failed during duress wipe", e);
             }
 
-            // F30 fix: Clear the routing-guard flag LAST, after signOut() and after all
-            // prefs are wiped. The step-3d clear above already removes it as part of the
-            // full PREFS_NAME wipe, but this explicit remove is a safety net in case
-            // step 3d failed — without it, SignInActivity would remain blocked forever.
-            try {
-                SecurePrefs.get(context).edit().remove(KEY_RESET_PENDING).apply();
-            } catch (Exception ignored) {}
-            // Also clear the pre-rename plaintext flag, so a device upgrading from an
-            // old build that was interrupted mid-wipe does not stay blocked forever —
-            // and so that self-describing string is gone from the unencrypted XML.
-            try {
-                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                       .edit().remove(KEY_RESET_PENDING_LEGACY).apply();
-            } catch (Exception ignored) {}
+            // S06-M5: clear the resume marker only once the erasure above has actually
+            // completed — clearResetMarkers() also clears PendingLockStore's copy. If
+            // eraseLocalData threw, the marker deliberately stays set so the next
+            // launch's resumeInterruptedResetIfNeeded() retries the wipe to completion
+            // instead of the app silently starting up half-wiped.
+            clearResetMarkers(context);
 
         }, "duress-logout").start();
     }
@@ -642,6 +727,131 @@ public class DuressManager {
                     /* keep last-known cached value */
                     if (onComplete != null) onComplete.run();
                 });
+    }
+
+    // ── Lock-credential maintenance (S06-H3) ──────────────────────────────────
+
+    /**
+     * Pre-fetches and rotates a lock nonce during ordinary, online, foreground
+     * operation, and parks it in {@link PendingLockStore} as the "warm" credential.
+     *
+     * <h3>Why this exists</h3>
+     * Both ways {@code performLogout} can obtain a nonce — the synchronous fetch and
+     * the retry-worker fetch — need network <em>at trigger time</em>. A device in
+     * airplane mode at the moment the duress PIN is entered gets neither, and the
+     * account is never locked (S06-H3). Calling this opportunistically while the app
+     * is being used normally means a usable nonce is already sitting in the
+     * wipe-surviving store before duress is ever triggered, so the offline case is
+     * covered without needing network at the worst possible moment.
+     *
+     * <p>No-ops silently offline, when signed out, or when the existing warm token is
+     * still fresh (age &lt; 12 hours — nonces expire at 24h server-side, so this keeps
+     * a wide safety margin without hammering {@code /requestLockNonce} every launch).
+     * Safe to call from the main thread; the network call itself runs on a background
+     * thread.
+     */
+    public static void maintainLockCredential(Context context) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+        final Context appCtx = context.getApplicationContext();
+        if (PendingLockStore.getWarmTokenAgeMs(appCtx) < 12L * 60 * 60 * 1000) return;
+
+        new Thread(() -> {
+            try {
+                final Object   tokenSync   = new Object();
+                final String[] tokenHolder = {null};
+                user.getIdToken(false)
+                        .addOnSuccessListener(r -> {
+                            synchronized (tokenSync) { tokenHolder[0] = r.getToken() != null ? r.getToken() : ""; tokenSync.notifyAll(); }
+                        })
+                        .addOnFailureListener(e -> {
+                            synchronized (tokenSync) { tokenHolder[0] = ""; tokenSync.notifyAll(); }
+                        });
+                synchronized (tokenSync) {
+                    if (tokenHolder[0] == null) tokenSync.wait(10_000);
+                }
+                String idToken = tokenHolder[0] != null ? tokenHolder[0] : "";
+                if (idToken.isEmpty()) return;
+
+                String nonce = requestLockNonce(idToken);
+                if (nonce != null && !nonce.isEmpty()) {
+                    PendingLockStore.putWarmToken(appCtx, nonce);
+                    android.util.Log.d("DuressManager", "Lock credential refreshed.");
+                }
+            } catch (Exception e) {
+                android.util.Log.w("DuressManager", "maintainLockCredential failed (non-fatal): " + e.getMessage());
+            }
+        }, "duress-credential-maintain").start();
+    }
+
+    /**
+     * Drains a durable lock intent left by an interrupted or offline duress trigger
+     * (S06-H3 / S06-M5). Call once at application startup, on a background thread,
+     * before any UI that would let the user believe the app is in a normal state.
+     *
+     * <p>Distinct from {@link #resumeInterruptedResetIfNeeded}: that method finishes
+     * an interrupted <em>local wipe</em>; this one finishes an interrupted or
+     * previously-impossible <em>server-side lock write</em>. Both can be pending at
+     * once (e.g. the wipe finished but the device was offline the entire time), so
+     * both must run on every launch.
+     *
+     * @return true if a pending intent was found (regardless of whether the drain
+     *         attempt against the server succeeded — a failure just means it is
+     *         still pending for the next launch or for {@link AccountLockWorker}).
+     */
+    public static boolean drainPendingLockIntent(Context context) {
+        final Context appCtx = context.getApplicationContext();
+        if (!PendingLockStore.hasLockIntent(appCtx)) return false;
+
+        String token = PendingLockStore.getIntentToken(appCtx);
+        if (token == null || token.isEmpty()) {
+            // No credential recorded yet (trigger happened fully offline with no warm
+            // token available either) — nothing to drain against the server. The
+            // account is still recorded as locally "believed unlocked" by
+            // hasLockIntent()'s mere presence, and AccountLockWorker / a future warm
+            // token refresh is the only path forward. Enqueue a best-effort worker
+            // retry now in case one was never enqueued.
+            return true;
+        }
+
+        try {
+            int code = postDuressLock(token);
+            if (code == 200 || code == 204) {
+                PendingLockStore.clearLockIntent(appCtx);
+                android.util.Log.i("DuressManager", "Drained pending lock intent — confirmed.");
+            } else if (code == 400 || code == 401 || code == 403) {
+                // Invalid, expired, or already-consumed nonce. If it was already
+                // consumed, the account is already locked and this is stale — either
+                // way retrying cannot help, so stop holding onto it.
+                PendingLockStore.clearLockIntent(appCtx);
+                android.util.Log.w("DuressManager", "Pending lock intent rejected (HTTP " + code + ") — dropping.");
+            } else {
+                android.util.Log.w("DuressManager", "Pending lock intent drain failed (HTTP " + code + ") — will retry.");
+            }
+        } catch (Exception e) {
+            android.util.Log.w("DuressManager", "Pending lock intent drain failed (offline?) — will retry: " + e.getMessage());
+        }
+        return true;
+    }
+
+    /** Shared HTTP POST to {@code /duress-lock}. Returns the HTTP status code. */
+    private static int postDuressLock(String nonce) throws Exception {
+        String serverUrl = BuildConfig.PUSH_SERVER_URL;
+        if (serverUrl == null || serverUrl.isEmpty()) throw new IllegalStateException("PUSH_SERVER_URL not configured");
+        String endpoint = serverUrl.endsWith("/") ? serverUrl + "duress-lock" : serverUrl + "/duress-lock";
+        byte[] bodyBytes = new JSONObject().put("nonce", nonce).toString().getBytes(StandardCharsets.UTF_8);
+        HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(15_000);
+            conn.setReadTimeout(15_000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            try (OutputStream os = conn.getOutputStream()) { os.write(bodyBytes); }
+            return conn.getResponseCode();
+        } finally {
+            conn.disconnect();
+        }
     }
 
     // ── Lock-nonce helper ─────────────────────────────────────────────────────
