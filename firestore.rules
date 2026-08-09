@@ -35,6 +35,35 @@ service cloud.firestore {
       return participants[0] == myUid ? participants[1] : participants[0];
     }
 
+    // ── S06-C2 part 3: duress latch, enforced in the rules ────────────────────
+    // The duress lock used to be enforced in exactly one place in the entire
+    // system: a client-side `if` in RestoreFromSeedActivity that ran *after*
+    // authentication had already succeeded. Since the backup key is a pure
+    // function of the seed phrase (HKDF over PBKDF2 of the mnemonic — no device
+    // secret, nothing the wipe can destroy), an adversary holding a coerced seed
+    // could mint a token, read backups/{uid} straight off the REST API, and
+    // decrypt offline. They never execute the client check.
+    //
+    // The server now refuses to mint for a locked account and revokes refresh
+    // tokens on lock, which closes the practical attack. This rule is the layer
+    // that survives a bypassed or compromised server, and it also catches an ID
+    // token that was already in flight when the lock landed (revocation does not
+    // retroactively invalidate an unexpired ID token).
+    //
+    // Tests `locked != true` rather than `!exists(...)`: the operator unfreeze
+    // path deliberately leaves the document in place carrying
+    // `locked: false, rotationRequired: true` so the re-arm requirement survives
+    // a reinstall. An `!exists()` test would lock those users out of their own
+    // backups permanently.
+    //
+    // COST: this is a billed document read per rules evaluation, and
+    // restoreAllSync paginates at PAGE_LIMIT = 1000, so a large restore
+    // multiplies it. Accepted deliberately — see SESSION-06-DURESS.md §8.
+    function accountNotLocked(userId) {
+      return !exists(/databases/$(database)/documents/accountLock/$(userId))
+             || get(/databases/$(database)/documents/accountLock/$(userId)).data.locked != true;
+    }
+
     // Chats: participants can read and update, but NOT create from the client.
     // F6 fix: chats/{chatId} docs are created exclusively by the server endpoint
     // POST /createChat (Admin SDK, bypasses rules) which verifies both UIDs exist in
@@ -279,35 +308,46 @@ service cloud.firestore {
     // sub-docs — deletions are handled via soft-delete (isDeleted:true) so that
     // a restore on a new device never silently loses a message due to a race
     // between a delete and a restore fetch.
+    // S06-C2: every rule in this block additionally requires accountNotLocked().
+    // Rules do NOT cascade in Firestore, so the check has to be repeated on each
+    // subcollection — gating only the parent document would leave
+    // backups/{uid}/messages, the actual message history, fully readable.
+    //
+    // Writes are gated as well as reads, which has an ordering consequence:
+    // see S06-I4. DuressManager's panic sync now runs to completion *before* the
+    // account is locked, because locking first would deny the very sync the
+    // duress path is trying to flush.
     match /backups/{userId} {
       // Meta document (lastBackupTs, count) — owner read/write only.
-      allow read:   if request.auth != null && request.auth.uid == userId;
-      allow create: if request.auth != null && request.auth.uid == userId;
-      allow update: if request.auth != null && request.auth.uid == userId;
+      allow read:   if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+      allow create: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+      allow update: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
       allow delete: if false;  // meta doc never deleted via client
 
       // Encrypted message backups — owner read/write; delete hard-denied.
+      // This is the collection S06-C2 is about: the complete message history,
+      // encrypted under a key derived solely from the seed phrase.
       match /messages/{msgId} {
-        allow read:   if request.auth != null && request.auth.uid == userId;
-        allow create: if request.auth != null && request.auth.uid == userId;
-        allow update: if request.auth != null && request.auth.uid == userId;
+        allow read:   if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow create: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow update: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
         allow delete: if false;  // use isDeleted:true soft-delete instead
       }
 
       // Contact backups (display name + conversationId) — owner read/write.
       match /contacts/{contactId} {
-        allow read:   if request.auth != null && request.auth.uid == userId;
-        allow create: if request.auth != null && request.auth.uid == userId;
-        allow update: if request.auth != null && request.auth.uid == userId;
+        allow read:   if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow create: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow update: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
         allow delete: if false;
       }
 
       // Group backup metadata is restored with contacts and must be available to
       // the same account that encrypted and uploaded it.
       match /groups/{groupId} {
-        allow read:   if request.auth != null && request.auth.uid == userId;
-        allow create: if request.auth != null && request.auth.uid == userId;
-        allow update: if request.auth != null && request.auth.uid == userId;
+        allow read:   if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow create: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
+        allow update: if request.auth != null && request.auth.uid == userId && accountNotLocked(userId);
         allow delete: if false;
       }
     }
@@ -334,22 +374,54 @@ service cloud.firestore {
     // security-relevant.
     //
     // IMPORTANT — one-way latch: clients may only ever write locked=true.
-    // Neither the client nor anyone other than the Firebase console / Admin SDK
-    // may clear or delete the document. This enforces the manual-only unlock
-    // decision: once locked, the account stays locked until an operator acts
-    // out-of-band, regardless of what the app (or a malicious APK) tries to do.
+    // Neither the client nor anyone other than the Admin SDK may clear or delete
+    // the document. This enforces the manual-only unlock decision: once locked,
+    // the account stays locked until an operator acts out-of-band, regardless of
+    // what the app (or a malicious APK) tries to do.
+    //
+    // S06-I1 — doc/reality drift, corrected. This comment used to claim the
+    // document could only be cleared via "the Firebase console / Admin SDK",
+    // framed as a manual-only unlock. Since Session 05 that is no longer the
+    // whole truth: POST /admin/api/locked/unfreeze exposes the unlock over HTTP
+    // behind a single static bearer token, and records it in adminAuditLog. The
+    // real security property is therefore "whoever holds ADMIN_TOKEN", which is
+    // materially weaker than what this comment used to promise. Do not
+    // over-trust the latch: its strength is bounded by that token's entropy.
+    // Note also that unfreeze no longer deletes the doc — it rewrites it as
+    // locked:false + rotationRequired:true (see §8 promote-and-rotate).
     match /accountLock/{accountId} {
       allow read:   if request.auth != null && request.auth.uid == accountId;
-      // Create is allowed only when the new document carries locked=true.
+
+      // Create is allowed only when the new document carries locked=true, and
+      // only for an account the operator actually enrolled.
+      //
+      // S06-M1: the eligibility predicate is new. `duressEligibility` was
+      // enforced nowhere — its only consumer was a cached client boolean that
+      // hid a button — so any account could complete the entire duress flow and
+      // watch its own accountLock doc appear, learning that the feature exists,
+      // how it fires and what it writes. That is exactly the question the
+      // eligibility gate exists to keep unanswerable.
       allow create: if request.auth != null && request.auth.uid == accountId
-                    && request.resource.data.locked == true;
-      // Update is allowed only when the incoming document still carries locked=true
-      // — this prevents any client from flipping locked back to false or removing
-      // the field.
-      allow update: if request.auth != null && request.auth.uid == accountId
-                    && request.resource.data.locked == true;
-      // Deletion is unconditionally denied for all clients. Only Admin SDK can
-      // remove this document (e.g. for a legitimate manual unlock in the console).
+                    && request.resource.data.locked == true
+                    && exists(/databases/$(database)/documents/duressEligibility/$(accountId))
+                    && get(/databases/$(database)/documents/duressEligibility/$(accountId)).data.eligible == true;
+
+      // S06-L6: client updates are now denied outright.
+      //
+      // Permitting update at all — even with the locked==true guard — let a
+      // client holding the victim's uid re-set the doc with a fresh `lockedAt`,
+      // repeatedly. The latch held, but the forensic value did not: an adversary
+      // could obscure *when* the duress event happened, and the operator's view
+      // in /admin/api/locked would show the wrong trigger time.
+      //
+      // The client has no legitimate reason to modify an existing lock. Locking
+      // an already-locked (or previously unfrozen) account is the server's job
+      // via /duress-lock, which uses the Admin SDK, bypasses these rules, and
+      // writes `lockedAt` with a server timestamp only when one is not already
+      // present.
+      allow update: if false;
+
+      // Deletion is unconditionally denied for all clients — Admin SDK only.
       allow delete: if false;
     }
 

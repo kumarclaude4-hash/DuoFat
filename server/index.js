@@ -686,6 +686,28 @@ function uidTag(uid) {
   return crypto.createHmac("sha256", LOG_PEPPER).update(String(uid)).digest("hex").slice(0, 12);
 }
 
+// ── Duress latch enforcement (S06-H1 / S06-C2) ────────────────────────────────
+// `accountLock/{uid}` is a one-way latch written by /duress-lock. It used to be
+// consulted in exactly one place in the whole system: a client-side `if` in the
+// restore UI that ran *after* authentication had already succeeded. Every server
+// path that hands out a credential or grants access to backed-up data must
+// consult it instead, so the latch survives an adversary who never runs the app.
+//
+// Fails CLOSED: if the lock cannot be read (Firestore unavailable, permission
+// error), treat the account as locked. The alternative — failing open — means a
+// transient backend fault silently re-enables the exact access the latch exists
+// to deny, and the caller can often induce that fault at will.
+async function isAccountLocked(uid) {
+  if (!uid || typeof uid !== "string") return true;
+  try {
+    const snap = await db.collection("accountLock").doc(uid).get();
+    return snap.exists && snap.data().locked === true;
+  } catch (e) {
+    console.error(`isAccountLocked: read failed for uid=${uidTag(uid)} — failing closed:`, e.message);
+    return true;
+  }
+}
+
 // SEC-L02: handlers responded with "Server error: " + e.message, echoing raw
 // exception text to the caller. Firestore/Firebase errors routinely embed
 // project ids, collection paths, index definitions and internal hostnames,
@@ -1641,6 +1663,26 @@ http.createServer((req, res) => {
         // between "account doesn't exist" and "doc written".
         let isNewAccount = false;
         await db.runTransaction(async (tx) => {
+          // ── S06-H1 / S06-C2 part 1: refuse to mint for a locked account ──────
+          // The duress latch has to be enforced where the credential is issued.
+          // Previously `accountLock` was consulted in exactly one place — a
+          // client-side `if` in RestoreFromSeedActivity that runs *after*
+          // signInWithCustomToken had already succeeded — so an adversary
+          // holding a coerced seed could call this endpoint directly, get a
+          // valid token for the victim's uid, and read `backups/{uid}` over the
+          // Firestore REST API without ever executing the check.
+          //
+          // Read inside the transaction (not before it) so a concurrent
+          // /duress-lock write cannot interleave between the check and the mint.
+          const lockSnap = await tx.get(db.collection("accountLock").doc(userId));
+          if (lockSnap.exists && lockSnap.data().locked === true) {
+            // Reuse the existing 403 string verbatim: a locked account must stay
+            // indistinguishable from a wrong seed or an unapproved invite, which
+            // is the deniability property RestoreFromSeedActivity is careful
+            // about client-side. Do not add a distinct message or status here.
+            throw Object.assign(new Error("Access request not approved"), { status: 403 });
+          }
+
           const snap = await tx.get(idRef);
           if (!snap.exists) {
             // New account — invite-only. Require an approved, not-yet-used
@@ -1848,6 +1890,18 @@ http.createServer((req, res) => {
           // Nothing to migrate
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ migrated: false, reason: "same-uid" }));
+          return;
+        }
+
+        // ── S06-H1: refuse migration for a locked account ────────────────────
+        // This endpoint copies backup documents (`backupDocsCopied` below), so
+        // leaving it ungated would let a token minted before the lock landed
+        // relocate a duressed account's data to a uid the latch does not cover.
+        // Check both sides: the destination uid and the source uid.
+        if (await isAccountLocked(userId) || await isAccountLocked(oldUid)) {
+          console.warn(`migrateUid: refused for locked account userId=${uidTag(userId)}`);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Access request not approved");
           return;
         }
 
@@ -2548,14 +2602,69 @@ http.createServer((req, res) => {
           return;
         }
 
-        // Generate a 32-byte random nonce and store it in Firestore with a 24-hour
-        // expiry and the authenticated uid. Using Admin SDK so Firestore rules never
-        // block these writes (the collection is deny-all for clients).
+        // ── S06-M1: eligibility is a server-side boundary, not a UI hint ──────
+        // `duressEligibility/{uid}` was previously consulted only by a cached
+        // client boolean that hid a button. Anyone could patch that check (or
+        // write the cached pref) on an account of their own, run the whole flow,
+        // and observe the wipe plus their own accountLock doc appear — learning
+        // that the feature exists, how it fires, and what it writes. That is the
+        // precise question the eligibility gate exists to keep unanswerable, so
+        // the observable server-side consequences have to be gated too.
+        //
+        // 404 rather than 403: an ineligible account should not be able to tell
+        // "this endpoint refused me" from "this endpoint does not exist".
+        const eligSnap = await db.collection("duressEligibility").doc(uid).get();
+        if (!eligSnap.exists || eligSnap.data().eligible !== true) {
+          console.warn(`[requestLockNonce] refused for non-enrolled uid=${uidTag(uid)}`);
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Not found");
+          return;
+        }
+
+        // ── S06-M2: cap outstanding nonces at one per uid ─────────────────────
+        // Documents were only ever removed when /duress-lock consumed one or an
+        // already-expired one was presented. The common case is neither: the
+        // synchronous lock write usually wins the race, so the fallback nonce is
+        // never presented and the doc leaks permanently. Each leaked doc also
+        // holds {uid, expiresAt} — a durable server-side record of exactly which
+        // account triggered a duress wipe and when, which is the event the
+        // feature is designed to make undetectable.
+        //
+        // A uid has no legitimate reason to hold two nonces, so drop any prior
+        // ones before issuing. Single-field `uid` is auto-indexed, so this needs
+        // no composite index. Belt and braces alongside the TTL policy on
+        // `expiresAt` declared in firestore.indexes.json.
+        try {
+          const stale = await db.collection("_duressNonces").where("uid", "==", uid).get();
+          if (!stale.empty) {
+            const batch = db.batch();
+            stale.docs.forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+        } catch (pruneErr) {
+          // Non-fatal: failing to prune must not block the lock credential.
+          console.warn(`[requestLockNonce] prune failed for uid=${uidTag(uid)}:`, pruneErr.message);
+        }
+
+        // Generate a 32-byte random nonce and store it in Firestore with the
+        // authenticated uid. Using Admin SDK so Firestore rules never block
+        // these writes (the collection is deny-all for clients).
+        //
+        // S06-M2: the window is 1 hour, not 24. The long runway existed because
+        // the WorkManager fallback was the only way a lock could land after an
+        // offline trigger; the wipe-surviving lock intent (S06-H3) now carries
+        // that responsibility and re-requests a fresh nonce when it drains, so
+        // the nonce no longer needs to outlive the retry schedule.
         const nonce = crypto.randomBytes(32).toString("hex");
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
         await db.collection("_duressNonces").doc(nonce).set({ uid, expiresAt });
 
-        console.log(`[requestLockNonce] nonce issued for uid=${uid}`);
+        // S06-M3: uidTag, never the raw uid. A log line pairing a cleartext uid
+        // with a duress tag is a durable, timestamped record that this specific
+        // account triggered a duress wipe, sitting in whatever aggregator the
+        // server ships to — outside Firestore's access controls and outside the
+        // operator's deletion workflow.
+        console.log(`[requestLockNonce] nonce issued for uid=${uidTag(uid)}`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ nonce }));
       } catch (e) {
@@ -2582,6 +2691,22 @@ http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/duress-lock") {
     collectBody(req, res, async (body) => {
       try {
+        // ── S06-L2: rate limit the only unauthenticated mutating endpoint ─────
+        // This endpoint has to stay unauthenticated (the caller has been wiped
+        // and signed out), so nothing throttled it at all. The risk is not nonce
+        // brute force — 32 bytes of randomBytes is out of reach — it is that any
+        // well-formed 64-char nonce drives an unauthenticated Firestore
+        // transaction, letting an anonymous caller burn read quota and drown the
+        // real signal in error noise. Kept generous: the legitimate client
+        // retries with exponential backoff from 30 s.
+        const clientIp = getClientIp(req);
+        if (!checkIpRateLimit(clientIp)) {
+          console.warn(`[duress-lock] IP rate limit hit ip=${ipTag(clientIp)}`);
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Too many requests");
+          return;
+        }
+
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
           res.writeHead(400, { "Content-Type": "text/plain" });
@@ -2590,7 +2715,10 @@ http.createServer((req, res) => {
         }
 
         const { nonce } = parsed;
-        if (typeof nonce !== "string" || nonce.length !== 64) {
+        // S06-L1: validate shape strictly — hex only, not just length. A
+        // non-hex 64-char string can never match an issued nonce, so reject it
+        // before it costs a Firestore lookup.
+        if (typeof nonce !== "string" || !/^[0-9a-f]{64}$/.test(nonce)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid nonce");
           return;
@@ -2611,16 +2739,38 @@ http.createServer((req, res) => {
               throw Object.assign(new Error("Invalid or already-consumed nonce"), { status: 403 });
             }
             const { uid: nonceUid, expiresAt } = nonceSnap.data();
-            if (!nonceUid || new Date() > new Date(expiresAt.toDate ? expiresAt.toDate() : expiresAt)) {
-              // Expired — delete to clean up and signal the client not to retry.
+
+            // ── S06-L1: validate the expiry shape and fail CLOSED ─────────────
+            // The old check was `new Date() > new Date(expiresAt.toDate ? ...)`.
+            // Two ways that went wrong: a missing `expiresAt` threw a TypeError
+            // inside the transaction, which had no `.status` and so surfaced as a
+            // 500 — and AccountLockWorker treats 5xx as retryable, so it retried
+            // a permanently broken nonce forever. An unparseable string compared
+            // against `Invalid Date` yields `false`, so the nonce was treated as
+            // NOT expired: valid indefinitely, fail-open.
+            const exp = expiresAt?.toDate?.() ?? (expiresAt instanceof Date ? expiresAt : null);
+            if (!nonceUid || !exp || Number.isNaN(exp.getTime()) || Date.now() > exp.getTime()) {
+              // Expired or malformed — delete to clean up and signal the client
+              // not to retry. Deleting on this path is also what stops a broken
+              // doc from lingering (S06-M2).
               tx.delete(nonceRef);
               throw Object.assign(new Error("Nonce expired"), { status: 401 });
             }
-            tx.set(
-              db.collection("accountLock").doc(nonceUid),
-              { locked: true, lockedAt: admin.firestore.FieldValue.serverTimestamp() },
-              { merge: true }
-            );
+
+            // ── S06-L6: pin lockedAt to the first lock only ───────────────────
+            // `update` being permitted at all meant a client holding the
+            // victim's uid could re-set the doc with locked:true and a fresh
+            // lockedAt repeatedly. The latch held; the forensic value did not.
+            // The rules now forbid client writes outright, and this write only
+            // sets lockedAt when the doc does not already carry one, so the real
+            // trigger time survives a replayed lock.
+            const lockRef  = db.collection("accountLock").doc(nonceUid);
+            const lockSnap = await tx.get(lockRef);
+            const lockData = { locked: true, lockedBy: "duress" };
+            if (!lockSnap.exists || !lockSnap.data().lockedAt) {
+              lockData.lockedAt = admin.firestore.FieldValue.serverTimestamp();
+            }
+            tx.set(lockRef, lockData, { merge: true });
             tx.delete(nonceRef); // single-use: consumed
             return nonceUid;
           });
@@ -2633,7 +2783,33 @@ http.createServer((req, res) => {
           throw txErr; // unexpected Firestore error — fall through to outer catch
         }
 
-        console.log(`[duress-lock] accountLock written for uid=${uid}`);
+        // ── S06-C2 part 2: kill sessions minted before the lock landed ─────────
+        // Gating /mintToken is necessary but not sufficient. signInWithCustomToken
+        // yields a long-lived refresh token, so any session established *before*
+        // the lock write keeps working indefinitely — and S06-M5 hands the
+        // adversary a ~30 s window they can widen at will by holding the network
+        // down. revokeRefreshTokens invalidates them, and the rules-level
+        // `backups/` gate (part 3) catches whatever ID token is still in flight
+        // until it expires.
+        //
+        // Deliberately after the transaction and non-fatal: the latch is the
+        // durable guarantee and must not be rolled back if revocation fails. A
+        // failure here is logged loudly because it means live sessions survive.
+        try {
+          await admin.auth().revokeRefreshTokens(uid);
+        } catch (revokeErr) {
+          console.error(
+            `[duress-lock] token revocation FAILED for uid=${uidTag(uid)} — live sessions may persist:`,
+            revokeErr.message
+          );
+        }
+
+        // S06-M3: the uid is dropped from this message entirely. The operator's
+        // legitimate view of who is locked is GET /admin/api/locked, which reads
+        // live Firestore state and is covered by the audit log. A cleartext uid
+        // next to a [duress-lock] tag is a permanent plaintext record that this
+        // account triggered a duress wipe.
+        console.log(`[duress-lock] accountLock written (uid=${uidTag(uid)})`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ locked: true }));
       } catch (e) {
@@ -2896,10 +3072,36 @@ http.createServer((req, res) => {
           res.end("No lock found for this uid");
           return;
         }
-        await ref.delete();
-        console.log(`[admin] account unfrozen: uid=${uid}`);
+        // ── §8 / S06-M6: unfreeze must hand back a RE-ARMABLE state ───────────
+        // A plain delete used to leave the account in the promote-and-rotate
+        // "duress fired" state permanently: the duress code D is now the primary
+        // PIN and the device gate, slot B holds a disarmed decoy, and there is no
+        // visible way to add a duress code again. The user gets a working account
+        // with no duress protection and no signal that it is gone.
+        //
+        // So the lock is not simply removed — it is replaced by a durable
+        // "rotation required" marker. The client sees this on next sign-in and
+        // forces a fresh primary PIN (P2), which is the natural moment to re-arm
+        // slot B with D. Keeping D as the duress code is safe: an adversary who
+        // returns and enters it triggers duress again and gets nothing.
+        //
+        // This lives server-side rather than in SecurePrefs specifically so it
+        // survives a reinstall — a local flag would be dropped by exactly the
+        // wipe that necessitated the unfreeze.
+        await ref.set({
+          locked:           false,
+          rotationRequired: true,
+          unfrozenAt:       FieldValue.serverTimestamp(),
+          lockedAt:         snap.data().lockedAt || null,  // preserve trigger time (S06-L6)
+        });
+        // S06-M3: pseudonymise. GET /admin/api/locked is the operator's view of
+        // real uids; the log does not need to hold a duress-linked cleartext id.
+        console.log(`[admin] account unfrozen, rotation required: uid=${uidTag(uid)}`);
 
-        // Audit log — non-fatal; never block the response on this write
+        // Audit log — non-fatal; never block the response on this write.
+        // The audit log intentionally keeps the real uid: it is the operator's
+        // accountable record, inside Firestore's access controls and inside the
+        // deletion workflow, unlike the server's stdout.
         db.collection("adminAuditLog").add({
           action:  "account_unfrozen",
           uid,
@@ -3120,4 +3322,36 @@ function b2PresignUrl(method, objectKey, contentType, ttlSeconds) {
     ttlSeconds,
     now: new Date(),
   });
+}
+
+// ── S06-C2 part 4: the duress latch must cover backed-up media ────────────────
+// Messages, contacts and groups live in `backups/{uid}` (gated in
+// firestore.rules); media lives in B2 and is reachable only through a presigned
+// URL minted here. A minted-before-lock token could therefore still pull every
+// photo and voice note after a duress wipe, because the presign path never
+// consulted `accountLock`.
+//
+// NOTE ON CURRENT STATE: `/b2PresignedPut`, `/b2PresignedGet` and `/b2Delete`
+// are called by B2StorageHelper but are NOT implemented in this file — the
+// plain `b2PresignUrl` above is unreachable dead code (it is declared after
+// `.listen()`). Rather than leave a comment that the next implementer can miss,
+// the lock check is bound into the only signing entry point they should call:
+// this wrapper refuses to sign without a uid it has verified is unlocked, and
+// refuses to sign a key outside that uid's own prefix. Route handlers must use
+// `b2PresignUrlForUid`, never `b2PresignUrl` directly.
+async function b2PresignUrlForUid(uid, method, objectKey, contentType, ttlSeconds) {
+  if (!uid || typeof uid !== "string") {
+    throw Object.assign(new Error("Not authenticated"), { status: 401 });
+  }
+  // Media keys are namespaced per uid. Without this, a locked-account check on
+  // the caller's own uid would still let them presign someone else's object.
+  if (typeof objectKey !== "string" || !objectKey.startsWith(`${uid}/`)) {
+    throw Object.assign(new Error("Forbidden"), { status: 403 });
+  }
+  // isAccountLocked fails closed, so an unreadable lock denies the presign.
+  if (await isAccountLocked(uid)) {
+    console.warn(`b2Presign: refused for locked account uid=${uidTag(uid)}`);
+    throw Object.assign(new Error("Forbidden"), { status: 403 });
+  }
+  return b2PresignUrl(method, objectKey, contentType, ttlSeconds);
 }

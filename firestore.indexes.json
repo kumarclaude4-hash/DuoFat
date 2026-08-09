@@ -72,5 +72,13 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "//": "S06-M2: TTL policy so Firestore deletes expired duress lock nonces automatically. Documents were previously removed only when /duress-lock consumed one, and the common case is that it never does — the synchronous lock write usually wins the race, so the fallback nonce is abandoned and the doc leaks permanently. Each leaked doc holds {uid, expiresAt}: a durable server-side record of which account triggered a duress wipe and when, which is precisely the event this feature exists to make undetectable. This is the intended mechanism and costs nothing.",
+      "collectionGroup": "_duressNonces",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    }
+  ]
 }
