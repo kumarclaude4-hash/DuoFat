@@ -127,6 +127,25 @@ public class WatchTogetherActivity extends AppCompatActivity
     protected void onResume() {
         super.onResume();
         if (player != null) player.onResume();
+
+        // Re-sync after returning from the background.
+        //
+        // onPause() calls WebView.onPause(), which freezes this device's playback while
+        // the peer keeps watching. Coming back, the snapshot listener alone is NOT enough
+        // to recover: if THIS device performed the last action, nothing advanced `seq`
+        // while we were away (the peer only heartbeats when it is `lastActionBy`, and our
+        // own heartbeat was cancelled in onStop). The re-delivered snapshot then carries
+        // `seq == appliedState.seq`, so shouldApply() — which requires a strictly greater
+        // seq — drops it and reconcile() never runs, leaving us silently behind forever.
+        //
+        // Reconciling against the already-applied state fixes it without any Firestore
+        // op: appliedReceiptRealtime is SystemClock.elapsedRealtime(), which keeps
+        // counting across the background window, so projectedPositionMs() already
+        // accounts for the time we missed and shouldSeek() closes the gap. No write, no
+        // extra read, no second listener.
+        if (appliedState != null && appliedState.isPlayable()) {
+            reconcile(appliedState);
+        }
     }
 
     @Override

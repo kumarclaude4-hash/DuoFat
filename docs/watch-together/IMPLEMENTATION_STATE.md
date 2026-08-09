@@ -5,18 +5,30 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 4 (2026-08-09)
-- **Branch:** `v0/xojow11866-8151-97dea628` (off `main`; Session 4 work committed here, PR pending)
-- **Overall feature status:** **FEATURE-COMPLETE FOR CORE FLOW + POLISH, NOT COMPILER-VERIFIED** —
-  the feature is reachable from the call UI (Session 3: `CallActivity` binds/reveals/launches
-  the watch button; manifest entry exists). Since then: the **host heartbeat writer**
-  (`maybeWriteHeartbeat`, single-writer via a last-actor guard, `ACTION_HEARTBEAT`) is present
-  in `WatchTogetherActivity`, and Session 4 added a **one-shot awareness cue** on the call
-  screen's watch button (a "Rejoin Watch Together" hint driven by a single `fetchState`, with
-  no second listener). The static checker now enforces **21 checks**, including the
-  exactly-one-listener, single-writer-heartbeat, cost-guard, and one-shot-awareness invariants.
-  **What still remains** is, critically, **a real Gradle build + on-device verification** —
-  no JDK/Gradle has been available in any of the four sessions. See §7, §11, and §13.
+- **Last updated:** Session 6 (2026-08-09)
+- **Branch:** `v0/kevibaf520-3621-84819b1b` (off `main`)
+- **Reconciled against commit:** `19a11ff` — merge of PR #42
+  ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
+  `0c9e6e6` (the `BaseActivity` FCM de-registration fix) and `76eb2d0` (the Session 5
+  doc update). **The repo + HEAD are the source of truth for everything below.**
+- **Overall feature status:** **FEATURE-COMPLETE FOR THE CORE FLOW + POLISH, AND
+  BUILD-VERIFIED — BUT NOT RUNTIME-VERIFIED.**
+  - The feature is reachable from the call UI (Session 3: `CallActivity`
+    binds/reveals/launches the watch button; manifest entry exists). The **heartbeat writer**
+    (`maybeWriteHeartbeat`, single-writer via a last-actor guard, `ACTION_HEARTBEAT`) is
+    present in `WatchTogetherActivity`, and Session 4 added a **one-shot awareness cue**
+    ("Rejoin Watch Together") driven by a single `fetchState` with no second listener.
+  - **Session 6 re-established a JDK 17 + Android SDK 34 toolchain from scratch and
+    independently re-verified the build in a fresh container:**
+    `:app:compileDebugJavaWithJavac` **PASS**, `:app:assembleDebug` **PASS** (real APKs),
+    `:app:lintDebug` **PASS**, **58/58 Watch Together JVM tests PASS** (forced rerun, not a
+    cached result), static checker **21/21 PASS**.
+  - **What still remains is on-device / two-participant runtime verification.** It is
+    **BLOCKED**, not skipped: this container has no `/dev/kvm`, no `vmx`/`svm` CPU flags,
+    no emulator binary, and no attached device. See §10 and §11 item 9.
+  - **No Watch Together defect has ever been observed** — in five sessions of static
+    checking and two sessions of real compilation, zero bugs have been found in
+    `call/watch/`. That is not the same as the feature being proven to work; see §13.
 
 ---
 
@@ -268,6 +280,33 @@ participants to write, and there is a rules test asserting the non-host can paus
 > as a *whole task* still FAILS, on **13 pre-existing `BackupRoundTripTest` failures that
 > have nothing to do with Watch Together** (root cause and proof of pre-existence in §11
 > item 8). No Watch Together test fails.
+
+> **SESSION 6 CONFIRMATION — Session 5's build claims were independently reproduced from
+> scratch, so they are not a one-off artifact of one container.** Session 6 started in a
+> *fresh* container with **no JDK, no Android SDK, no `adb`, and no `emulator`** — the
+> Session 5 toolchain did not persist. A JDK 17.0.20 + Android SDK 34 (platform-tools,
+> build-tools 34.0.0) toolchain was re-provisioned and every check was re-run:
+>
+> | Check | Session 6 result |
+> |---|---|
+> | `:app:compileDebugJavaWithJavac` | **PASS** (warnings only, zero errors) |
+> | `:app:assembleDebug` | **PASS** — real APKs emitted |
+> | `:app:lintDebug` | **PASS** (see the `abortOnError` caveat in §10) |
+> | Watch Together JVM tests | **PASS — 58/58**, via `--rerun-tasks` so this is not a cached result |
+> | `scripts/check-watch-together.js` | **PASS — 21/21** |
+> | `:app:testDebugUnitTest` (whole task) | **FAIL — 126 tests, 13 failed, all 13 in `BackupRoundTripTest`** (pre-existing, unrelated; §11 item 8) |
+> | Device / emulator runtime verification | **BLOCKED** — see §10 |
+>
+> Session 6 also **re-read `WatchTogetherState`, `WatchTogetherRepository`,
+> `YouTubeUrlParser`, and `WatchTogetherActivity`'s lifecycle/heartbeat paths looking for a
+> real defect and found none**, so per its instructions it made **no code change**. Three
+> specific NPE/leak hypotheses were checked and each is already correctly defended:
+> `onCreate` `finish()`es when `callId`/`myUid` is null (so `maybeWriteHeartbeat`'s
+> `myUid.equals(...)` cannot NPE); the heartbeat `Handler` is cancelled in **both** `onStop`
+> (`removeCallbacks`) and `onDestroy` (`removeCallbacksAndMessages(null)`); and the snapshot
+> listener is attached under a `stateListener == null` guard and removed in both `onStop` and
+> `onDestroy`, so it can never double-attach. The `repo != null` guard in `onStart` is what
+> makes the post-`finish()` `onStart`→`onStop` pass harmless.
 
 | Component | Status | Notes |
 |---|---|---|
