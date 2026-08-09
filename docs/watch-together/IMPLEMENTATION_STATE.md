@@ -6,7 +6,7 @@
 > Do not delete prior useful context — amend it.
 
 - **Last updated:** Session 6 (2026-08-09)
-- **Branch:** `v0/kevibaf520-3621-0cf60639` (off `main`)
+- **Branch:** `v0/kevibaf520-3621-84819b1b` (off `main`)
 - **Reconciled against commit:** `19a11ff` — merge of PR #42
   ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
   `0c9e6e6` (the `BaseActivity` FCM de-registration fix) and `76eb2d0` (the Session 5
@@ -280,6 +280,33 @@ participants to write, and there is a rules test asserting the non-host can paus
 > as a *whole task* still FAILS, on **13 pre-existing `BackupRoundTripTest` failures that
 > have nothing to do with Watch Together** (root cause and proof of pre-existence in §11
 > item 8). No Watch Together test fails.
+
+> **SESSION 6 CONFIRMATION — Session 5's build claims were independently reproduced from
+> scratch, so they are not a one-off artifact of one container.** Session 6 started in a
+> *fresh* container with **no JDK, no Android SDK, no `adb`, and no `emulator`** — the
+> Session 5 toolchain did not persist. A JDK 17.0.20 + Android SDK 34 (platform-tools,
+> build-tools 34.0.0) toolchain was re-provisioned and every check was re-run:
+>
+> | Check | Session 6 result |
+> |---|---|
+> | `:app:compileDebugJavaWithJavac` | **PASS** (warnings only, zero errors) |
+> | `:app:assembleDebug` | **PASS** — real APKs emitted |
+> | `:app:lintDebug` | **PASS** (see the `abortOnError` caveat in §10) |
+> | Watch Together JVM tests | **PASS — 58/58**, via `--rerun-tasks` so this is not a cached result |
+> | `scripts/check-watch-together.js` | **PASS — 21/21** |
+> | `:app:testDebugUnitTest` (whole task) | **FAIL — 126 tests, 13 failed, all 13 in `BackupRoundTripTest`** (pre-existing, unrelated; §11 item 8) |
+> | Device / emulator runtime verification | **BLOCKED** — see §10 |
+>
+> Session 6 also **re-read `WatchTogetherState`, `WatchTogetherRepository`,
+> `YouTubeUrlParser`, and `WatchTogetherActivity`'s lifecycle/heartbeat paths looking for a
+> real defect and found none**, so per its instructions it made **no code change**. Three
+> specific NPE/leak hypotheses were checked and each is already correctly defended:
+> `onCreate` `finish()`es when `callId`/`myUid` is null (so `maybeWriteHeartbeat`'s
+> `myUid.equals(...)` cannot NPE); the heartbeat `Handler` is cancelled in **both** `onStop`
+> (`removeCallbacks`) and `onDestroy` (`removeCallbacksAndMessages(null)`); and the snapshot
+> listener is attached under a `stateListener == null` guard and removed in both `onStop` and
+> `onDestroy`, so it can never double-attach. The `repo != null` guard in `onStart` is what
+> makes the post-`finish()` `onStart`→`onStop` pass harmless.
 
 | Component | Status | Notes |
 |---|---|---|
