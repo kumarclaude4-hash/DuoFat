@@ -9,8 +9,6 @@ import com.duoshield.app.SignInActivity;
 import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.backup.BackupScheduler;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
-import com.duoshield.app.db.AppDatabase;
-import com.duoshield.app.util.ContactBackupHelper;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -268,49 +266,26 @@ public class DuressManager {
 
             // 3. Destructive local wipe ─────────────────────────────────────────
 
-            // 3a. Close and delete the SQLCipher database (messages, contacts, logs).
-            //     clearInstance() must come first so Room's cached connection is
-            //     released before the file is deleted.
-            AppDatabase.clearInstance();
-            context.deleteDatabase("duoshield_db");
-
-            // 3b. Synchronously destroy all key material in SecurePrefs.
-            //     .commit() (not .apply()) guarantees the keys are gone before we
-            //     proceed — critical for forensic resistance.
-            //     NOTE: this clears the account-scoped SecurePrefs file only. The
-            //     device-level PIN gate lives in its own isolated file
-            //     (SecurePrefs.getDeviceGate()) precisely so this wipe can never
-            //     reach it — see PinManager's class javadoc. Do not "fix" this by
-            //     re-adding the device-gate keys to this clear(); that is the exact
-            //     bug the isolated file exists to prevent.
+            // 3a. Canonical local erasure — the SAME routine used by "Wipe & Exit" and
+            //     "Unpair Device", running in DURESS mode. See WipeHelper for the full
+            //     ordered step list (gallery media, decrypted-media disk cache, key
+            //     material, SQLCipher DB, scheduled work, prefs, Firebase sign-out,
+            //     temp/export cache).
+            //
+            //     Do NOT re-inline erasure steps here. This path previously maintained
+            //     its own copy of the sequence and silently fell behind: it was missing
+            //     both B2StorageHelper.clearDiskCache() and the cache-directory delete,
+            //     so decrypted photos and videos survived a duress wipe in readable form.
+            //     Any new erasure step belongs in WipeHelper.eraseLocalData().
+            //
+            //     DURESS mode additionally destroys the contact backup, so the
+            //     "Restore Contacts" path cannot rebuild the social graph afterwards.
             try {
-                SecurePrefs.get(context).edit().clear().commit();
-                SecurePrefs.reset(); // invalidate cached instance
-            } catch (Exception ignored) {}
-
-            // 3c. Wipe the local contact backup so the "Restore Contacts" path
-            //     cannot recover contact data after a duress-triggered wipe.
-            ContactBackupHelper.clearBackup(context);
-
-            // 3d. F37 fix: delete any media the user saved to the public gallery
-            //     (Pictures/DuoShield, Movies/DuoShield). Must run BEFORE the prefs
-            //     clear below because the URI list lives inside duoshield_prefs.
-            try {
-                com.duoshield.app.util.MediaStoreWipeHelper.wipeAll(context);
-            } catch (Exception ignored) {}
-
-            // 3e. Clear all SharedPreferences files synchronously.
-            //     NOTE: duress_wipe_in_progress lives in PREFS_NAME and is cleared
-            //     here along with all other keys — see step 4 below for the removal.
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                   .edit().clear().commit();
-            context.getSharedPreferences("duoshield_security_prefs", Context.MODE_PRIVATE)
-                   .edit().clear().commit();
-            context.getSharedPreferences("duoshield_contacts_bak", Context.MODE_PRIVATE)
-                   .edit().clear().commit();
-
-            // 4. Firebase local sign-out (no network call, no Firestore writes).
-            try { FirebaseAuth.getInstance().signOut(); } catch (Exception ignored) {}
+                com.duoshield.app.util.WipeHelper.eraseLocalData(
+                        context, com.duoshield.app.util.WipeHelper.WipeMode.DURESS);
+            } catch (Exception e) {
+                android.util.Log.e("DuressManager", "eraseLocalData failed during duress wipe", e);
+            }
 
             // F30 fix: Clear the routing-guard flag LAST, after signOut() and after all
             // prefs are wiped. The step-3d clear above already removes it as part of the
