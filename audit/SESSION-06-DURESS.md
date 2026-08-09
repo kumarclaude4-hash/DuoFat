@@ -3,11 +3,13 @@
 _Audit session 06 of the DuoShield security review. Original pass scope frozen at the code state on
 branch `course-curriculum-management`._
 
-**Severity counts: 1 Critical / 5 High / 6 Medium / 6 Low / 4 Informational**
+**Severity counts: 2 Critical / 5 High / 6 Medium / 6 Low / 4 Informational**
 
-> **Second pass (addendum, §7-§8).** A follow-up review found nine additional findings —
-> `S06-C1`, `S06-H4`, `S06-H5`, `S06-M4`, `S06-M5`, `S06-M6`, `S06-L5`, `S06-L6`, `S06-I4` — and
-> re-verified that **every** finding from the first pass is still unfixed. Three spot checks:
+> **Second pass (addendum, §7-§8).** A follow-up review found ten additional findings —
+> `S06-C1`, `S06-C2`, `S06-H4`, `S06-H5`, `S06-M4`, `S06-M5`, `S06-M6`, `S06-L5`, `S06-L6`,
+> `S06-I4` — and re-verified that **every** finding from the first pass is still unfixed.
+> `S06-C2` supersedes `S06-H1` in scope: the cloud backup is reachable with the seed phrase alone,
+> so the lock's single enforcement point is bypassed rather than defeated. Three spot checks:
 > `grep -n accountLock server/index.js` shows hits only in `/duress-lock`, the admin list, and
 > admin unfreeze — never in `/mintToken` (**S06-H1 open**); `grep -rn pruneWork app/src/main/java`
 > matches only `SelfDestructScheduler`'s own unrelated tag (**S06-H2 open**);
@@ -59,6 +61,8 @@ network reachability.
 | `accountLock` cannot be read/written cross-account | ✅ **Correct** — rules + tests |
 | `_duressNonces` / `waitlist` unreachable from clients | ✅ **Correct** |
 | **The lock actually prevents a restore** | ❌ **NO** — client-side only, post-auth (S06-H1) |
+| **The lock protects the cloud backup** | ❌ **NO** — `backups/` is owner-only, no lock check (S06-C2) |
+| **A coerced seed cannot reconstruct the data** | ❌ **NO** — backup key is derived from the seed alone (S06-C2) |
 | **The lock is set when the attacker controls the network** | ❌ **NO** — silent no-op offline (S06-H3) |
 | **The wipe leaves no evidence a duress code was entered** | ❌ **NO** — WorkManager residue (S06-H2) |
 | Eligibility is a server-enforced boundary | ❌ **NO** — cached client bool only (S06-M1) |
@@ -538,6 +542,13 @@ Verified against the code, not just the comments — worth recording so a later 
   attacker-controlled connectivity). The feature should be described as **not currently providing
   either of its two advertised guarantees**, notwithstanding that its cryptographic and
   transactional internals are well built.
+- **S06-C2 is the finding to lead with.** It is the only one where the adversary needs *nothing*
+  but the coerced seed phrase — no device, no app, no APK, no root, no network control — and it
+  defeats the feature's primary advertised guarantee outright. It also reframes S06-H1: the issue
+  is not merely that `/mintToken` skips the lock, but that `backups/{uid}` (the complete dataset,
+  encrypted under a key derived solely from the seed) has no lock check in the rules at any level.
+  For Session 07+, treat "does this collection consult `accountLock`?" as a standing question for
+  every new collection, since the answer is currently *no* for all of them.
 - **Addendum raises that to six independent defeats.** S06-C1 (device gate rejects the duress PIN
   after the wipe) and S06-H5 (PIN-settings oracle locates the duress code) join the three above,
   and S06-H4 means the code may never have been armed in the first place. Rank S06-C1 and S06-H5
@@ -594,6 +605,72 @@ deniability and should be verified in the client-side session that covers key st
 ## 7. Addendum — second-pass findings
 
 _All line numbers in this section are against the **current** tree, not the frozen §3 scope._
+
+### S06-C2 — The cloud backup ignores `accountLock` entirely; the seed phrase alone reconstructs everything
+
+**Severity: Critical** · **Location:** `firestore.rules:282-313`, `ui/RestoreFromSeedActivity.java:223-271`, `server/index.js:1596+` (`/mintToken`), `crypto/BackupCryptoHelper.java:57-59`
+
+S06-H1 framed this as "`/mintToken` does not consult `accountLock`". Reading the backup subsystem
+shows that understates it. **`accountLock` is enforced in exactly one place in the entire codebase:
+a client-side `if` in the restore UI, evaluated *after* authentication has already succeeded.** The
+backup — which is the complete dataset — is not gated by it at any layer.
+
+The chain:
+
+1. `BackupManager` continuously uploads messages, contacts, and groups to
+   `backups/{uid}/{messages,contacts,groups}` (`:58-61`), AES-256-GCM encrypted under
+   `deriveBackupKey(mnemonic)` = `HKDF-SHA256(PBKDF2-SHA512(mnemonic), "DUOSHIELD_BACKUP_V1")`
+   (`BackupCryptoHelper.java:57-59`). Media goes to B2. **The backup key is a pure function of the
+   seed phrase** — no device secret, no server secret, nothing the wipe can destroy.
+2. `/mintToken` (`server/index.js:1596`) verifies only `sha256(identityPubKeyHex)` against
+   `identities/{userId}`, rate-limits by IP and uid, and checks `waitlist` for new accounts. It
+   **never reads `accountLock`**, so it mints a valid custom token for a locked account.
+3. `RestoreFromSeedActivity` calls `signInWithSeed` at `:223`; the session is live and
+   `restoreSessionEstablished = true` at `:243`. Only **then**, at `:262-268`, does it read
+   `accountLock` and abort.
+4. `firestore.rules:282-313` guards `backups/{userId}` and all three subcollections with nothing
+   but `request.auth.uid == userId`. **No lock check at any level.**
+
+So an adversary holding a coerced seed needs no device, no app, no patched APK, and no root: call
+`/mintToken`, get a token for the victim's uid, read `backups/{uid}/messages` over the Firestore
+REST API, derive the key from the same mnemonic, decrypt offline. Step 3 — the only enforcement
+that exists — is code they never execute.
+
+This is precisely the guarantee the feature exists to provide (§2, guarantee **a**), and it rests
+on a client-side conditional.
+
+**Two aggravating factors that change the fix, not just the severity:**
+
+- **Fixing `/mintToken` alone is insufficient.** `signInWithCustomToken` yields a long-lived
+  refresh token. Any token minted *before* the lock lands keeps working indefinitely, and S06-M5
+  hands the adversary a ~30 s window they can widen at will by holding the network down. Closing
+  this needs `admin.auth().revokeRefreshTokens(uid)` inside `/duress-lock` **and** a rules-level
+  check, so a surviving token still cannot read the backup.
+- **B2 media is ungated too.** `grep -n accountLock server/index.js` returns hits only at `:2572`,
+  `:2620`, `:2636`, `:2854`, `:2874`, `:2892` — `/duress-lock` and the two admin routes. The
+  presign path (`b2PresignUrl`, `:3111`) never consults the lock, so backed-up media is reachable
+  by the same minted token.
+
+**Where the effort went.** `RestoreFromSeedActivity:244-262` dispatches the `identities` and
+`accountLock` reads concurrently *specifically* so a locked and an unlocked account take identical
+wall-clock time, returning `GENERIC_RESTORE_FAILURE` for both. That is careful work — and it
+defends a check the adversary does not run, in a code path they do not enter. Same shape as S06-C1:
+real rigour spent on a side channel while the front door stands open.
+
+**Fix — defence in depth, four parts:**
+1. `/mintToken` refuses to mint when `accountLock/{userId}.locked == true` (this is S06-H1), read
+   inside the existing transaction, reusing the current 403 string verbatim.
+2. `/duress-lock` calls `revokeRefreshTokens(uid)` after writing the lock, killing live sessions.
+3. `firestore.rules` gates `backups/{userId}` **and** its subcollections on
+   `!exists(/databases/$(database)/documents/accountLock/$(userId))`.
+4. The B2 presign path performs the same server-side check.
+
+Part 3 carries a real cost that needs a decision: a rules `exists()` is a billed document read and
+`restoreAllSync` paginates at `PAGE_LIMIT = 1000` (`BackupManager.java:63`), so a large restore
+multiplies it. Parts 1, 2 and 4 are cheap and close the practical attack; part 3 is the only one
+that survives a bypassed or compromised server. See §8.
+
+---
 
 ### S06-C1 — The device gate survives the duress wipe holding the *primary* PIN, and the duress PIN is rejected by it
 
@@ -865,8 +942,55 @@ Properties this buys:
 
 Open dependencies before implementation: the wipe must be resumable (S06-M5) or a promotion
 interrupted midway can leave `P` and `D` both valid; the unfreeze endpoint must signal
-"rotation required" durably enough to survive reinstall; and this design assumes a server-side
-backup exists so that "clear everything locally" is recoverable rather than destructive.
+"rotation required" durably enough to survive reinstall.
+
+### 8.1 Backup coverage — confirmed by reading the code
+
+The design's "everything is already backed up" premise **holds**, which makes the local wipe
+recoverable rather than destructive:
+
+| Data | Backed up | Where | Key |
+|---|---|---|---|
+| Messages | ✅ | `backups/{uid}/messages` | AES-256-GCM, seed-derived |
+| Contacts | ✅ | `backups/{uid}/contacts` | same |
+| Groups + members | ✅ | `backups/{uid}/groups` | same |
+| Media | ✅ | B2, pre-cached on restore (`RestoreFromSeedActivity:384-423`) | B2 presign |
+| Deletions | ✅ soft-delete only (`isDeleted:true`, rules deny hard delete) | — | — |
+
+Sync runs incrementally on every `BackupSyncWorker` pass (`syncIncremental`, `:455`) and contacts
+and groups re-sync on **every** incremental run (`:543-590`), so coverage does not silently drift.
+`restoreAllSync` (`:160`) + `restoreContactsSync` (`:839`) + the B2 media pre-cache reconstruct the
+account.
+
+Two caveats to state at enrollment rather than discover later:
+
+- **`getUnsyncedCount` (`:953`) can be non-zero at duress time.** Anything not yet uploaded is lost
+  by the wipe. That is exactly what the panic sync in `performLogout` exists to flush, which is why
+  S06-M5's ordering question is a data-loss question, not just a robustness one.
+- **`SIZE_WARN_LIMIT = 10_000` (`:67`) only warns.** Beyond that, sync is degraded-but-silent, so a
+  heavy account may have weaker coverage than the table implies.
+
+### 8.2 The premise that holds is also the vulnerability
+
+The same property that makes promote-and-rotate safe — a complete, seed-recoverable cloud backup —
+is what makes S06-C2 critical. `deriveBackupKey` is a pure function of the mnemonic, so the wipe
+cannot revoke access to the backup; **only the lock can**, and the lock does not cover
+`backups/`. Promote-and-rotate therefore fixes the *local* deniability story (S06-C1) while leaving
+the *remote* data story wide open.
+
+This gives a clean split for sequencing:
+
+1. **S06-C2 first** (server + rules: mint refusal, token revocation, `backups/` and B2 gating). It
+   is the only finding where the adversary needs nothing but the seed phrase, and no amount of
+   client-side work can compensate for it.
+2. **Then promote-and-rotate** (S06-C1, S06-M6) plus the wipe-resume work (S06-M5), since the
+   promotion must be interruption-safe.
+3. **Then the arming and oracle fixes** (S06-H4, S06-H5, S06-M4, S06-L5), which are self-contained
+   client changes.
+
+Doing 2 before 1 would produce a device that convincingly presents as unconfigured while the entire
+message history stays one `/mintToken` call away — the worst possible combination, because it
+maximises the user's confidence while leaving the actual data exposed.
 
 ---
 
