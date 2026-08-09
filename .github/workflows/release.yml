@@ -52,37 +52,78 @@ jobs:
           fi
           printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
 
-      - name: Write service-account.json
+      # S08-C1: no service-account.json is written into app/src/main/assets any
+      # more. That step used to place the project's Firebase **admin** private
+      # key inside the packaged APK, where `unzip -p app.apk assets/…` recovered
+      # full Admin SDK authority over every user's Firestore data and Auth
+      # tokens from a public download. No application code ever read the file —
+      # verified by grepping app/src for `service-account` — so the step existed
+      # purely as a leak. Admin credentials live only on the push server (Render
+      # env) and the Cloudflare Worker. Never reintroduce this step: an APK is a
+      # public artifact, so anything written into it is published, not stored.
+      #
+      # SC-02 / S08-H1: the release local.properties below deliberately carries
+      # NO secret material either — only non-secret endpoints. B2 keys and
+      # WORKER_SECRET used to be injected here and compiled into BuildConfig,
+      # which shipped the shared storage credential to every device. Media
+      # access is now brokered by per-object capability tokens minted by the
+      # push server (SEC-A01, see B2StorageHelper), so the client needs neither.
+      #
+      # Rule for this file: a value may only be written into local.properties if
+      # it would be safe to print on the release page. If it must stay secret,
+      # it belongs in a server env var and must be reached over an authenticated
+      # endpoint at runtime.
+      - name: Write local.properties (non-secret values only)
         env:
-          SERVICE_ACCOUNT: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
-        run: |
-          mkdir -p app/src/main/assets
-          if [ -n "$SERVICE_ACCOUNT" ]; then
-            printf '%s' "$SERVICE_ACCOUNT" > app/src/main/assets/service-account.json
-          else
-            echo "::warning::GOOGLE_APPLICATION_CREDENTIALS_JSON not set — using stub."
-            printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
-              > app/src/main/assets/service-account.json
-          fi
-
-      - name: Write local.properties
-        env:
-          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
-          B2_REGION:          ${{ secrets.B2_REGION }}
-          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
-          WORKER_URL:         ${{ secrets.WORKER_URL }}
-          WORKER_SECRET:      ${{ secrets.WORKER_SECRET }}
+          B2_BUCKET:       ${{ secrets.B2_BUCKET }}
+          B2_REGION:       ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL: ${{ secrets.PUSH_SERVER_URL }}
+          WORKER_URL:      ${{ secrets.WORKER_URL }}
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
-          echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
-          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                   >> local.properties
           echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                       >> local.properties
           echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
-          echo "worker.secret=${WORKER_SECRET:-}"                                             >> local.properties
+
+      # Fail the release if any known secret name reached a packaged input.
+      # This is the enforcement half of the rule above: comments do not stop a
+      # future edit from re-adding an injection step, a failing build does.
+      - name: Assert no secrets in packaged build inputs
+        run: |
+          set -u
+          fail=0
+          # Note: `set -e` is deliberately NOT used. Under `-e` a missing
+          # local.properties would abort this step before any check ran, so the
+          # guard would be skipped rather than enforced — the failure mode a
+          # secret check must never have. Every condition is tested explicitly
+          # and the exit status is decided at the end.
+          if [ ! -f local.properties ]; then
+            echo "::error::local.properties is missing — cannot verify the build carries no secrets."
+            exit 1
+          fi
+          if [ -f app/src/main/assets/service-account.json ]; then
+            echo "::error::app/src/main/assets/service-account.json exists — admin credentials must never be packaged (S08-C1)."
+            fail=1
+          fi
+          # `=.` requires at least one character after the `=`, so a key written
+          # with an empty value (the `${VAR:-}` default) is correctly allowed
+          # while any real value trips the guard.
+          for key in b2.key.id b2.application.key worker.secret; do
+            if grep -q "^${key}=." local.properties; then
+              echo "::error::local.properties sets ${key} — client builds must not carry shared secrets (SC-02)."
+              fail=1
+            fi
+          done
+          # Catch a credential smuggled in under any other key name: B2
+          # application keys are long opaque strings, and a Google private key
+          # block is unmistakable.
+          if grep -qi "BEGIN [A-Z ]*PRIVATE KEY" local.properties; then
+            echo "::error::local.properties contains a private key block."
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "OK: no packaged secret material detected."
 
       - name: Decode keystore
         env:

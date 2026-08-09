@@ -348,3 +348,67 @@ test("safeTokenEqual handles empty strings consistently", () => {
   assert.equal(pure.safeTokenEqual("", "x"), false);
   assert.equal(pure.safeTokenEqual("x", ""), false);
 });
+
+// ── timingSafeEqualHex — S07-H1 regression ────────────────────────────────────
+// The finding: /mintToken verified account ownership with
+// `if (storedHash && storedHash !== incomingHash) reject`, which fails OPEN.
+// Any identity doc whose identityPubKeyHash was absent, empty, or not a string
+// made the condition falsy, so the guard was skipped and a custom token was
+// minted for that uid without the caller proving anything. These tests pin the
+// replacement's behaviour: unusable input is never "equal".
+
+test("timingSafeEqualHex matches identical digests", () => {
+  const h = crypto.createHash("sha256").update("duoshield").digest("hex");
+  assert.equal(pure.timingSafeEqualHex(h, h), true);
+  assert.equal(pure.timingSafeEqualHex(h, h.toUpperCase()), true,
+    "hex is case-insensitive: the same digest in either case must compare equal");
+});
+
+test("timingSafeEqualHex rejects differing digests of equal length", () => {
+  const a = crypto.createHash("sha256").update("a").digest("hex");
+  const b = crypto.createHash("sha256").update("b").digest("hex");
+  assert.equal(pure.timingSafeEqualHex(a, b), false);
+  // Single-nibble difference in the final position — the hardest case for any
+  // early-exit comparison to get right.
+  assert.equal(pure.timingSafeEqualHex(a, a.slice(0, -1) + (a.endsWith("0") ? "1" : "0")), false);
+});
+
+test("timingSafeEqualHex treats absent or non-string input as not-equal (fail closed)", () => {
+  const h = crypto.createHash("sha256").update("x").digest("hex");
+  // This is the exact S07-H1 exploit shape: a stored hash that is missing or of
+  // the wrong type must NOT be treated as a pass.
+  for (const bad of [undefined, null, "", 0, false, NaN, {}, [], Buffer.from(h, "hex")]) {
+    assert.equal(pure.timingSafeEqualHex(bad, h), false, `stored=${String(bad)} must not authenticate`);
+    assert.equal(pure.timingSafeEqualHex(h, bad), false, `incoming=${String(bad)} must not authenticate`);
+  }
+  // Both sides absent must also fail — "nothing equals nothing" would authorise
+  // every caller against an empty identity record.
+  assert.equal(pure.timingSafeEqualHex(undefined, undefined), false);
+  assert.equal(pure.timingSafeEqualHex("", ""), false);
+  assert.equal(pure.timingSafeEqualHex(null, null), false);
+});
+
+test("timingSafeEqualHex rejects length mismatches without throwing", () => {
+  const h = crypto.createHash("sha256").update("y").digest("hex");
+  // crypto.timingSafeEqual throws on unequal buffer lengths; the wrapper must
+  // return false instead, or a truncated stored hash becomes a 500 (and an
+  // information leak about which accounts are malformed).
+  assert.equal(pure.timingSafeEqualHex(h.slice(0, 32), h), false);
+  assert.equal(pure.timingSafeEqualHex(h, h + "00"), false);
+});
+
+test("timingSafeEqualHex rejects malformed hex instead of comparing a prefix", () => {
+  // Buffer.from("zz…", "hex") does not throw — it stops at the first invalid
+  // character and returns a SHORTER buffer. Without the decoded-length re-check,
+  // a value like "zz" would decode to an empty buffer and could compare equal to
+  // another unparsable value, so garbage would authenticate garbage.
+  const bogus = "z".repeat(64);
+  const real  = crypto.createHash("sha256").update("z").digest("hex");
+  assert.equal(pure.timingSafeEqualHex(bogus, real), false);
+  assert.equal(pure.timingSafeEqualHex(bogus, bogus), false,
+    "two identical-but-invalid hex strings must not authenticate each other");
+  // Valid hex prefix followed by invalid characters must not match the prefix.
+  assert.equal(pure.timingSafeEqualHex(real.slice(0, 60) + "zzzz", real), false);
+  // Odd-length input can never be a whole-byte digest.
+  assert.equal(pure.timingSafeEqualHex("abc", "abd"), false);
+});

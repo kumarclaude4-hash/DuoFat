@@ -45,12 +45,6 @@ jobs:
             cat app/google-services.json.template > app/google-services.json
           fi
 
-      - name: Write stub service-account.json
-        run: |
-          mkdir -p app/src/main/assets
-          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
-            > app/src/main/assets/service-account.json
-
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
@@ -100,24 +94,24 @@ jobs:
             cat app/google-services.json.template > app/google-services.json
           fi
 
-      - name: Write stub service-account.json
-        run: |
-          mkdir -p app/src/main/assets
-          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
-            > app/src/main/assets/service-account.json
-
-      - name: Write local.properties
+      # SC-02: no B2 credential is exposed to this job. It previously mapped
+      # secrets.B2_KEY_ID / B2_APPLICATION_KEY into the environment and wrote
+      # them to local.properties, even though a debug build never uses them —
+      # the client obtains per-object capability tokens from the push server
+      # instead (SEC-A01).
+      #
+      # This job runs on pull requests, so its exposure surface is much wider
+      # than the release job's: every CI run pulled the live storage master
+      # credential into a runner, a Gradle daemon, and the build cache in order
+      # to compile code that ignores it. Non-secret routing values only.
+      - name: Write local.properties (non-secret values only)
         env:
-          B2_KEY_ID:          ${{ secrets.B2_KEY_ID }}
-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-          B2_BUCKET:          ${{ secrets.B2_BUCKET }}
-          B2_REGION:          ${{ secrets.B2_REGION }}
-          PUSH_SERVER_URL:    ${{ secrets.PUSH_SERVER_URL }}
-          WORKER_URL:         ${{ secrets.WORKER_URL }}
+          B2_BUCKET:       ${{ secrets.B2_BUCKET }}
+          B2_REGION:       ${{ secrets.B2_REGION }}
+          PUSH_SERVER_URL: ${{ secrets.PUSH_SERVER_URL }}
+          WORKER_URL:      ${{ secrets.WORKER_URL }}
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT"                                                     > local.properties
-          echo "b2.key.id=${B2_KEY_ID:-}"                                                     >> local.properties
-          echo "b2.application.key=${B2_APPLICATION_KEY:-}"                                   >> local.properties
           echo "b2.bucket=${B2_BUCKET:-duoshield-cold}"                                       >> local.properties
           echo "b2.region=${B2_REGION:-eu-central-003}"                                       >> local.properties
           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
@@ -166,12 +160,6 @@ jobs:
             echo "::warning::GOOGLE_SERVICES_JSON not set — using stub."
             cat app/google-services.json.template > app/google-services.json
           fi
-
-      - name: Write stub service-account.json
-        run: |
-          mkdir -p app/src/main/assets
-          printf '{"type":"service_account","project_id":"duoshield-8caf1"}' \
-            > app/src/main/assets/service-account.json
 
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties

@@ -28,6 +28,34 @@ function safeTokenEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+/**
+ * Constant-time comparison of two fixed-width hex digests.
+ *
+ * Deliberately distinct from safeTokenEqual above. That one is for opaque bearer
+ * tokens and coerces with String(), which makes `undefined` compare equal to the
+ * literal "undefined" and accepts non-string input without complaint. For
+ * identity material the stored side may legitimately be absent or malformed, and
+ * that state must read as "ownership not proven" rather than being coerced into
+ * something comparable — see S07-H1, where a fail-open hash check issued tokens
+ * for accounts whose stored hash was missing.
+ *
+ * Length is compared in the clear: a digest's width is not secret, and
+ * crypto.timingSafeEqual throws rather than returning false on unequal lengths.
+ * Buffer.from(x, "hex") stops at the first invalid character instead of throwing,
+ * so the decoded length is re-checked — otherwise a malformed value could compare
+ * equal to a prefix of the real digest.
+ */
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length || a.length === 0) return false;
+  if (a.length % 2 !== 0) return false;
+  const bufA = Buffer.from(a, "hex");
+  const bufB = Buffer.from(b, "hex");
+  if (bufA.length !== a.length / 2 || bufB.length !== b.length / 2) return false;
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 // Whitelist for admin-supplied UIDs: printable, bounded length, and free of path
 // separators / control characters that could be used to traverse Firestore
 // document paths or smuggle control bytes.
@@ -131,6 +159,7 @@ function buildB2PresignUrl({ keyId, appKey, bucket, region, method, objectKey, c
 module.exports = {
   notificationBody,
   safeTokenEqual,
+  timingSafeEqualHex,
   validAdminUid,
   getCookie,
   isBlockedPreviewHost,
