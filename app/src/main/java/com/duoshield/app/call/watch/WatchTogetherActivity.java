@@ -59,6 +59,9 @@ public class WatchTogetherActivity extends AppCompatActivity
     /** Skip amount for the rewind / forward controls. */
     private static final long SEEK_STEP_MS = 10_000L;
 
+    /** Cycle of selectable playback speeds for {@link #btnPlaybackRate}. */
+    private static final double[] RATE_STEPS = {0.5d, 0.75d, 1.0d, 1.25d, 1.5d, 2.0d};
+
     private String callId;
     private String myUid;
     private String partnerName;
@@ -70,6 +73,7 @@ public class WatchTogetherActivity extends AppCompatActivity
     private TextView  tvPlaceholder;
     private TextView  tvStatus;
     private ImageView btnPlayPause;
+    private Button    btnPlaybackRate;
     private View      controlsRow;
     private EditText  etUrl;
 
@@ -79,8 +83,6 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     /** The video ID currently cued into the WebView, so we only reload on a real change. */
     private String loadedVideoId;
-
-    private boolean playerReady;
 
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
     private final Runnable heartbeatRunnable = new Runnable() {
@@ -185,9 +187,10 @@ public class WatchTogetherActivity extends AppCompatActivity
         player        = findViewById(R.id.watchPlayer);
         tvPlaceholder = findViewById(R.id.tvPlayerPlaceholder);
         tvStatus      = findViewById(R.id.tvWatchStatus);
-        btnPlayPause  = findViewById(R.id.btnPlayPause);
-        controlsRow   = findViewById(R.id.watchControls);
-        etUrl         = findViewById(R.id.etWatchUrl);
+        btnPlayPause    = findViewById(R.id.btnPlayPause);
+        btnPlaybackRate = findViewById(R.id.btnPlaybackRate);
+        controlsRow     = findViewById(R.id.watchControls);
+        etUrl           = findViewById(R.id.etWatchUrl);
 
         if (player != null) player.setListener(this);
 
@@ -212,6 +215,7 @@ public class WatchTogetherActivity extends AppCompatActivity
         }
 
         if (btnPlayPause != null) btnPlayPause.setOnClickListener(v -> togglePlayPause());
+        if (btnPlaybackRate != null) btnPlaybackRate.setOnClickListener(v -> cycleRate());
 
         View btnBack = findViewById(R.id.btnSeekBack);
         if (btnBack != null) btnBack.setOnClickListener(v -> seekBy(-SEEK_STEP_MS));
@@ -287,6 +291,7 @@ public class WatchTogetherActivity extends AppCompatActivity
             }
         }
         updatePlayPauseIcon(state.playing);
+        updateRateButton(state.playbackRate);
     }
 
     // ── Local control actions ─────────────────────────────────────────────────
@@ -333,11 +338,45 @@ public class WatchTogetherActivity extends AppCompatActivity
         performLocalWrite(WatchTogetherState.ACTION_SEEK, s);
     }
 
+    /** Advances to the next speed in {@link #RATE_STEPS}, wrapping back to the first. */
+    private void cycleRate() {
+        if (appliedState == null || !appliedState.isPlayable()) return;
+
+        double current = appliedState.playbackRate;
+        int nextIndex = 0;
+        for (int i = 0; i < RATE_STEPS.length; i++) {
+            if (Double.compare(RATE_STEPS[i], current) == 0) {
+                nextIndex = (i + 1) % RATE_STEPS.length;
+                break;
+            }
+        }
+
+        WatchTogetherState s = appliedState.copy();
+        if (player != null) s.positionMs = player.getLastKnownPositionMs();
+        s.playbackRate = RATE_STEPS[nextIndex];
+        performLocalWrite(WatchTogetherState.ACTION_RATE, s);
+    }
+
     private void maybeWriteHeartbeat() {
-        // Only the participant who performed the last action heartbeats, so the two
-        // devices never both write. This keeps write cost to at most one per interval.
+        // Normally only the participant who performed the last action heartbeats, so the
+        // two devices never both write — that keeps write cost to at most one per
+        // interval. But if that participant backgrounds or closes the screen, its
+        // heartbeat runnable stops (cancelled in onStop) and nobody else was heartbeating,
+        // so the other device's drift correction silently stalls forever with no
+        // recovery. `appliedReceiptRealtime` is refreshed by every applied state change —
+        // this device's own writes AND remote snapshots alike — so "time since the last
+        // update from anyone" is a purely local, monotonic (elapsedRealtime-based) signal
+        // that needs no cross-device clock comparison. If that goes stale for more than
+        // two heartbeat intervals, this device takes over: writeState() always stamps the
+        // acting uid as lastActionBy, so the takeover is a natural, self-correcting
+        // handover — the moment the original writer returns, it sees it is no longer
+        // lastActionBy and steps back to just following.
         if (appliedState == null || !appliedState.isPlayable() || !appliedState.playing) return;
-        if (!myUid.equals(appliedState.lastActionBy)) return;
+
+        boolean isDesignatedWriter = myUid.equals(appliedState.lastActionBy);
+        long sinceLastUpdateMs = SystemClock.elapsedRealtime() - appliedReceiptRealtime;
+        boolean writerSeemsStalled = sinceLastUpdateMs > WatchTogetherState.HEARTBEAT_INTERVAL_MS * 2;
+        if (!isDesignatedWriter && !writerSeemsStalled) return;
         if (player == null) return;
 
         WatchTogetherState s = appliedState.copy();
@@ -373,12 +412,12 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     private void endSessionAndFinish() {
         if (repo != null && callId != null) {
-            repo.endSession(callId, myUid);
+            repo.endSession(callId, appliedState, myUid);
         }
         finish();
     }
 
-    // ── UI state ────────────────────────────────────────────────────────────
+    // ── UI state ───────────────────────────────────��────────────────────────
 
     private void showActiveUi() {
         if (tvPlaceholder != null) tvPlaceholder.setVisibility(View.GONE);
@@ -406,11 +445,18 @@ public class WatchTogetherActivity extends AppCompatActivity
         btnPlayPause.setContentDescription(playing ? "Pause" : "Play");
     }
 
+    private void updateRateButton(double rate) {
+        if (btnPlaybackRate == null) return;
+        String label = (rate == Math.floor(rate))
+                ? ((long) rate) + "x"
+                : rate + "x";
+        btnPlaybackRate.setText(label);
+    }
+
     // ── WatchTogetherPlayerView.Listener ──────────────────────────────────────
 
     @Override
     public void onPlayerReady() {
-        playerReady = true;
         // If a session state arrived before the player finished constructing, the page
         // buffers the initial cue itself; nothing more to do here.
     }

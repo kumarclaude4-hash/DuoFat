@@ -53,6 +53,41 @@ public class WatchTogetherStateTest {
     }
 
     @Test
+    public void equalSeqWithDifferentContentIsAppliedAsARaceResolution() {
+        // Two devices both write the very first state (e.g. simultaneously pasting a
+        // link). Firestore resolves the race server-side to one winning document; the
+        // "losing" writer's own listener then receives that winning snapshot stamped
+        // with the SAME seq it used for its own now-overwritten write. This must be
+        // applied — it is what Firestore actually holds — not dropped as an echo.
+        WatchTogetherState applied = new WatchTogetherState();
+        applied.seq = 1;
+        applied.videoId = "aaaaaaaaaaa";
+        applied.lastActionBy = "uid-a";
+
+        WatchTogetherState incoming = new WatchTogetherState();
+        incoming.seq = 1;
+        incoming.videoId = "bbbbbbbbbbb";
+        incoming.lastActionBy = "uid-b";
+
+        assertTrue("A same-seq write from a different participant is a race, not an echo",
+                WatchTogetherState.shouldApply(applied, incoming));
+    }
+
+    @Test
+    public void equalSeqWithIdenticalContentIsRejectedAsAnEcho() {
+        WatchTogetherState applied = new WatchTogetherState();
+        applied.seq = 4;
+        applied.videoId = "aaaaaaaaaaa";
+        applied.lastActionBy = "uid-a";
+        applied.positionMs = 5_000L;
+
+        WatchTogetherState incoming = applied.copy();
+
+        assertFalse("A byte-for-byte echo of our own applied write must not reapply",
+                WatchTogetherState.shouldApply(applied, incoming));
+    }
+
+    @Test
     public void lowerSeqIsRejected() {
         WatchTogetherState applied = new WatchTogetherState();
         applied.seq = 9;

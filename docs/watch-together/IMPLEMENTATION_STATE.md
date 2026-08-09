@@ -5,7 +5,7 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 6 (2026-08-09)
+- **Last updated:** Session 7 (2026-08-10)
 - **Branch:** `v0/kevibaf520-3621-84819b1b` (off `main`)
 - **Reconciled against commit:** `19a11ff` — merge of PR #42
   ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
@@ -26,9 +26,16 @@
   - **What still remains is on-device / two-participant runtime verification.** It is
     **BLOCKED**, not skipped: this container has no `/dev/kvm`, no `vmx`/`svm` CPU flags,
     no emulator binary, and no attached device. See §10 and §11 item 9.
-  - **No Watch Together defect has ever been observed** — in five sessions of static
-    checking and two sessions of real compilation, zero bugs have been found in
-    `call/watch/`. That is not the same as the feature being proven to work; see §13.
+  - **Correction (Session 7):** the "zero bugs ever found" claim above was wrong. A full
+    audit against the actual repo (not this doc) found and fixed two blocking defects and
+    four secondary ones — see the Session 7 entry in §10-adjacent history below and the
+    `git log` for the exact diffs. The most significant: `shouldApply`'s strict-greater
+    `seq` check could permanently desync two devices that raced to the same `seq` (e.g.
+    simultaneous session start), and playback rate was fully plumbed end-to-end but had
+    **no UI control**, making it unreachable despite being listed as done in §1 item 4.
+    Both are fixed as of this session. Static/compile verification has not been re-run in
+    this sandbox (no JDK available here); re-run the Session 6 toolchain before trusting
+    a "PASS" claim again.
 
 ---
 
