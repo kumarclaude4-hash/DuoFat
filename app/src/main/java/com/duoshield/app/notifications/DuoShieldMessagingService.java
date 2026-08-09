@@ -95,7 +95,7 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         // sequence is still in flight, surfacing a notification here would visibly
         // contradict the "freshly signed out" appearance the sign-out is trying to
         // present, so suppress it.
-        if (prefs.getBoolean("duress_wipe_in_progress", false)) {
+        if (com.duoshield.app.security.DuressManager.isResetPending(this)) {
             Log.d(TAG, "Sign-out in progress — notification suppressed");
             return;
         }

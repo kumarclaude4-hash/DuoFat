@@ -30,11 +30,38 @@ import javax.crypto.spec.PBEKeySpec;
 public class DuressManager {
 
     private static final String PREFS_NAME          = "duoshield_prefs";
+
+    /**
+     * Secondary unlock slot. Deliberately named as an ordinary "slot B" rather than
+     * anything containing "duress": these keys live in SecurePrefs, but a neutral
+     * name means a dump of that store still reads like routine PIN plumbing instead
+     * of naming a feature that is supposed to be undiscoverable.
+     *
+     * <p>Superseded {@code duress_pin_hash_<uid>} / {@code duress_pin_hash}, which
+     * are still read once for migration in {@link #migrateLegacySlot}.
+     */
+    private static final String KEY_SLOT_B_PREFIX   = "pin_slot_b_";
+    private static final String KEY_SLOT_B_ARMED    = "pin_slot_b_armed_";
     private static final String KEY_DURESS_PREFIX   = "duress_pin_hash_";
     private static final String KEY_DURESS_LEGACY   = "duress_pin_hash";
     private static final String KEY_ELIGIBLE_PREFIX = "duress_eligible_";
     private static final int    ITERATIONS          = 310_000;
     private static final int    KEY_LEN             = 256;
+
+    /**
+     * Neutral replacement for the old {@code duress_wipe_in_progress} flag.
+     *
+     * <p>The old flag was a self-describing English string written to the
+     * <em>unencrypted</em> {@code duoshield_prefs} XML, and it is only cleared at the
+     * end of the wipe — up to ~20s later. A force-stop, crash, reboot or dead battery
+     * inside that window left a plaintext file on disk stating that a duress wipe had
+     * happened here, which is strictly worse than any other residue in the app: it
+     * needs no interpretation. Now stored in SecurePrefs under a name that reads like
+     * ordinary session plumbing.
+     */
+    private static final String KEY_RESET_PENDING   = "session_migration_pending";
+    /** Legacy plaintext flag; read once so an interrupted old-build wipe still routes. */
+    private static final String KEY_RESET_PENDING_LEGACY = "duress_wipe_in_progress";
 
     /**
      * Returns the UID-scoped SecurePrefs key for the currently signed-in user,
@@ -48,67 +75,218 @@ public class DuressManager {
      */
     private static String duressKey() {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? KEY_SLOT_B_PREFIX + user.getUid() : null;
+    }
+
+    private static String armedKey() {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? KEY_SLOT_B_ARMED + user.getUid() : null;
+    }
+
+    /**
+     * Moves a pre-existing {@code duress_pin_hash*} value into slot B and marks it
+     * armed. Idempotent; safe to call on every access.
+     */
+    private static void migrateLegacySlot(SharedPreferences sp, String slotKey, String armKey) {
+        String legacyUidKey = legacyUidKey();
+        String legacy = legacyUidKey != null ? sp.getString(legacyUidKey, null) : null;
+        if (legacy == null) legacy = sp.getString(KEY_DURESS_LEGACY, null);
+        if (legacy == null) return;
+        SharedPreferences.Editor ed = sp.edit()
+                .putString(slotKey, legacy)
+                .putBoolean(armKey, true)
+                .remove(KEY_DURESS_LEGACY);
+        if (legacyUidKey != null) ed.remove(legacyUidKey);
+        ed.apply();
+    }
+
+    /** Pre-migration UID-scoped key name, or null if no user is signed in. */
+    private static String legacyUidKey() {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         return user != null ? KEY_DURESS_PREFIX + user.getUid() : null;
     }
 
-    public static void setDuressPin(Context context, String pin) {
-        String key = duressKey();
-        if (key == null) return;
+    /**
+     * Guarantees slot B holds a well-formed {@code salt:hash} value for the current
+     * account, writing an unmatchable random decoy if it is empty.
+     *
+     * <h3>Why every account needs a decoy</h3>
+     * {@code isDuressPin()} used to return early when no secondary hash was stored,
+     * so an account <em>with</em> a secondary code ran two PBKDF2 derivations per
+     * unlock attempt while an account without ran one. At 310,000 iterations that is
+     * a few hundred milliseconds — the "Verifying…" state was visibly about twice as
+     * long, on every unlock and every wrong guess, with {@code DevicePinGateActivity}
+     * conveniently providing a one-derivation baseline to compare against. No tooling
+     * was required to detect it. That leak defeated the hidden UI row, the
+     * server-side enrollment gate, and every other measure taken to keep the
+     * capability undiscoverable.
+     *
+     * <p>Both halves matter and both are handled here: the <em>work</em> is now
+     * constant (always exactly one derivation against slot B) and the <em>stored
+     * shape</em> is constant (every account has a slot B of identical form, so its
+     * presence discloses nothing). The decoy is 32 random bytes, so no PIN can ever
+     * match it.
+     *
+     * <p>Called from {@code PinManager.setPin} so enrolled and non-enrolled accounts
+     * are indistinguishable from the moment a PIN first exists.
+     *
+     * <p><strong>Residual risk, stated honestly:</strong> {@code pin_slot_b_armed_*}
+     * still distinguishes a real secondary code from a decoy to anyone who can read
+     * SecurePrefs itself (root on an unlocked device). Removing that last bit would
+     * require deriving armed-ness from the entered PIN, which is a substantially
+     * larger change. What this closes is the <em>remote/observational</em> leak that
+     * needed nothing but a wall clock.
+     */
+    public static void ensureSecondarySlotInitialized(Context context) {
+        String slotKey = duressKey();
+        String armKey  = armedKey();
+        if (slotKey == null || armKey == null) return;
+        SharedPreferences sp = SecurePrefs.get(context);
+        migrateLegacySlot(sp, slotKey, armKey);
+        if (sp.getString(slotKey, null) != null) return;
+        try {
+            byte[] salt  = new byte[16];
+            byte[] decoy = new byte[KEY_LEN / 8];
+            SecureRandom rng = new SecureRandom();
+            rng.nextBytes(salt);
+            rng.nextBytes(decoy);
+            sp.edit()
+              .putString(slotKey, bytesToHex(salt) + ":" + bytesToHex(decoy))
+              .putBoolean(armKey, false)
+              .apply();
+        } catch (Exception e) {
+            android.util.Log.e("DuressManager", "Failed to initialise secondary slot", e);
+        }
+    }
+
+    /**
+     * Arms slot B with a real secondary code.
+     *
+     * @return false if the code was rejected. The only rejection reason is a length
+     *         that differs from the primary PIN — see the length note in
+     *         {@code ManageUnlockCodesActivity}; a mismatched length produces a code
+     *         that physically cannot be entered on the lock screen.
+     */
+    public static boolean setDuressPin(Context context, String pin) {
+        String slotKey = duressKey();
+        String armKey  = armedKey();
+        if (slotKey == null || armKey == null) return false;
+        if (pin == null || pin.length() != com.duoshield.app.util.PinManager.getPinLength(context)) {
+            return false;
+        }
         try {
             byte[] salt = new byte[16];
             new SecureRandom().nextBytes(salt);
             byte[] hash   = pbkdf2(pin, salt);
             String stored = bytesToHex(salt) + ":" + bytesToHex(hash);
             SecurePrefs.get(context).edit()
-                    .putString(key, stored)
+                    .putString(slotKey, stored)
+                    .putBoolean(armKey, true)
                     .remove(KEY_DURESS_LEGACY)
                     .apply();
-        } catch (Exception ignored) {}
-    }
-
-    public static boolean isDuressPin(Context context, String enteredPin) {
-        String key = duressKey();
-        if (key == null) return false;
-        SharedPreferences sp = SecurePrefs.get(context);
-        String stored = sp.getString(key, null);
-        if (stored == null) {
-            // Fallback to legacy global key (migration window)
-            stored = sp.getString(KEY_DURESS_LEGACY, null);
-        }
-        if (stored == null) return false;
-        int sep = stored.indexOf(':');
-        if (sep < 0) return false;
-        try {
-            byte[] salt     = hexToBytes(stored.substring(0, sep));
-            byte[] expected = hexToBytes(stored.substring(sep + 1));
-            byte[] actual   = pbkdf2(enteredPin, salt);
-            return constantTimeEquals(expected, actual);
-        } catch (Exception e) { return false; }
-    }
-
-    /** Returns true if a duress PIN hash is stored for the current account. */
-    public static boolean hasDuressPin(Context context) {
-        String key = duressKey();
-        if (key == null) return false;
-        SharedPreferences sp = SecurePrefs.get(context);
-        if (sp.getString(key, null) != null) return true;
-        // Migration: move legacy global hash to UID-scoped key
-        String legacy = sp.getString(KEY_DURESS_LEGACY, null);
-        if (legacy != null) {
-            sp.edit().putString(key, legacy).remove(KEY_DURESS_LEGACY).apply();
             return true;
+        } catch (Exception e) {
+            android.util.Log.e("DuressManager", "Failed to store secondary code", e);
+            return false;
         }
-        return false;
     }
 
-    /** Removes the duress PIN hash for the current account. */
+    /**
+     * Constant-work check of the entered PIN against slot B.
+     *
+     * <p>Always performs exactly one PBKDF2 derivation for every account, armed or
+     * not — including the no-user and malformed-value paths, which derive against an
+     * ephemeral decoy rather than returning early. Do not add a fast path here; the
+     * timing difference is directly observable by the user of the device. See
+     * {@link #ensureSecondarySlotInitialized}.
+     */
+    public static boolean isDuressPin(Context context, String enteredPin) {
+        String slotKey = duressKey();
+        String armKey  = armedKey();
+        String stored  = null;
+        boolean armed  = false;
+
+        if (slotKey != null && armKey != null) {
+            SharedPreferences sp = SecurePrefs.get(context);
+            migrateLegacySlot(sp, slotKey, armKey);
+            stored = sp.getString(slotKey, null);
+            armed  = sp.getBoolean(armKey, false);
+        }
+
+        // Derive against a throwaway decoy when slot B is absent or malformed, so the
+        // work performed is identical to the armed case.
+        byte[] salt, expected;
+        try {
+            int sep = stored != null ? stored.indexOf(':') : -1;
+            if (sep > 0) {
+                salt     = hexToBytes(stored.substring(0, sep));
+                expected = hexToBytes(stored.substring(sep + 1));
+            } else {
+                salt     = new byte[16];
+                expected = new byte[KEY_LEN / 8];
+                SecureRandom rng = new SecureRandom();
+                rng.nextBytes(salt);
+                rng.nextBytes(expected);
+                armed = false;
+            }
+            byte[] actual = pbkdf2(enteredPin, salt);
+            boolean match = constantTimeEquals(expected, actual);
+            return armed && match;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Returns true if slot B holds a real secondary code (not a decoy). */
+    public static boolean hasDuressPin(Context context) {
+        String slotKey = duressKey();
+        String armKey  = armedKey();
+        if (slotKey == null || armKey == null) return false;
+        SharedPreferences sp = SecurePrefs.get(context);
+        migrateLegacySlot(sp, slotKey, armKey);
+        return sp.getBoolean(armKey, false);
+    }
+
+    /**
+     * Disarms slot B by overwriting it with a fresh unmatchable decoy.
+     *
+     * <p>Deliberately not a {@code remove()}: deleting the entry would restore the
+     * one-derivation-vs-two timing difference described in
+     * {@link #ensureSecondarySlotInitialized}, so clearing a secondary code would
+     * become observable as the unlock screen suddenly getting faster.
+     */
     public static void clearDuressPin(Context context) {
-        String key = duressKey();
-        if (key == null) return;
-        SecurePrefs.get(context).edit()
-                .remove(key)
-                .remove(KEY_DURESS_LEGACY)
-                .apply();
+        String slotKey = duressKey();
+        String armKey  = armedKey();
+        if (slotKey == null || armKey == null) return;
+        try {
+            byte[] salt  = new byte[16];
+            byte[] decoy = new byte[KEY_LEN / 8];
+            SecureRandom rng = new SecureRandom();
+            rng.nextBytes(salt);
+            rng.nextBytes(decoy);
+            SharedPreferences.Editor ed = SecurePrefs.get(context).edit()
+                    .putString(slotKey, bytesToHex(salt) + ":" + bytesToHex(decoy))
+                    .putBoolean(armKey, false)
+                    .remove(KEY_DURESS_LEGACY);
+            String legacyUidKey = legacyUidKey();
+            if (legacyUidKey != null) ed.remove(legacyUidKey);
+            ed.apply();
+        } catch (Exception e) {
+            android.util.Log.e("DuressManager", "Failed to disarm secondary slot", e);
+        }
+    }
+
+    /**
+     * True if a local reset is mid-flight (see {@link #KEY_RESET_PENDING}). Routing
+     * screens use this to send the user to sign-in instead of a half-wiped session.
+     */
+    public static boolean isResetPending(Context context) {
+        try {
+            if (SecurePrefs.get(context).getBoolean(KEY_RESET_PENDING, false)) return true;
+        } catch (Exception ignored) {}
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                      .getBoolean(KEY_RESET_PENDING_LEGACY, false);
     }
 
     /**
@@ -172,8 +350,14 @@ public class DuressManager {
         // returning-user auto-route while the background wipe is still in flight.
         // The flag is cleared at the very end of the background thread, after signOut(),
         // so SignInActivity cannot bounce back before both keys and session are destroyed.
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-               .edit().putBoolean("duress_wipe_in_progress", true).commit();
+        // Written to SecurePrefs (encrypted) under a neutral name — NOT to the plaintext
+        // duoshield_prefs XML, where it previously sat as a literal
+        // "duress_wipe_in_progress" string for the whole ~20s wipe window.
+        try {
+            SecurePrefs.get(context).edit().putBoolean(KEY_RESET_PENDING, true).commit();
+        } catch (Exception e) {
+            android.util.Log.e("DuressManager", "Failed to set reset-pending flag", e);
+        }
 
         // 1. Instant navigation — removes chat screen from view immediately.
         //    To an observer, it looks like the app is simply processing the PIN.
@@ -292,8 +476,14 @@ public class DuressManager {
             // full PREFS_NAME wipe, but this explicit remove is a safety net in case
             // step 3d failed — without it, SignInActivity would remain blocked forever.
             try {
+                SecurePrefs.get(context).edit().remove(KEY_RESET_PENDING).apply();
+            } catch (Exception ignored) {}
+            // Also clear the pre-rename plaintext flag, so a device upgrading from an
+            // old build that was interrupted mid-wipe does not stay blocked forever —
+            // and so that self-describing string is gone from the unencrypted XML.
+            try {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                       .edit().remove("duress_wipe_in_progress").apply();
+                       .edit().remove(KEY_RESET_PENDING_LEGACY).apply();
             } catch (Exception ignored) {}
 
         }, "duress-logout").start();
