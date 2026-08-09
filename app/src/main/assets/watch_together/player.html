@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<!--
+  DuoShield Watch Together — YouTube IFrame Player host page.
+
+  Loaded by WatchTogetherPlayerView into a WebView via loadDataWithBaseURL with
+  base URL https://www.youtube.com so the IFrame API's origin check passes.
+
+  WHY THIS EXISTS
+  ---------------
+  YouTube's officially supported embedded playback surface for programmatic
+  control is the IFrame Player API. It gives exact playVideo / pauseVideo /
+  seekTo / setPlaybackRate control plus state callbacks, which is precisely what
+  playback synchronization needs. Using it via a local WebView avoids adding any
+  third-party Gradle dependency.
+
+  IMPORTANT
+  ---------
+  The video stream is fetched directly from YouTube by this page, inside each
+  participant's own device. It never passes through Firestore and never passes
+  through the WebRTC media path. Only small JSON-ish state fields sync.
+
+  BRIDGE CONTRACT (must stay in sync with WatchTogetherPlayerView.java)
+  --------------------------------------------------------------------
+  Java -> JS (evaluateJavascript):
+    WT.cue(videoId, positionMs, playing, rate)
+    WT.play()
+    WT.pause()
+    WT.seek(positionMs)
+    WT.setRate(rate)
+    WT.stop()
+
+  JS -> Java (@JavascriptInterface on object named DuoShieldWT):
+    DuoShieldWT.onPlayerReady()
+    DuoShieldWT.onPlayerStateChange(ytState, positionMs)
+    DuoShieldWT.onPositionTick(positionMs, playing, rate)
+    DuoShieldWT.onPlaybackRateChange(rate)
+    DuoShieldWT.onPlayerError(code)
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Watch Together</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    #player, iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="player"></div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // Position tick cadence. 500ms is frequent enough for the Java side to hold a
+      // fresh local position for drift comparison, without burning battery.
+      var TICK_INTERVAL_MS = 500;
+
+      var player = null;
+      var ready = false;
+      var tickTimer = null;
+
+      // Commands issued by Java before the player finished constructing are stored
+      // here and replayed on ready. Without this, a fast Firestore snapshot arriving
+      // before onYouTubeIframeAPIReady would be silently dropped.
+      var pending = null;
+
+      function bridge() {
+        return (typeof DuoShieldWT !== 'undefined') ? DuoShieldWT : null;
+      }
+
+      function safe(fn) {
+        try {
+          return fn();
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function positionMs() {
+        if (!player || !player.getCurrentTime) return 0;
+        var t = safe(function () { return player.getCurrentTime(); });
+        return Math.max(0, Math.round((t || 0) * 1000));
+      }
+
+      function currentRate() {
+        if (!player || !player.getPlaybackRate) return 1;
+        var r = safe(function () { return player.getPlaybackRate(); });
+        return (r && r > 0) ? r : 1;
+      }
+
+      function isPlaying() {
+        if (!player || !player.getPlayerState) return false;
+        // 1 === YT.PlayerState.PLAYING
+        return safe(function () { return player.getPlayerState(); }) === 1;
+      }
+
+      function startTicking() {
+        if (tickTimer !== null) return;
+        tickTimer = setInterval(function () {
+          var b = bridge();
+          if (b && b.onPositionTick) {
+            safe(function () { b.onPositionTick(positionMs(), isPlaying(), currentRate()); });
+          }
+        }, TICK_INTERVAL_MS);
+      }
+
+      function stopTicking() {
+        if (tickTimer !== null) {
+          clearInterval(tickTimer);
+          tickTimer = null;
+        }
+      }
+
+      // ── Public API called from Java ────────────────────────────────────────
+
+      window.WT = {
+        /**
+         * Loads a video and positions it. Called on session start and whenever the
+         * synced videoId changes.
+         *
+         * Uses cueVideoById for the paused case so the video is buffered and shows a
+         * poster frame without auto-starting, and loadVideoById for the playing case.
+         */
+        cue: function (videoId, posMs, playing, rate) {
+          if (!videoId) return;
+          if (!ready || !player) {
+            pending = { videoId: videoId, posMs: posMs, playing: playing, rate: rate };
+            return;
+          }
+          var seconds = Math.max(0, (posMs || 0) / 1000);
+          if (playing) {
+            safe(function () { player.loadVideoById({ videoId: videoId, startSeconds: seconds }); });
+          } else {
+            safe(function () { player.cueVideoById({ videoId: videoId, startSeconds: seconds }); });
+          }
+          if (rate && rate > 0) {
+            safe(function () { player.setPlaybackRate(rate); });
+          }
+        },
+
+        play: function () {
+          if (ready && player) safe(function () { player.playVideo(); });
+        },
+
+        pause: function () {
+          if (ready && player) safe(function () { player.pauseVideo(); });
+        },
+
+        seek: function (posMs) {
+          if (ready && player) {
+            var seconds = Math.max(0, (posMs || 0) / 1000);
+            // allowSeekAhead=true so seeking past the buffer issues a new request.
+            safe(function () { player.seekTo(seconds, true); });
+          }
+        },
+
+        setRate: function (rate) {
+          if (ready && player && rate > 0) {
+            safe(function () { player.setPlaybackRate(rate); });
+          }
+        },
+
+        stop: function () {
+          stopTicking();
+          if (ready && player) safe(function () { player.stopVideo(); });
+        }
+      };
+
+      // ── YouTube IFrame API lifecycle ──────────────────────────────────────
+
+      window.onYouTubeIframeAPIReady = function () {
+        player = new YT.Player('player', {
+          height: '100%',
+          width: '100%',
+          playerVars: {
+            // No YouTube chrome we do not need; playback is driven by DuoShield UI.
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            modestbranding: 1,
+            rel: 0,
+            fs: 0,
+            playsinline: 1,
+            iv_load_policy: 3
+          },
+          events: {
+            onReady: function () {
+              ready = true;
+              startTicking();
+              var b = bridge();
+              if (b && b.onPlayerReady) safe(function () { b.onPlayerReady(); });
+              if (pending) {
+                var p = pending;
+                pending = null;
+                window.WT.cue(p.videoId, p.posMs, p.playing, p.rate);
+              }
+            },
+            onStateChange: function (e) {
+              var b = bridge();
+              if (b && b.onPlayerStateChange) {
+                safe(function () { b.onPlayerStateChange(e.data, positionMs()); });
+              }
+            },
+            onPlaybackRateChange: function (e) {
+              var b = bridge();
+              if (b && b.onPlaybackRateChange) {
+                safe(function () { b.onPlaybackRateChange(e.data); });
+              }
+            },
+            onError: function (e) {
+              var b = bridge();
+              if (b && b.onPlayerError) {
+                safe(function () { b.onPlayerError(e.data); });
+              }
+            }
+          }
+        });
+      };
+    })();
+  </script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>

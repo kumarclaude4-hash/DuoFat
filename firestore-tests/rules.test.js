@@ -564,6 +564,88 @@ describe('/calls/{callId}/callerCandidates', () => {
   });
 });
 
+// Watch Together playback state — a single ephemeral doc at
+// calls/{callId}/watch/state holding only lightweight sync fields. Gated to the
+// two call participants, exactly like ICE candidates and in-call chat, so a third
+// signed-in account can neither see what is being watched nor hijack playback.
+describe('/calls/{callId}/watch/state', () => {
+  const CALL_ID = 'call_1';
+  const STATE_DOC = `calls/${CALL_ID}/watch/state`;
+
+  const SAMPLE_STATE = {
+    active: true,
+    videoId: 'dQw4w9WgXcQ',
+    hostUid: 'alice',
+    playing: true,
+    positionMs: 12000,
+    playbackRate: 1,
+    updatedAtMs: 1700000000000,
+    seq: 1,
+    lastActionBy: 'alice',
+    lastAction: 'start',
+  };
+
+  beforeEach(async () => {
+    await seed(`calls/${CALL_ID}`, {
+      callerId: 'alice',
+      calleeId: 'bob',
+      status: 'accepted',
+    });
+  });
+
+  test('caller can start a Watch Together session', async () => {
+    await assertSucceeds(asUser('alice').doc(STATE_DOC).set(SAMPLE_STATE));
+  });
+
+  test('callee can start a Watch Together session', async () => {
+    await assertSucceeds(
+      asUser('bob').doc(STATE_DOC).set({ ...SAMPLE_STATE, hostUid: 'bob', lastActionBy: 'bob' })
+    );
+  });
+
+  test('callee can read state written by the caller', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc(STATE_DOC).set(SAMPLE_STATE);
+    });
+    await assertSucceeds(asUser('bob').doc(STATE_DOC).get());
+  });
+
+  test('either participant can control playback (shared control)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc(STATE_DOC).set(SAMPLE_STATE);
+    });
+    // Non-host pauses: allowed by design — control is shared, not host-locked.
+    await assertSucceeds(
+      asUser('bob').doc(STATE_DOC).set({
+        ...SAMPLE_STATE,
+        playing: false,
+        seq: 2,
+        lastActionBy: 'bob',
+        lastAction: 'pause',
+      })
+    );
+  });
+
+  test('outsider cannot read Watch Together state', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc(STATE_DOC).set(SAMPLE_STATE);
+    });
+    await assertFails(asUser('eve').doc(STATE_DOC).get());
+  });
+
+  test('outsider cannot hijack playback', async () => {
+    await assertFails(
+      asUser('eve').doc(STATE_DOC).set({ ...SAMPLE_STATE, videoId: 'hijackedVid' })
+    );
+  });
+
+  test('unauthenticated access is denied', async () => {
+    const anon = testEnv.unauthenticatedContext().firestore();
+    await assertFails(anon.doc(STATE_DOC).get());
+    await assertFails(anon.doc(STATE_DOC).set(SAMPLE_STATE));
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // IDENTITIES
 // ─────────────────────────────────────────────────────────────────────────────

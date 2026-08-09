@@ -237,6 +237,23 @@ service cloud.firestore {
                                || request.auth.uid ==
                                  get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
       }
+
+      // Ephemeral Watch Together playback state — a single doc: watch/state.
+      // Holds only lightweight sync fields (videoId, playing, positionMs,
+      // playbackRate, seq, hostUid). The YouTube video itself is loaded directly
+      // from YouTube by each participant's own player; it never passes through
+      // Firestore or the WebRTC media path.
+      // Same participant gate as callerCandidates/calleeCandidates/chat: only the
+      // two call participants may read or write, so a third signed-in account can
+      // neither observe what is being watched nor hijack playback.
+      // Swept with the call document by CallSignalRepository.deleteCallDoc.
+      match /watch/{docId} {
+        allow read, write: if request.auth != null
+                           && (request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.callerId
+                               || request.auth.uid ==
+                                 get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
+      }
     }
 
     // Server health-check collection written by the push server's Admin SDK.
