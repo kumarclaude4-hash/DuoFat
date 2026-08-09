@@ -82,19 +82,14 @@ public class BaseActivity extends AppCompatActivity {
         // 1. Auto sign-out — kills Firebase session after prolonged inactivity.
         if (AppLockManager.shouldAutoSignOut(this)) {
             Log.i(TAG, getClass().getSimpleName() + ": auto sign-out threshold exceeded → SignIn");
-            // Capture the UID before signOut() clears it, so the delayed FCM
-            // de-registration job below has something to act on. Also kick off an
-            // ID-token capture on the still-live user object right now — the job runs
-            // 5-40s from now, after signOut() below has already killed the ambient
-            // session it would otherwise need. See FcmUnregisterWorker's javadoc.
-            com.google.firebase.auth.FirebaseUser userBeforeSignOut =
-                    FirebaseAuth.getInstance().getCurrentUser();
-            String uidBeforeSignOut = userBeforeSignOut != null ? userBeforeSignOut.getUid() : null;
-            if (uidBeforeSignOut != null) {
-                // FcmUnregisterWorker now uses FirebaseMessaging.deleteToken() directly —
-                // no ID token capture needed. Enqueue immediately.
+            // Only schedule the de-registration if there actually was a signed-in
+            // session to de-register. FcmUnregisterWorker takes no uid and no bearer
+            // token (S06-H2): FirebaseMessaging.deleteToken() acts on this device's own
+            // FCM registration and handles its own auth, so nothing needs to be captured
+            // before signOut() below runs. See FcmUnregisterWorker's javadoc.
+            if (FirebaseAuth.getInstance().getCurrentUser() != null) {
                 com.duoshield.app.util.FcmUnregisterWorker
-                        .enqueue(getApplicationContext(), uidBeforeSignOut);
+                        .enqueue(getApplicationContext());
             }
             prefs.edit()
                  .putBoolean(KEY_EXPLICIT_SIGNOUT, true)
