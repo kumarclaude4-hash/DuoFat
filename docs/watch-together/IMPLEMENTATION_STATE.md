@@ -5,8 +5,16 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 8 (2026-08-10)
-- **Branch:** `v0/kevibaf520-3621-84819b1b` (off `main`)
+- **Last updated:** Session 9 (2026-08-10) — YouTube Search **Part 1 (backend)**
+- **Branch:** `duoshield-youtube-search` (off `main`)
+- **NEW IN SESSION 9:** work has started on a **new sub-feature — YouTube Search** —
+  layered on top of the existing Watch Together feature described in §1–§15 below.
+  **Session 9 implemented the BACKEND ONLY. No Android file was touched.**
+  Everything in §1–§15 therefore still describes the current state of Watch Together
+  accurately and is **unchanged**. See **§16** at the end of this file for the
+  YouTube Search status, and
+  [`YOUTUBE_SEARCH_IMPLEMENTATION.md`](./YOUTUBE_SEARCH_IMPLEMENTATION.md) for the
+  full design + the exact next-session instructions.
 - **Reconciled against commit:** `19a11ff` — merge of PR #42
   ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
   `0c9e6e6` (the `BaseActivity` FCM de-registration fix) and `76eb2d0` (the Session 5
@@ -837,3 +845,91 @@ Settled. Do not reconsider without a concrete new reason.
 - **Next verification owed (top priority):** `./gradlew :app:testDebugUnitTest` and
   `./gradlew :app:assembleDebug` (see §13) — now owed across THREE sessions — followed by a
   two-device click-through.
+
+---
+
+## 16. YouTube Search sub-feature — Part 1 status (Session 9)
+
+**Scope of Session 9: BACKEND ONLY.** Part 1 of a deliberately two-part build.
+Full design, response schema, security analysis and the verbatim next-session
+instructions live in
+[`YOUTUBE_SEARCH_IMPLEMENTATION.md`](./YOUTUBE_SEARCH_IMPLEMENTATION.md).
+That file is the primary handoff artifact; this section is the index entry.
+
+### What the sub-feature adds
+
+Watch Together → search YouTube by text → pick a result → the **existing**
+`WatchTogetherActivity` / `WatchTogetherPlayerView` / Firestore sync loads that
+`videoId`. Users pay $0; the YouTube Data API key stays server-side.
+
+### Architecture chosen (and why nothing new was built)
+
+`Android → POST /youtubeSearch on the existing Render push server → YouTube Data
+API v3 → minimal JSON → Android.`
+
+The existing push server (`server/index.js`) was **reused** rather than adding a
+new service, because it already provides every primitive this endpoint needs:
+Firebase ID-token verification, per-UID fixed-window rate limiting
+(`checkAuthRateLimit`), secrets via Render env vars, and an established
+outbound-fetch proxy precedent in `POST /linkPreview`. Cloud Functions remain
+unused, consistent with the project's free-tier rule. No new infrastructure, no
+new dependency, no new service was introduced.
+
+### Files changed in Session 9 (4 files — all backend/docs, zero Android)
+
+| File | Change |
+| --- | --- |
+| `server/lib/pure.js` | **+~200 lines.** New pure helpers: `validateSearchQuery`, `clampMaxResults`, `searchCacheKey`, `buildYouTubeSearchUrl`, `transformYouTubeSearchResponse`, `redactApiKey`, `mapYouTubeError`, + 4 exported constants. Purely additive; no existing export altered. |
+| `server/index.js` | **+~195 lines, additive.** `YOUTUBE_API_KEY` / `YOUTUBE_REGION_CODE` env reads, bounded TTL response cache (+ sweeper), `youtubeSearch: 6` rate-limit budget, and the `POST /youtubeSearch` handler placed beside `/linkPreview`. No existing route touched. |
+| `server/lib/youtube-search.test.js` | **New file, 26 tests.** Kept separate so existing suites stay untouched. |
+| `server/README.md` | Documented `YOUTUBE_API_KEY` / `YOUTUBE_REGION_CODE` (**names only, never a value**), the endpoint contract, and the quota math. |
+
+### Validation actually executed (Session 9)
+
+| Check | Result |
+| --- | --- |
+| `npm test` in `server/` | **PASS — 58/58** (32 pre-existing + 26 new). Zero pre-existing tests broken. |
+| `node --check` on all 3 touched JS files | **PASS** |
+| Live handler probe (stubbed `admin.auth()` + `fetch`, real handler code) | **PASS** — verified auth 401s, validation 400s, cache-hit bypasses the rate limiter, 429 after 6 calls, 403→503 quota mapping, 504 timeout, malformed-body 502, and that the API key appears in the outbound URL but **never** in any client response. |
+| `node scripts/check-watch-together.js` | **PASS — 21/21** (unchanged; Session 9 touched no Watch Together file). |
+| Client-secret grep (`YOUTUBE_API_KEY` etc. under `app/`, `gradle.properties`, `build.gradle`) | **PASS — 0 matches.** Referenced only in `server/*.js` + docs-by-name. |
+| Gradle compile / unit tests / lint | **BLOCKED** — no JDK in container (same limitation as Sessions 1–8). Not applicable anyway: no Android file was modified. |
+| Live YouTube API call | **NOT RUN** — needs a real `YOUTUBE_API_KEY` in a deployed Render env. Upstream behavior was exercised via stubs only. |
+| Runtime / device verification | **BLOCKED** — no emulator or device; and the UI does not exist until Part 2. |
+
+**A real bug was found and fixed by these tests**, not papered over:
+`clampMaxResults` returned `1` instead of the default for `null`/`""`/`[]`/`false`
+because `Number()` coerces all of them to `0`. Now gated on "number or numeric
+string" before coercion, with regression assertions.
+
+### Deployment prerequisite (not yet done)
+
+`YOUTUBE_API_KEY` must be set in the **Render** environment (Google Cloud →
+enable YouTube Data API v3 → API key → restrict to that API). Until then
+`/youtubeSearch` deliberately **fails closed with 503** and logs a startup
+warning; every other endpoint is unaffected.
+
+### Quota reality (the dominant design constraint)
+
+`search.list` costs **100 quota units** against a **10,000/day** free allowance
+— about **100 searches per day for the entire deployment**. Hence: min 2-char
+query, 10-minute response cache, 6/min per-user limit, `maxResults` capped at
+15, and **no pagination ever**. Cache hits are served *before* the rate limiter
+so repeating a search costs neither quota nor budget. Part 2 must add client
+debounce as an additional layer, but the backend already protects itself.
+
+### Explicitly NOT started (all of Part 2 / Session 10)
+
+No Android work whatsoever: no search UI in `WatchTogetherActivity`, no
+`YouTubeSearchClient`, no result adapter/row layout, no wiring of a selected
+`videoId` into the existing `startSession(...)` flow, no Android tests. The
+existing player and sync protocol were **not modified and must not be
+rewritten** — Part 2 only feeds a `videoId` into the existing flow.
+
+### Status
+
+**Part 1 (backend): implementation-complete and test-verified locally; not yet
+deployed, not yet exercised against the live YouTube API.**
+**Part 2 (Android UI + player integration): NOT STARTED.**
+The sub-feature as a whole is **NOT usable by an end user yet** — there is no UI.
+Not production-ready.
