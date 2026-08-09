@@ -83,11 +83,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void proceedAfterPermission() {
-        // F30 fix: Respect the duress-wipe-in-progress routing guard. If the flag is
-        // set, the wipe background thread is still running — treat the user as signed
+        // F30 fix: Respect the reset-pending routing guard. If the flag is set, the
+        // local reset background thread is still running — treat the user as signed
         // out and fall through to SignInActivity, which will also block auto-routing.
-        boolean wipeInProgress = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                .getBoolean("duress_wipe_in_progress", false);
+        boolean wipeInProgress = com.duoshield.app.security.DuressManager.isResetPending(this);
         FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
         if (!wipeInProgress && currentUser != null) {
             if (!SignalKeyManager.isInitialized(this)) {
