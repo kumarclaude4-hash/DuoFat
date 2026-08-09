@@ -15,7 +15,7 @@ import java.security.KeyStore;
  * Returns SharedPreferences instances for storing crypto material
  * (Signal identity key pair, prekeys, PIN hashes).
  *
- * <h3>Two independent containers</h3>
+ * <h3>Three independent containers</h3>
  * {@link #get} returns the account-scoped file — Signal key material, the
  * app PIN hash, duress PIN hash, etc. It is blank-cleared wholesale by
  * {@code DuressManager.performLogout()}, {@code WipeHelper.wipeAll()}, and
@@ -27,6 +27,21 @@ import java.security.KeyStore;
  * one of those wipes. Keeping it in its own file makes that a structural
  * guarantee: none of the wipe call sites touch it, so there is no exclusion
  * list to keep in sync as the account-scoped file grows new keys over time.
+ *
+ * <p>{@link #getSessionState} is a third file, added for the same structural
+ * reason. It holds the small amount of state that must outlive the wipe
+ * <em>because</em> the wipe is what it describes: the pending account-lock
+ * intent and the resume marker (see {@code PendingLockStore}). Previously the
+ * duress path's lock intent lived only in a Firestore write queued in the
+ * account-scoped store, so being offline at trigger time meant the wipe deleted
+ * the queued mutation and the account was never locked at all — the attacker
+ * chose whether the lock happened by pulling the network (S06-H3). Storing the
+ * intent here instead makes the lock decision durable before any erasure runs,
+ * so it survives a reboot, a force-stop, and an indefinitely offline device.
+ *
+ * <p><strong>Do not add erasure of this file to a wipe path.</strong> That is
+ * exactly the bug the separate file prevents. {@code PendingLockStore} clears
+ * its own keys once the server has confirmed the lock, and nothing else should.
  *
  * Initialisation strategy (three tiers, applied identically to whichever
  * file is being opened):
@@ -51,9 +66,17 @@ import java.security.KeyStore;
  */
 public class SecurePrefs {
 
-    private static final String TAG               = "SecurePrefs";
-    private static final String FILE_NAME         = "duoshield_secure_prefs";
-    private static final String DEVICE_GATE_FILE  = "device_gate_prefs";
+    private static final String TAG                = "SecurePrefs";
+    private static final String FILE_NAME          = "duoshield_secure_prefs";
+    private static final String DEVICE_GATE_FILE   = "device_gate_prefs";
+    /**
+     * Deliberately neutral file name. This container's whole purpose is to hold
+     * a marker that a teardown is in flight, so a file called anything like
+     * "duress" or "wipe" would itself be the disclosure the marker is carefully
+     * named to avoid — and unlike the other two files, an adversary has a
+     * specific reason to go looking for this one.
+     */
+    private static final String SESSION_STATE_FILE = "session_state_prefs";
 
     private static volatile SharedPreferences cached;
     private static volatile boolean           encryptionAvailable = false;
@@ -62,12 +85,16 @@ public class SecurePrefs {
     private static volatile SharedPreferences deviceGateCached;
     private static volatile boolean           deviceGateEncryptionAvailable = false;
 
+    private static volatile SharedPreferences sessionStateCached;
+
     // Test-only injection point (see FakeSharedPreferences / DeviceGatePinIsolationTest
-    // in app/src/test). Both are null in production, so get()/getDeviceGate() behave
-    // exactly as before; when set, they short-circuit before touching the real Context
-    // or Android Keystore, which aren't available in a plain JVM unit test.
+    // in app/src/test). All are null in production, so get()/getDeviceGate()/
+    // getSessionState() behave exactly as before; when set, they short-circuit before
+    // touching the real Context or Android Keystore, which aren't available in a plain
+    // JVM unit test.
     private static volatile SharedPreferences testMainOverride;
     private static volatile SharedPreferences testDeviceGateOverride;
+    private static volatile SharedPreferences testSessionStateOverride;
 
     public static SharedPreferences get(Context context) {
         if (testMainOverride != null) return testMainOverride;
@@ -95,6 +122,21 @@ public class SecurePrefs {
             deviceGateCached              = built.prefs;
             deviceGateEncryptionAvailable = built.encryptionAvailable;
             return deviceGateCached;
+        }
+    }
+
+    /**
+     * Isolated container for wipe-surviving session/teardown state. See the class
+     * javadoc for why this must never share a file with {@link #get}, and must
+     * never be added to a wipe path.
+     */
+    public static SharedPreferences getSessionState(Context context) {
+        if (testSessionStateOverride != null) return testSessionStateOverride;
+        if (sessionStateCached != null) return sessionStateCached;
+        synchronized (SecurePrefs.class) {
+            if (sessionStateCached != null) return sessionStateCached;
+            sessionStateCached = buildTiered(context, SESSION_STATE_FILE).prefs;
+            return sessionStateCached;
         }
     }
 
@@ -216,10 +258,11 @@ public class SecurePrefs {
     }
 
     /**
-     * Resets both cached instances — intended for use in WipeHelper / tests only.
-     * Safe to call even though the device-gate file's on-disk contents are never
-     * touched by an account wipe: this only drops the in-memory wrapper, forcing
-     * the next {@link #getDeviceGate} call to reopen the same untouched file.
+     * Resets all cached instances — intended for use in WipeHelper / tests only.
+     * Safe to call even though the device-gate and session-state files' on-disk
+     * contents are never touched by an account wipe: this only drops the in-memory
+     * wrappers, forcing the next {@link #getDeviceGate} / {@link #getSessionState}
+     * call to reopen the same untouched file.
      */
     public static void reset() {
         synchronized (SecurePrefs.class) {
@@ -228,6 +271,7 @@ public class SecurePrefs {
             initialized                   = false;
             deviceGateCached              = null;
             deviceGateEncryptionAvailable = false;
+            sessionStateCached            = null;
         }
     }
 
@@ -237,14 +281,23 @@ public class SecurePrefs {
      * Android runtime. See FakeSharedPreferences / DeviceGatePinIsolationTest.
      */
     static void setTestOverridesForUnitTests(SharedPreferences main, SharedPreferences deviceGate) {
-        testMainOverride       = main;
-        testDeviceGateOverride = deviceGate;
+        setTestOverridesForUnitTests(main, deviceGate, null);
+    }
+
+    /** Test-only. As above, additionally injecting the session-state container. */
+    static void setTestOverridesForUnitTests(SharedPreferences main,
+                                             SharedPreferences deviceGate,
+                                             SharedPreferences sessionState) {
+        testMainOverride         = main;
+        testDeviceGateOverride   = deviceGate;
+        testSessionStateOverride = sessionState;
     }
 
     /** Test-only. Clears injected fakes and resets caches. */
     static void clearTestOverridesForUnitTests() {
-        testMainOverride       = null;
-        testDeviceGateOverride = null;
+        testMainOverride         = null;
+        testDeviceGateOverride   = null;
+        testSessionStateOverride = null;
         reset();
     }
 }

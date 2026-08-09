@@ -278,15 +278,84 @@ public class DuressManager {
     }
 
     /**
-     * True if a local reset is mid-flight (see {@link #KEY_RESET_PENDING}). Routing
-     * screens use this to send the user to sign-in instead of a half-wiped session.
+     * True if a local reset is mid-flight or was interrupted. Routing screens use this
+     * to send the user to sign-in instead of a half-wiped session.
+     *
+     * <p>Reads three locations in descending order of authority:
+     * <ol>
+     *   <li>{@link PendingLockStore} — the wipe-surviving container. This is the only
+     *       one that can still answer after the erasure has begun.</li>
+     *   <li>The account-scoped {@code SecurePrefs} key this flag used to live in.
+     *       That location is <em>itself</em> destroyed by step 4 of the wipe, which is
+     *       precisely why the resume path could never work: a crash anywhere after
+     *       step 4 left the remaining steps undone with nothing left on disk saying so
+     *       (S06-M5). Still read here so an upgrade that lands mid-wipe still routes.</li>
+     *   <li>The pre-rename plaintext {@code duoshield_prefs} flag, for the same reason.</li>
+     * </ol>
      */
     public static boolean isResetPending(Context context) {
+        if (PendingLockStore.isResetPending(context)) return true;
         try {
             if (SecurePrefs.get(context).getBoolean(KEY_RESET_PENDING, false)) return true;
         } catch (Exception ignored) {}
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                       .getBoolean(KEY_RESET_PENDING_LEGACY, false);
+    }
+
+    /**
+     * Re-runs an interrupted teardown to completion, then clears the marker.
+     *
+     * <h3>Why this is mandatory (S06-M5)</h3>
+     * {@code performLogout} does real work before it erases anything: a panic sync, a
+     * lock write, and previously a nonce round trip — up to ~30 seconds during which the
+     * SQLCipher database, slot B, and all key material were fully intact. A
+     * network-controlling adversary can <em>force</em> every one of those calls to its
+     * full timeout, maximising the window deliberately. If the process died in that
+     * window — force-stop, low-memory kill, dead battery, reboot — the erasure simply
+     * never ran, and <strong>nothing retried it</strong>. {@code isResetPending} had two
+     * consumers and both only <em>routed</em>; neither re-invoked the wipe. All data
+     * survived.
+     *
+     * <p>Making the marker a resume trigger is what makes the wipe idempotent and
+     * crash-safe, independent of how the ordering question is resolved.
+     *
+     * <p>Also completes the promote-and-rotate half: an interruption between the
+     * promotion and the erasure could otherwise leave the old primary PIN valid again,
+     * which is the two-valid-codes disclosure §8 warns about. The promotion is written
+     * before the sync for exactly this reason, so by the time this method can be
+     * reached the promotion has already landed and only erasure is outstanding.
+     *
+     * <p>Must not run on the main thread during normal operation; call it from
+     * application startup before any UI, where blocking is correct.
+     *
+     * @return true if a teardown was resumed
+     */
+    public static boolean resumeInterruptedResetIfNeeded(Context context) {
+        if (!isResetPending(context)) return false;
+        android.util.Log.i("DuressManager", "Interrupted teardown detected — completing it.");
+        try {
+            com.duoshield.app.util.WipeHelper.eraseLocalData(
+                    context, com.duoshield.app.util.WipeHelper.WipeMode.DURESS);
+        } catch (Exception e) {
+            // Leave the marker set: a wipe that failed must be retried on the next
+            // launch, not forgotten. Returning true still keeps routing at sign-in.
+            android.util.Log.e("DuressManager", "Resumed teardown failed; will retry next launch", e);
+            return true;
+        }
+        clearResetMarkers(context);
+        return true;
+    }
+
+    /** Clears the resume marker in all three locations it may live in. */
+    private static void clearResetMarkers(Context context) {
+        PendingLockStore.clearResetPending(context);
+        try {
+            SecurePrefs.get(context).edit().remove(KEY_RESET_PENDING).apply();
+        } catch (Exception ignored) {}
+        try {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                   .edit().remove(KEY_RESET_PENDING_LEGACY).apply();
+        } catch (Exception ignored) {}
     }
 
     /**
