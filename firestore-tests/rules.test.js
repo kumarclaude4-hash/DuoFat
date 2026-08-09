@@ -912,6 +912,15 @@ describe('/_server_health/{doc}', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('/accountLock/{accountId}', () => {
+  // Client create now additionally requires duressEligibility/{uid}.eligible.
+  // S06-M1: without that predicate any account could complete the whole duress
+  // flow and watch its own lock doc appear, learning that the feature exists,
+  // how it fires and what it writes — the question the eligibility gate exists
+  // to keep unanswerable. Alice is enrolled throughout this block; carol is not.
+  beforeEach(async () => {
+    await seed('duressEligibility/alice', { eligible: true });
+  });
+
   test('owner can read their own lock doc', async () => {
     await seed('accountLock/alice', { locked: true });
     await assertSucceeds(asUser('alice').doc('accountLock/alice').get());
@@ -927,9 +936,29 @@ describe('/accountLock/{accountId}', () => {
     await assertFails(asAnon().doc('accountLock/alice').get());
   });
 
-  test('owner can create a lock doc with locked=true', async () => {
+  test('enrolled owner can create a lock doc with locked=true', async () => {
     await assertSucceeds(
       asUser('alice').doc('accountLock/alice').set({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  // ── S06-M1: eligibility is now a rules-level boundary, not a UI hint ───────
+  test('NON-ENROLLED owner CANNOT create a lock doc (no eligibility doc)', async () => {
+    await assertFails(
+      asUser('carol').doc('accountLock/carol').set({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  test('owner with eligible=false CANNOT create a lock doc', async () => {
+    await seed('duressEligibility/dave', { eligible: false });
+    await assertFails(
+      asUser('dave').doc('accountLock/dave').set({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  test('owner CANNOT self-grant eligibility to unlock the create path', async () => {
+    await assertFails(
+      asUser('carol').doc('duressEligibility/carol').set({ eligible: true })
     );
   });
 
@@ -945,10 +974,30 @@ describe('/accountLock/{accountId}', () => {
     );
   });
 
-  test('owner can update an existing lock doc keeping locked=true', async () => {
-    await seed('accountLock/alice', { locked: true });
-    await assertSucceeds(
+  // ── S06-L6: client updates are denied outright, not merely latch-guarded ───
+  // Permitting update at all — even with the locked==true guard — let a client
+  // holding the victim's uid re-set the doc with a fresh lockedAt, repeatedly.
+  // The latch held; the forensic record of WHEN the duress event happened did
+  // not. Locking an already-locked account is the server's job via /duress-lock,
+  // which uses the Admin SDK and only writes lockedAt when one is not present.
+  test('owner CANNOT update an existing lock doc even keeping locked=true', async () => {
+    await seed('accountLock/alice', { locked: true, lockedAt: new Date(1000) });
+    await assertFails(
       asUser('alice').doc('accountLock/alice').update({ locked: true, lockedAt: new Date() })
+    );
+  });
+
+  test('owner CANNOT rewrite lockedAt to obscure the trigger time', async () => {
+    await seed('accountLock/alice', { locked: true, lockedAt: new Date(1000) });
+    await assertFails(
+      asUser('alice').doc('accountLock/alice').update({ lockedAt: new Date() })
+    );
+  });
+
+  test('owner CANNOT re-lock an unfrozen account to strip rotationRequired', async () => {
+    await seed('accountLock/alice', { locked: false, rotationRequired: true, lockedAt: new Date(1000) });
+    await assertFails(
+      asUser('alice').doc('accountLock/alice').set({ locked: true, lockedAt: new Date() })
     );
   });
 
@@ -1024,6 +1073,173 @@ describe('/duressEligibility/{accountId}', () => {
     await assertFails(
       asAnon().doc('duressEligibility/alice').set({ eligible: true })
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _duressNonces  (server-managed: no client reads or writes)  — S06-L3
+//
+// `allow read, write: if false`, so these are correct today. They were entirely
+// untested, which is the finding: a future edit could relax the deny-all
+// silently. A leaked nonce READ is the one that matters — a nonce is the sole
+// credential /duress-lock accepts, so being able to read another account's
+// pending nonce turns S06-H3's "the lock silently never happens" failure mode
+// into an active attack: consume the victim's nonce yourself and their duress
+// trigger can never lock the account.
+//
+// The nonce doc also holds {uid, expiresAt}, so client read access would let any
+// authenticated user enumerate which accounts have a duress trigger in flight —
+// the exact event the feature exists to make undetectable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('/_duressNonces/{nonce}', () => {
+  const NONCE = 'a'.repeat(64);
+
+  beforeEach(async () => {
+    await seed(`_duressNonces/${NONCE}`, {
+      uid: 'alice',
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+  });
+
+  test('owner of the bound uid CANNOT read their own nonce doc', async () => {
+    await assertFails(asUser('alice').doc(`_duressNonces/${NONCE}`).get());
+  });
+
+  test('authenticated stranger CANNOT read a nonce doc', async () => {
+    await assertFails(asUser('bob').doc(`_duressNonces/${NONCE}`).get());
+  });
+
+  test('unauthenticated CANNOT read a nonce doc', async () => {
+    await assertFails(asAnon().doc(`_duressNonces/${NONCE}`).get());
+  });
+
+  test('authenticated user CANNOT create a nonce doc', async () => {
+    await assertFails(
+      asUser('alice').doc(`_duressNonces/${'b'.repeat(64)}`).set({
+        uid: 'alice',
+        expiresAt: new Date(Date.now() + 86_400_000),
+      })
+    );
+  });
+
+  test('authenticated user CANNOT re-bind an existing nonce to themselves', async () => {
+    await assertFails(
+      asUser('bob').doc(`_duressNonces/${NONCE}`).update({ uid: 'bob' })
+    );
+  });
+
+  test('authenticated user CANNOT extend a nonce expiry', async () => {
+    await assertFails(
+      asUser('alice').doc(`_duressNonces/${NONCE}`).update({
+        expiresAt: new Date(Date.now() + 10 * 365 * 86_400_000),
+      })
+    );
+  });
+
+  test('authenticated user CANNOT delete (consume) a nonce doc', async () => {
+    await assertFails(asUser('alice').doc(`_duressNonces/${NONCE}`).delete());
+  });
+
+  test('unauthenticated CANNOT write a nonce doc', async () => {
+    await assertFails(
+      asAnon().doc(`_duressNonces/${'c'.repeat(64)}`).set({ uid: 'anon' })
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOUNT LOCK ENFORCEMENT ON /backups  — S06-C2 part 3
+//
+// The duress latch used to be enforced in exactly one place in the whole system:
+// a client-side `if` in RestoreFromSeedActivity, evaluated AFTER authentication
+// succeeded. Since the backup key is a pure function of the seed phrase, an
+// adversary holding a coerced seed could mint a token and read backups/{uid}
+// straight off the REST API — never executing the client check.
+//
+// accountNotLocked() in the rules is the layer that survives a bypassed or
+// compromised server. Rules do NOT cascade in Firestore, so it has to be
+// repeated on every subcollection; gating only the parent would leave
+// backups/{uid}/messages — the actual message history — fully readable. Each
+// subcollection is asserted separately below for exactly that reason.
+//
+// The predicate is `locked != true`, not `!exists()`: unfreeze deliberately
+// leaves the doc in place carrying locked:false + rotationRequired:true so the
+// re-arm requirement survives a reinstall, and an exists() test would lock those
+// users out of their own backups permanently.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('/backups/{userId} under accountLock', () => {
+  beforeEach(async () => {
+    await seed('backups/alice', { lastBackupTs: 1000, count: 5 });
+    await seed('backups/alice/messages/msg_1', { ciphertext: 'enc', isDeleted: false });
+    await seed('backups/alice/contacts/contact_1', { displayName: 'Bob' });
+    await seed('backups/alice/groups/group_1', { id: 'group_1' });
+    await seed('accountLock/alice', { locked: true, lockedAt: 1000 });
+  });
+
+  test('locked owner cannot read backup meta', async () => {
+    await assertFails(asUser('alice').doc('backups/alice').get());
+  });
+
+  test('locked owner cannot read backup MESSAGES (the subcollection gate)', async () => {
+    await assertFails(asUser('alice').doc('backups/alice/messages/msg_1').get());
+  });
+
+  test('locked owner cannot read backup CONTACTS', async () => {
+    await assertFails(asUser('alice').doc('backups/alice/contacts/contact_1').get());
+  });
+
+  test('locked owner cannot read backup GROUPS', async () => {
+    await assertFails(asUser('alice').doc('backups/alice/groups/group_1').get());
+  });
+
+  test('locked owner cannot write new backup messages', async () => {
+    await assertFails(
+      asUser('alice').doc('backups/alice/messages/msg_2').set({ ciphertext: 'enc2' })
+    );
+  });
+
+  test('locked owner cannot overwrite an existing backup message', async () => {
+    await assertFails(
+      asUser('alice').doc('backups/alice/messages/msg_1').update({ ciphertext: 'tampered' })
+    );
+  });
+
+  test('a lock on one account does not gate another account\'s backups', async () => {
+    await assertSucceeds(asUser('carol').doc('backups/carol').set({ lastBackupTs: 1 }));
+  });
+});
+
+describe('/backups/{userId} after unfreeze (locked:false + rotationRequired)', () => {
+  beforeEach(async () => {
+    await seed('backups/alice', { lastBackupTs: 1000, count: 5 });
+    await seed('backups/alice/messages/msg_1', { ciphertext: 'enc', isDeleted: false });
+    // Unfreeze rewrites rather than deletes, so the doc survives with locked:false.
+    await seed('accountLock/alice', {
+      locked: false,
+      rotationRequired: true,
+      lockedAt: 1000,
+      unfrozenAt: 2000,
+    });
+  });
+
+  test('unfrozen owner CAN read backup meta again', async () => {
+    await assertSucceeds(asUser('alice').doc('backups/alice').get());
+  });
+
+  test('unfrozen owner CAN read backup messages again', async () => {
+    await assertSucceeds(asUser('alice').doc('backups/alice/messages/msg_1').get());
+  });
+
+  test('unfrozen owner CAN resume backing up', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('backups/alice/messages/msg_2').set({ ciphertext: 'enc2' })
+    );
+  });
+
+  test('a stranger still cannot read an unfrozen account\'s backups', async () => {
+    await assertFails(asUser('bob').doc('backups/alice/messages/msg_1').get());
   });
 });
 
