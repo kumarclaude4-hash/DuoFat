@@ -38,6 +38,8 @@ import org.webrtc.VideoTrack;
 import com.duoshield.app.call.TurnBandwidthTracker;
 import com.duoshield.app.call.TurnCredentialFetcher;
 import com.duoshield.app.call.watch.WatchTogetherActivity;
+import com.duoshield.app.call.watch.WatchTogetherRepository;
+import com.duoshield.app.call.watch.WatchTogetherState;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
@@ -488,6 +490,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             btnCameraLayout.setVisibility(View.VISIBLE);
             if (btnChatLayout          != null) btnChatLayout.setVisibility(View.VISIBLE);
             if (btnWatchLayout         != null) btnWatchLayout.setVisibility(View.VISIBLE);
+            refreshWatchTogetherAwareness();
             // btnFlipLayout lives inside localVideoPip; visible once PiP appears
         }
     }
@@ -1010,6 +1013,31 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         intent.putExtra(WatchTogetherActivity.EXTRA_MY_UID,       myUid);
         intent.putExtra(WatchTogetherActivity.EXTRA_PARTNER_NAME, partnerName);
         startActivity(intent);
+    }
+
+    /**
+     * One-shot awareness hint for the control-bar Watch Together button.
+     *
+     * <p>If a Watch Together session is already active for this call (the partner started
+     * one, or we left and came back), reflect that on the button so the user knows a tap
+     * will <em>rejoin</em> rather than start fresh. This is deliberately a single
+     * {@link WatchTogetherRepository#fetchState} read — <strong>not</strong> a second
+     * always-on listener. The listener that actually drives playback sync lives in
+     * {@link WatchTogetherActivity}; {@code CallActivity} only needs a lightweight, one-time
+     * hint. The read is budget-gated inside the repository, so it is a safe no-op when the
+     * Firestore read budget is exhausted, and the callback is delivered on the main thread.
+     */
+    private void refreshWatchTogetherAwareness() {
+        if (callId == null || btnWatch == null) return;
+        new WatchTogetherRepository(this).fetchState(callId, state -> {
+            if (btnWatch == null) return;
+            boolean sessionActive = state != null && state.isPlayable();
+            btnWatch.setContentDescription(
+                    sessionActive ? "Rejoin Watch Together" : "Watch Together");
+            // Semantic-only emphasis: harmless if the icon has no state-list drawable, and
+            // lights up automatically if a selected state is ever added to it.
+            btnWatch.setSelected(sessionActive);
+        });
     }
 
     // ── TURN quota warning ────────────────────────────────────────────────────

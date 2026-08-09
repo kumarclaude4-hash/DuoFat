@@ -5,16 +5,18 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 3 (2026-08-09)
-- **Branch:** `v0/xojow11866-8151-31108357` (off `main`; Session 3 work committed here, PR pending)
-- **Overall feature status:** **FEATURE-COMPLETE FOR CORE FLOW, NOT COMPILER-VERIFIED** —
-  as of Session 3 the feature is now **reachable from the call UI**: `CallActivity` binds
-  `btnWatch`, reveals it for video calls exactly like `btnChat`, and launches
-  `WatchTogetherActivity` with the call/session extras; the manifest entry now exists.
-  The static checker was extended to guard every one of those integration points.
-  **What still remains** is optional polish (heartbeat writer, invite/awareness prompt)
-  and, critically, **a real Gradle build + on-device verification** — no JDK/Gradle has
-  been available in any of the three sessions. See §7, §11, and §13.
+- **Last updated:** Session 4 (2026-08-09)
+- **Branch:** `v0/xojow11866-8151-97dea628` (off `main`; Session 4 work committed here, PR pending)
+- **Overall feature status:** **FEATURE-COMPLETE FOR CORE FLOW + POLISH, NOT COMPILER-VERIFIED** —
+  the feature is reachable from the call UI (Session 3: `CallActivity` binds/reveals/launches
+  the watch button; manifest entry exists). Since then: the **host heartbeat writer**
+  (`maybeWriteHeartbeat`, single-writer via a last-actor guard, `ACTION_HEARTBEAT`) is present
+  in `WatchTogetherActivity`, and Session 4 added a **one-shot awareness cue** on the call
+  screen's watch button (a "Rejoin Watch Together" hint driven by a single `fetchState`, with
+  no second listener). The static checker now enforces **21 checks**, including the
+  exactly-one-listener, single-writer-heartbeat, cost-guard, and one-shot-awareness invariants.
+  **What still remains** is, critically, **a real Gradle build + on-device verification** —
+  no JDK/Gradle has been available in any of the four sessions. See §7, §11, and §13.
 
 ---
 
@@ -238,7 +240,9 @@ Below that, correcting is more jarring than the drift itself.
 
 The controlling participant may write `heartbeat` at most once per
 `HEARTBEAT_INTERVAL_MS` (**10 s**) so followers can correct slow drift. This bounds write
-cost. **Not yet implemented** — see §12.
+cost. **Implemented** in `WatchTogetherActivity.maybeWriteHeartbeat()` — single-writer
+(only `lastActionBy` writes, only while playing), on a `Handler` tied to the Activity
+lifecycle. See §7.
 
 ### Control model
 
@@ -260,14 +264,14 @@ participants to write, and there is a rules test asserting the non-host can paus
 | Unit tests — sync model | **COMPLETE** | `WatchTogetherStateTest`, 26 tests. |
 | Unit tests — URL parser | **COMPLETE** | `YouTubeUrlParserTest`, 33 tests. |
 | Firestore rules tests for `watch` | **COMPLETE** (written, not executed — see §10) | 7 tests added to `rules.test.js`. |
-| Static validation script | **COMPLETE (Session 3: now covers the player/Activity + UI wiring)** | `scripts/check-watch-together.js` now structurally checks `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java` (tokenizer brace/paren balance + package), and adds an integration-points section: control-bar ids present in `activity_call.xml`; `CallActivity` binds/reveals/listens/launches + imports the Activity; extras passed match constants declared on the Activity; manifest declares `WatchTogetherActivity` as `exported="false"`; `activity_watch_together.xml` exists. All 17 checks pass. |
+| Static validation script | **COMPLETE (Session 3: now covers the player/Activity + UI wiring)** | `scripts/check-watch-together.js` now structurally checks `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java` (tokenizer brace/paren balance + package), and adds an integration-points section: control-bar ids present in `activity_call.xml`; `CallActivity` binds/reveals/listens/launches + imports the Activity; extras passed match constants declared on the Activity; manifest declares `WatchTogetherActivity` as `exported="false"`; `activity_watch_together.xml` exists. **Session 4** added four safety-invariant checks: exactly-one snapshot listener (attach + guard + ≥2 remove sites), single-writer heartbeat (`lastActionBy` guard + `ACTION_HEARTBEAT`), repository cost-guarding of every read/write, and CallActivity awareness being one-shot `fetchState` with no listener and no writes. **All 21 checks pass.** |
 | **`WatchTogetherPlayerView`** (WebView host/bridge, `app/.../call/watch/WatchTogetherPlayerView.java`) | **COMPLETE, not compiler-verified** | Wraps a `WebView` that loads `file:///android_asset/watch_together/player.html` (Session 1 asset). `@JavascriptInterface` bridge (`onReady`, `onStateChange`, `onPlaybackRateChange`, `onCurrentTime`, `onPlayerError`) posts back to the main thread via a `Handler`; Java→JS calls (`loadVideo`, `play`, `pause`, `seekTo`, `setPlaybackRate`) go through `evaluateJavascript`. JS execution is scoped to this WebView only; `setAllowFileAccess`/universal access left at safe defaults. Exposes a `Listener` callback interface consumed by `WatchTogetherActivity`. |
-| **`WatchTogetherActivity`** (`app/.../call/watch/WatchTogetherActivity.java`) | **COMPLETE, not compiler-verified** | Extends `AppCompatActivity` (documented rationale comment repeating the `InCallChatActivity` precedent, per rule §9.1). Reads `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`. Owns exactly one `listenToState` `ListenerRegistration`, removed in `onDestroy()`. Implements the full sync protocol from §6: `shouldApply` → `observeRemoteSeq` → local `SystemClock.elapsedRealtime()` receipt stamp → `projectedPositionMs` → `shouldSeek` drift gating. Uses an `applyingRemote` flag to suppress write-back feedback loops when reconciling a remote snapshot. Validates both the locally-parsed and the remotely-received video ID through `YouTubeUrlParser`/`isValidVideoId` before ever loading it. **Heartbeat writer is NOT implemented** — see below. |
+| **`WatchTogetherActivity`** (`app/.../call/watch/WatchTogetherActivity.java`) | **COMPLETE, not compiler-verified** | Extends `AppCompatActivity` (documented rationale comment repeating the `InCallChatActivity` precedent, per rule §9.1). Reads `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`. Owns exactly one `listenToState` `ListenerRegistration`, removed in `onDestroy()`. Implements the full sync protocol from §6: `shouldApply` → `observeRemoteSeq` → local `SystemClock.elapsedRealtime()` receipt stamp → `projectedPositionMs` → `shouldSeek` drift gating. Uses an `applyingRemote` flag to suppress write-back feedback loops when reconciling a remote snapshot. Validates both the locally-parsed and the remotely-received video ID through `YouTubeUrlParser`/`isValidVideoId` before ever loading it. **Heartbeat writer IS implemented** (`maybeWriteHeartbeat`, single-writer) — see the Heartbeat writer row below. |
 | **`activity_watch_together.xml`** | **COMPLETE** | URL input + Start row, `FrameLayout` player container hosting the `WatchTogetherPlayerView`, play/pause/seek-back/seek-forward controls, status text, minimize/close buttons. Reuses existing drawables (`ic_arrow_down`, `ic_close`, `ic_play_audio`/`ic_pause_audio`, `bg_incall_input`, `bg_call_btn_circle`) — no new drawables except the control-bar icon below. |
 | **Watch Together button in the call control bar** | **COMPLETE (Session 3)** | `activity_call.xml` has the `btnWatchLayout`/`btnWatch` block (mirrors `btnChatLayout`/`btnChat`), icon `ic_watch_together.xml`. It is `visibility="gone"` by default and `CallActivity` now reveals it (`View.VISIBLE`) in the `isVideo` block right after `btnChatLayout`, and attaches a click listener. |
 | **`CallActivity` wiring** | **COMPLETE (Session 3), not compiler-verified** | `CallActivity.java`: imports `com.duoshield.app.call.watch.WatchTogetherActivity`; declares `btnWatch`/`btnWatchLayout` fields; binds both via `findViewById`; reveals `btnWatchLayout` for video calls; `btnWatch.setOnClickListener(v -> openWatchTogether())`; new `openWatchTogether()` mirrors `openInCallChat()` (guards on `callId`/`myUid`, then launches `WatchTogetherActivity` with `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`). Raw brace balance verified (164/164). |
-| **Session-invite / "partner started watching" prompt** | **NOT STARTED** | |
-| **Heartbeat writer** | **NOT STARTED** | Constant exists (`WatchTogetherState.HEARTBEAT_INTERVAL_MS`); no writer loop in `WatchTogetherActivity` yet. |
+| **Session-invite / "partner started watching" awareness** | **PARTIAL (Session 4)** | `CallActivity.refreshWatchTogetherAwareness()` does a **one-shot** `fetchState` when the watch button is revealed; if a session is already active it sets the button's content description to "Rejoin Watch Together" and `setSelected(true)` (semantic-only cue, no new drawables, no second listener, no writes). This covers the "I can tell a session is live and tapping rejoins" case. **NOT done:** an active push/notification/toast that alerts B in real time the instant A starts a session while B is on the call screen but has not opened Watch Together — deliberately deferred to avoid a second always-on listener on `CallActivity`. |
+| **Heartbeat writer** | **COMPLETE, not compiler-verified** | `WatchTogetherActivity.maybeWriteHeartbeat()` runs on a `Handler` posted every `HEARTBEAT_INTERVAL_MS` (started in `onStart`, cancelled in `onStop`/`onDestroy`). Single-writer: only the participant matching `appliedState.lastActionBy` writes, and only while `playing`, using `ACTION_HEARTBEAT` through the budget-gated `writeState`. This bounds write cost to at most one per interval and never lets both devices write. |
 | **FirebaseCostGuard integration** | **COMPLETE** | See `WatchTogetherRepository` row above. Mandatory-before-merge item from Session 1 is now resolved. |
 | **Manifest entry for the new Activity** | **COMPLETE (Session 3)** | `WatchTogetherActivity` is declared in `AndroidManifest.xml` directly after `InCallChatActivity`, with identical attributes: `exported="false"`, `screenOrientation="portrait"`, `windowSoftInputMode="adjustResize"`, `theme="@style/Theme.DuoShield.FullScreen"` (theme verified to exist in `themes.xml`). |
 
@@ -333,6 +337,18 @@ Session 3 touched **nothing** on any do-not-touch list. `CallManager.java`,
 `CallSignalRepository.java`, `InCallChatActivity.java`, and all `firestore.rules` blocks
 are untouched. The only pre-existing production file changed is `CallActivity.java`, and
 only by additive insertion mirroring the existing chat-button pattern.
+
+### Modified files, Session 4 (awareness cue + validator invariants — additive only)
+
+| File | Change |
+|---|---|
+| `app/src/main/java/com/duoshield/app/call/CallActivity.java` | Added imports for `WatchTogetherRepository` and `WatchTogetherState`; added a call to `refreshWatchTogetherAwareness()` right after the button is revealed in the `isVideo` block; added the `refreshWatchTogetherAwareness()` method — a **one-shot** `fetchState` that, if a session is active, sets `btnWatch` content description to "Rejoin Watch Together" and `setSelected(true)`. Uses only guaranteed `View`/`ImageView` methods (no new resources), no second listener, no `writeState`. Raw brace balance 169/169. |
+| `scripts/check-watch-together.js` | Added four safety-invariant checks (checks 5–8): exactly-one snapshot listener in `WatchTogetherActivity`; single-writer heartbeat; repository cost-guarding of reads and writes; CallActivity awareness is one-shot `fetchState` with no listener and no writes. Total now 21 checks. **No existing check modified.** |
+
+Session 4 touched **nothing** on any do-not-touch list. The only pre-existing production
+file changed is `CallActivity.java`, again by additive insertion. `WatchTogetherActivity.java`
+(which contains the merged heartbeat writer) was **not** modified this session — only read
+and validated.
 
 ---
 
@@ -490,13 +506,18 @@ Actual, observed issues only:
    Session 3.** The checker now runs the tokenizer-based structural checks on
    `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java`, and additionally verifies
    every CallActivity⇄Activity integration point (§10).
-6. **No heartbeat writer.** `WatchTogetherState.HEARTBEAT_INTERVAL_MS` exists but nothing
-   calls it on an interval. Drift correction currently only happens on state-changing
-   actions (play/pause/seek/rate), not passively during uninterrupted playback. Not a
-   regression — this was already true and already tracked in Session 1's remaining work.
-7. **No invite/awareness prompt.** If participant A starts a session, participant B has no
-   in-call indication that a Watch Together session is running until they themselves open
-   the screen. Unchanged from Session 1.
+6. ~~No heartbeat writer.~~ **RESOLVED** — `WatchTogetherActivity.maybeWriteHeartbeat()`
+   writes `ACTION_HEARTBEAT` at most once per `HEARTBEAT_INTERVAL_MS` while playing, and
+   only from the last actor, so passive drift is now corrected during uninterrupted
+   playback. Still unproven on a real device (issue 2).
+7. **Awareness is one-shot only, not a live alert.** As of Session 4, `CallActivity` shows a
+   "Rejoin Watch Together" cue on the watch button when a session is already active (via a
+   single `fetchState` at reveal time). It does **not** actively notify participant B the
+   instant A starts a session while B sits on the call screen — that would need a live
+   signal, and we deliberately did not add a second always-on listener to `CallActivity`
+   (project rule #3 + cost). If a real-time invite is wanted, the cheapest correct path is to
+   piggyback on the call-doc listener `CallActivity` already owns (e.g. a `watchActive` flag
+   mirrored onto the call doc), NOT a new Watch Together listener.
 
 Not issues, but deliberate and worth not "fixing" blindly:
 
@@ -537,15 +558,15 @@ Concrete, ordered tasks. Items struck through were completed in Session 2.
    `callId`/`myUid` being set (same guard as `openInCallChat()`).
 9. ~~Add `WatchTogetherActivity` to `AndroidManifest.xml`~~ **DONE (Session 3)** — declared
    with `InCallChatActivity`'s exact attributes.
-10. **Add the heartbeat writer**: while playing, the acting participant writes
-    `ACTION_HEARTBEAT` at most once per `HEARTBEAT_INTERVAL_MS`. Not started in either
-    session.
-11. **Invite/awareness**: when a participant starts a session, the peer should learn about
-    it. Cheapest path with zero extra cost — `CallActivity` already listens to the call
-    doc; instead of a second listener, do a one-shot `fetchState` when the Watch Together
-    button is pressed and show a badge/prompt driven by the state doc the Activity already
-    reads. **Avoid adding a second always-on listener in `CallActivity`** (project rule #3
-    and cost). Not started in either session.
+10. ~~Add the heartbeat writer~~ **DONE** — `WatchTogetherActivity.maybeWriteHeartbeat()`,
+    single-writer (`lastActionBy` guard), `ACTION_HEARTBEAT`, once per `HEARTBEAT_INTERVAL_MS`
+    while playing, on a lifecycle-bound `Handler`. Validated by static check 6.
+11. ~~Invite/awareness (one-shot)~~ **DONE (Session 4)** — `CallActivity.refreshWatchTogetherAwareness()`
+    does a single `fetchState` when the watch button is revealed and sets a "Rejoin Watch
+    Together" cue if a session is active. No second listener, no writes (validated by static
+    check 8). **Still open (optional):** a *live* real-time invite. If wanted, mirror a
+    `watchActive` boolean onto the call doc and read it from the call-doc listener
+    `CallActivity` already owns — do NOT add a second always-on Watch Together listener.
 12. **Run the Firestore rules tests** where Java is available:
     `cd firestore-tests && npm ci && npx firebase emulators:exec --only firestore "npm test"`.
 13. **Manual two-device verification** of: start, play, pause, seek, rate, rejoin after
@@ -556,8 +577,10 @@ Concrete, ordered tasks. Items struck through were completed in Session 2.
 
 ## 13. Next Session Instructions (start here)
 
-The core UI wiring is DONE as of Session 3. What is left is (a) a real compiler/build,
-(b) on-device verification, and (c) two optional polish items. Start here, in this order:
+The core UI wiring (Session 3), the heartbeat writer, and the one-shot awareness cue
+(Session 4) are all DONE in code. The ONLY things left are (a) a real compiler/build and
+(b) on-device verification — both blocked in every session so far by a missing toolchain.
+There is no more code to add for the core feature. Start here, in this order:
 
 1. **Read `.agents/memory/duoshield-rules.md`** before touching anything.
 2. **Read this document in full**, especially §6 (clock safety), §9 (do-not-touch),

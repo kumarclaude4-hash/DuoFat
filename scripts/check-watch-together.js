@@ -307,6 +307,76 @@ if (!fs.existsSync(path.join(ROOT, watchLayout))) {
   pass('activity_watch_together.xml exists');
 }
 
+// ── Safety-invariant checks ──────────────────────────────────────────────────
+// These guard the three rules the design leans on. They cannot be proven without a
+// device, but a regression that deletes them can be caught statically here.
+
+const repository = sources['WatchTogetherRepository.java'] || '';
+
+// 5. Exactly-one-listener lifecycle in WatchTogetherActivity: attach in onStart,
+//    remove in BOTH onStop and onDestroy, guarded so it is never double-attached.
+if (watchActivity) {
+  const listenerReqs = [
+    ['attaches the state listener', /stateListener\s*=\s*repo\.listenToState/],
+    ['guards against double-attach', /stateListener\s*==\s*null/],
+    ['removes the listener (>=2 sites: onStop + onDestroy)',
+      (s) => (s.match(/stateListener\.remove\(\)/g) || []).length >= 2],
+  ];
+  let ok = true;
+  for (const [label, matcher] of listenerReqs) {
+    const hit = typeof matcher === 'function' ? matcher(watchActivity) : matcher.test(watchActivity);
+    if (!hit) { fail(`WatchTogetherActivity does not ${label}`); ok = false; }
+  }
+  if (ok) pass('WatchTogetherActivity keeps exactly one snapshot listener (attach + double remove)');
+}
+
+// 6. Single-writer heartbeat: only the last actor heartbeats, so the two devices
+//    never both write, and it uses the dedicated heartbeat action.
+if (watchActivity) {
+  const hbOk =
+    /maybeWriteHeartbeat\s*\(/.test(watchActivity) &&
+    /myUid\.equals\(\s*appliedState\.lastActionBy\s*\)/.test(watchActivity) &&
+    /ACTION_HEARTBEAT/.test(watchActivity);
+  if (hbOk) {
+    pass('WatchTogetherActivity heartbeat is single-writer (last-actor guard + ACTION_HEARTBEAT)');
+  } else {
+    fail('WatchTogetherActivity heartbeat is missing its single-writer guard or ACTION_HEARTBEAT');
+  }
+}
+
+// 7. Repository gates every Firestore op through FirebaseCostGuard.
+if (repository) {
+  const guarded =
+    /guard\.canWrite/.test(repository) &&
+    /guard\.recordWrites/.test(repository) &&
+    /guard\.canRead/.test(repository) &&
+    /guard\.recordReads/.test(repository);
+  if (guarded) pass('WatchTogetherRepository gates reads and writes through FirebaseCostGuard');
+  else fail('WatchTogetherRepository is missing a FirebaseCostGuard gate on a read or write path');
+}
+
+// 8. CallActivity awareness is a ONE-SHOT read, not a second always-on listener,
+//    and never writes state (writes belong to WatchTogetherActivity only).
+if (callActivity) {
+  const awarenessReqs = [
+    ['defines refreshWatchTogetherAwareness()', /void\s+refreshWatchTogetherAwareness\s*\(/],
+    ['uses a one-shot fetchState', /\.fetchState\(/],
+  ];
+  let ok = true;
+  for (const [label, re] of awarenessReqs) {
+    if (!re.test(callActivity)) { fail(`CallActivity does not ${label}`); ok = false; }
+  }
+  if (/\.listenToState\(/.test(callActivity)) {
+    fail('CallActivity attaches a Watch Together listenToState — awareness must be one-shot fetchState only');
+    ok = false;
+  }
+  if (/repo\w*\.writeState\(|WatchTogetherRepository[\s\S]{0,80}\.writeState\(/.test(callActivity)) {
+    fail('CallActivity writes Watch Together state — writes must stay in WatchTogetherActivity');
+    ok = false;
+  }
+  if (ok) pass('CallActivity awareness is one-shot fetchState (no extra listener, no writes)');
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 
 console.log('');
