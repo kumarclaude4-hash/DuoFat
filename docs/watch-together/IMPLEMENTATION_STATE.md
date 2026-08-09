@@ -5,14 +5,16 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 2 (2026-08-09)
-- **Branch:** `duoshield-watch-together` (merged to `main` via PR #39; Session 2 work is
-  on top of `main`, PR pending)
-- **Overall feature status:** **PARTIALLY COMPLETE** — sync foundation, `FirebaseCostGuard`
-  wiring, the WebView/IFrame player host, `WatchTogetherActivity`, its layout, and the
-  control-bar button markup all landed. **Still NOT reachable from the UI**: `CallActivity`
-  does not yet bind the new button or launch the Activity, and the manifest entry is
-  missing. See §7 and §13.
+- **Last updated:** Session 3 (2026-08-09)
+- **Branch:** `v0/xojow11866-8151-31108357` (off `main`; Session 3 work committed here, PR pending)
+- **Overall feature status:** **FEATURE-COMPLETE FOR CORE FLOW, NOT COMPILER-VERIFIED** —
+  as of Session 3 the feature is now **reachable from the call UI**: `CallActivity` binds
+  `btnWatch`, reveals it for video calls exactly like `btnChat`, and launches
+  `WatchTogetherActivity` with the call/session extras; the manifest entry now exists.
+  The static checker was extended to guard every one of those integration points.
+  **What still remains** is optional polish (heartbeat writer, invite/awareness prompt)
+  and, critically, **a real Gradle build + on-device verification** — no JDK/Gradle has
+  been available in any of the three sessions. See §7, §11, and §13.
 
 ---
 
@@ -258,16 +260,16 @@ participants to write, and there is a rules test asserting the non-host can paus
 | Unit tests — sync model | **COMPLETE** | `WatchTogetherStateTest`, 26 tests. |
 | Unit tests — URL parser | **COMPLETE** | `YouTubeUrlParserTest`, 33 tests. |
 | Firestore rules tests for `watch` | **COMPLETE** (written, not executed — see §10) | 7 tests added to `rules.test.js`. |
-| Static validation script | **COMPLETE, but does not cover Session 2 files** | `scripts/check-watch-together.js` checks the Session 1 model/repo/rules files only. It has **not** been extended to check `WatchTogetherPlayerView`/`WatchTogetherActivity`. Manual brace-balance and `R.id`/`R.layout`/`R.drawable` cross-reference checks were run by hand instead (see §10) — extending the script is still owed. |
+| Static validation script | **COMPLETE (Session 3: now covers the player/Activity + UI wiring)** | `scripts/check-watch-together.js` now structurally checks `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java` (tokenizer brace/paren balance + package), and adds an integration-points section: control-bar ids present in `activity_call.xml`; `CallActivity` binds/reveals/listens/launches + imports the Activity; extras passed match constants declared on the Activity; manifest declares `WatchTogetherActivity` as `exported="false"`; `activity_watch_together.xml` exists. All 17 checks pass. |
 | **`WatchTogetherPlayerView`** (WebView host/bridge, `app/.../call/watch/WatchTogetherPlayerView.java`) | **COMPLETE, not compiler-verified** | Wraps a `WebView` that loads `file:///android_asset/watch_together/player.html` (Session 1 asset). `@JavascriptInterface` bridge (`onReady`, `onStateChange`, `onPlaybackRateChange`, `onCurrentTime`, `onPlayerError`) posts back to the main thread via a `Handler`; Java→JS calls (`loadVideo`, `play`, `pause`, `seekTo`, `setPlaybackRate`) go through `evaluateJavascript`. JS execution is scoped to this WebView only; `setAllowFileAccess`/universal access left at safe defaults. Exposes a `Listener` callback interface consumed by `WatchTogetherActivity`. |
 | **`WatchTogetherActivity`** (`app/.../call/watch/WatchTogetherActivity.java`) | **COMPLETE, not compiler-verified** | Extends `AppCompatActivity` (documented rationale comment repeating the `InCallChatActivity` precedent, per rule §9.1). Reads `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`. Owns exactly one `listenToState` `ListenerRegistration`, removed in `onDestroy()`. Implements the full sync protocol from §6: `shouldApply` → `observeRemoteSeq` → local `SystemClock.elapsedRealtime()` receipt stamp → `projectedPositionMs` → `shouldSeek` drift gating. Uses an `applyingRemote` flag to suppress write-back feedback loops when reconciling a remote snapshot. Validates both the locally-parsed and the remotely-received video ID through `YouTubeUrlParser`/`isValidVideoId` before ever loading it. **Heartbeat writer is NOT implemented** — see below. |
 | **`activity_watch_together.xml`** | **COMPLETE** | URL input + Start row, `FrameLayout` player container hosting the `WatchTogetherPlayerView`, play/pause/seek-back/seek-forward controls, status text, minimize/close buttons. Reuses existing drawables (`ic_arrow_down`, `ic_close`, `ic_play_audio`/`ic_pause_audio`, `bg_incall_input`, `bg_call_btn_circle`) — no new drawables except the control-bar icon below. |
-| **Watch Together button in the call control bar** | **PARTIAL** | `activity_call.xml` has a new `btnWatchLayout`/`btnWatch` block (mirrors `btnChatLayout`/`btnChat`), using new icon `ic_watch_together.xml`. **`android:visibility="gone"` by default and nothing in `CallActivity.java` ever sets it visible or attaches a click listener** — the button exists in the XML tree but is currently unreachable at runtime. |
-| **`CallActivity` wiring** | **NOT STARTED** | `CallActivity.java` has not been modified. This is the single largest remaining gap — see §12 item 8 and §13. |
+| **Watch Together button in the call control bar** | **COMPLETE (Session 3)** | `activity_call.xml` has the `btnWatchLayout`/`btnWatch` block (mirrors `btnChatLayout`/`btnChat`), icon `ic_watch_together.xml`. It is `visibility="gone"` by default and `CallActivity` now reveals it (`View.VISIBLE`) in the `isVideo` block right after `btnChatLayout`, and attaches a click listener. |
+| **`CallActivity` wiring** | **COMPLETE (Session 3), not compiler-verified** | `CallActivity.java`: imports `com.duoshield.app.call.watch.WatchTogetherActivity`; declares `btnWatch`/`btnWatchLayout` fields; binds both via `findViewById`; reveals `btnWatchLayout` for video calls; `btnWatch.setOnClickListener(v -> openWatchTogether())`; new `openWatchTogether()` mirrors `openInCallChat()` (guards on `callId`/`myUid`, then launches `WatchTogetherActivity` with `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`). Raw brace balance verified (164/164). |
 | **Session-invite / "partner started watching" prompt** | **NOT STARTED** | |
 | **Heartbeat writer** | **NOT STARTED** | Constant exists (`WatchTogetherState.HEARTBEAT_INTERVAL_MS`); no writer loop in `WatchTogetherActivity` yet. |
 | **FirebaseCostGuard integration** | **COMPLETE** | See `WatchTogetherRepository` row above. Mandatory-before-merge item from Session 1 is now resolved. |
-| **Manifest entry for the new Activity** | **NOT STARTED** | `WatchTogetherActivity` is not declared in `AndroidManifest.xml`. Harmless today (nothing launches it yet) but required before the button can be wired. |
+| **Manifest entry for the new Activity** | **COMPLETE (Session 3)** | `WatchTogetherActivity` is declared in `AndroidManifest.xml` directly after `InCallChatActivity`, with identical attributes: `exported="false"`, `screenOrientation="portrait"`, `windowSoftInputMode="adjustResize"`, `theme="@style/Theme.DuoShield.FullScreen"` (theme verified to exist in `themes.xml`). |
 
 ---
 
@@ -318,6 +320,19 @@ Session 1 was merged to `main` via PR #39 (`993acd8`, `62fe765`, merge commit `8
 Nothing from Session 1's do-not-touch list (`CallManager.java`, `InCallChatActivity.java`
 and its model/adapter, existing `firestore.rules` blocks, `IncomingCallWatcher.java`,
 `CallForegroundService.java`) was touched in Session 2 either.
+
+### Modified files, Session 3 (minimal, additive only — makes the feature reachable)
+
+| File | Change |
+|---|---|
+| `app/src/main/java/com/duoshield/app/call/CallActivity.java` | Added `import com.duoshield.app.call.watch.WatchTogetherActivity;`; added `btnWatch` (`ImageView`) and `btnWatchLayout` (`View`) fields next to the chat ones; bound both in the `findViewById` block; revealed `btnWatchLayout` in the `isVideo` block right after `btnChatLayout`; added `btnWatch.setOnClickListener(v -> openWatchTogether())` in `setupButtons`; added `openWatchTogether()` mirroring `openInCallChat()`. **No existing method logic changed** — all insertions alongside the existing chat wiring. |
+| `app/src/main/AndroidManifest.xml` | Added the `<activity android:name=".call.watch.WatchTogetherActivity" .../>` declaration after `InCallChatActivity`, with identical attributes. **No existing entry modified.** |
+| `scripts/check-watch-together.js` | Added `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java` to the structural `FILES` list; added a CallActivity⇄WatchTogetherActivity integration-points section (control-bar ids, bind/reveal/listen/launch/import in `CallActivity`, extras-match, manifest declaration, watch layout existence). **No existing check modified.** |
+
+Session 3 touched **nothing** on any do-not-touch list. `CallManager.java`,
+`CallSignalRepository.java`, `InCallChatActivity.java`, and all `firestore.rules` blocks
+are untouched. The only pre-existing production file changed is `CallActivity.java`, and
+only by additive insertion mirroring the existing chat-button pattern.
 
 ---
 
@@ -415,11 +430,32 @@ contain none in a way that would trip this up, but that was verified by inspecti
 the checker). Treat this as a smoke check, not proof of syntactic validity — real
 confidence still requires `javac`/Gradle.
 
+### What WAS actually executed and passed — Session 3
+
+Still **no JDK/Gradle** in this container (`which java javac gradle` → nothing), so the
+Gradle build/unit-test/lint remain **NOT RUN** for a third session. What was run:
+
+| Check | Command | Result |
+|---|---|---|
+| Checker JS syntax | `node --check scripts/check-watch-together.js` | **PASS** |
+| Full static checker (now 17 checks, incl. Session 2 files + UI wiring) | `node scripts/check-watch-together.js` | **PASS** — all 17 OK, exit 0 |
+| `Theme.DuoShield.FullScreen` exists | `grep` in `res/values/themes.xml` | **PASS** — defined line 58 |
+| XML well-formedness of `activity_call.xml`, `activity_watch_together.xml`, `AndroidManifest.xml` | `python3 xml.dom.minidom.parse` | **PASS** — all parse without error |
+| `CallActivity.java` brace balance (raw) | `node` open/close count | **PASS** — 164/164 |
+
+The new checker section specifically proves, without a compiler, that: the control-bar
+ids exist in the layout; `CallActivity` binds `btnWatch`+`btnWatchLayout`, reveals the
+layout, sets a click listener, defines `openWatchTogether()`, launches
+`WatchTogetherActivity`, and imports it; the extras `CallActivity` passes
+(`EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`) are all declared on the Activity;
+the manifest declares the Activity as `exported="false"`; and the watch layout exists.
+
 ### Manual (device/emulator) verification
 
-**NONE**, in either session. No device or emulator has been available in this container in
-any session. The feature also still cannot be launched from the UI (§7), so there is
-nothing to click through yet even if a device were available.
+**NONE**, in any of the three sessions. No device or emulator has been available in this
+container. As of Session 3 the feature IS now wired end-to-end in code, so a device
+click-through (start/play/pause/seek/rate/rejoin/end) is finally possible and is the top
+outstanding verification — see §13.
 
 ### Honest confidence statement
 
@@ -444,17 +480,16 @@ Actual, observed issues only:
    Java. Their logic is modeled directly on the passing `callerCandidates` tests and uses
    the same `asUser` / `seed` / `testEnv` helpers (signatures verified by reading them), but
    they are unproven. Unchanged from Session 1.
-4. **The feature is still not reachable from the UI.** Narrower than Session 1's version of
-   this issue: the Activity, layout, player, and control-bar button *markup* now all exist,
-   but (a) `CallActivity.java` never binds `btnWatch`, sets its visibility, or launches
-   `WatchTogetherActivity`, and (b) `WatchTogetherActivity` is not declared in
-   `AndroidManifest.xml`. An end user still cannot start a session. This is the single
-   largest remaining gap — see §12 item 3 and §13.
-5. **`scripts/check-watch-together.js` does not cover the Session 2 files.** It still only
-   checks `WatchTogetherState`, `YouTubeUrlParser`, `WatchTogetherRepository`, the two test
-   files, and the rules file. `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java`
-   were checked manually instead (§10) — the manual check is weaker than the tokenizer-based
-   one and should be replaced by extending the real script.
+4. ~~The feature is still not reachable from the UI.~~ **RESOLVED in Session 3.**
+   `CallActivity` now binds `btnWatch`/`btnWatchLayout`, reveals the button for video calls,
+   sets a click listener, and launches `WatchTogetherActivity` via `openWatchTogether()`;
+   `WatchTogetherActivity` is declared in `AndroidManifest.xml`. An end user can now open the
+   Watch Together screen from an active video call. **Still unproven on a real device** —
+   see issue 2 (no compiler) and §13.
+5. ~~`scripts/check-watch-together.js` does not cover the Session 2 files.~~ **RESOLVED in
+   Session 3.** The checker now runs the tokenizer-based structural checks on
+   `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java`, and additionally verifies
+   every CallActivity⇄Activity integration point (§10).
 6. **No heartbeat writer.** `WatchTogetherState.HEARTBEAT_INTERVAL_MS` exists but nothing
    calls it on an interval. Drift correction currently only happens on state-changing
    actions (play/pause/seek/rate), not passively during uninterrupted playback. Not a
@@ -489,22 +524,19 @@ Concrete, ordered tasks. Items struck through were completed in Session 2.
    `./gradlew :app:assembleDebug`. Neither has ever been run, across two sessions, on any
    file in `app/src/main/java/com/duoshield/app/call/watch/`. **Do this before writing any
    more Watch Together code** — fix whatever it finds before extending further.
-7. **Extend `scripts/check-watch-together.js`** to cover `WatchTogetherPlayerView.java` and
-   `WatchTogetherActivity.java` with the same tokenizer-based brace/paren balance and
-   package-declaration checks it already applies to the Session 1 files. Currently these
-   two files are excluded from the automated checker entirely (§10, §11 item 5).
-8. **Wire `CallActivity`** — the biggest remaining gap:
-   - Bind `btnWatch`/`btnWatchLayout` (`findViewById`, alongside the existing `btnChat`
-     binding).
-   - Add an `openWatchTogether()` method mirroring `openInCallChat()`, launching
-     `WatchTogetherActivity` with `EXTRA_CALL_ID` / `EXTRA_MY_UID` / `EXTRA_PARTNER_NAME`.
-   - Reveal `btnWatchLayout` (currently `visibility="gone"`) only when the call is
-     `CONNECTED`, consistent with how `btnChatLayout` is revealed — check exactly how/where
-     `CallActivity` currently shows/hides `btnChatLayout` and mirror that logic precisely.
-   - Only show the button for video calls if that turns out to already be how the existing
-     UI distinguishes call types (verify; do not assume).
-9. **Add `WatchTogetherActivity` to `AndroidManifest.xml`** (`exported="false"`, matching
-   `InCallChatActivity`'s attributes exactly).
+7. ~~Extend `scripts/check-watch-together.js`~~ **DONE (Session 3)** — the two Session 2
+   files are now in the structural `FILES` list, and a new integration-points section guards
+   the CallActivity⇄Activity wiring, manifest, and layout.
+8. ~~Wire `CallActivity`~~ **DONE (Session 3).** Binds `btnWatch`/`btnWatchLayout`; reveals
+   `btnWatchLayout` in the existing `isVideo` block right after `btnChatLayout` (verified:
+   that is exactly how `btnChatLayout` is revealed — a video-call gate, not a `CONNECTED`
+   state gate; `btnChatLayout` has no separate CONNECTED reveal, so Watch Together mirrors it
+   precisely); `openWatchTogether()` launches `WatchTogetherActivity` with the three extras.
+   Note: like the chat button, the button becomes visible for video calls; there is no
+   additional CONNECTED gate in the existing UI, and `openWatchTogether()` guards on
+   `callId`/`myUid` being set (same guard as `openInCallChat()`).
+9. ~~Add `WatchTogetherActivity` to `AndroidManifest.xml`~~ **DONE (Session 3)** — declared
+   with `InCallChatActivity`'s exact attributes.
 10. **Add the heartbeat writer**: while playing, the acting participant writes
     `ACTION_HEARTBEAT` at most once per `HEARTBEAT_INTERVAL_MS`. Not started in either
     session.
@@ -524,40 +556,58 @@ Concrete, ordered tasks. Items struck through were completed in Session 2.
 
 ## 13. Next Session Instructions (start here)
 
-Start here, in this exact order:
+The core UI wiring is DONE as of Session 3. What is left is (a) a real compiler/build,
+(b) on-device verification, and (c) two optional polish items. Start here, in this order:
 
 1. **Read `.agents/memory/duoshield-rules.md`** before touching anything.
-2. **Read this document in full**, especially §6 (clock safety), §7 (current status —
-   most of the player/Activity layer is now built), §9 (do-not-touch), §11 (known issues),
-   and §14 (settled decisions — do not relitigate them).
-3. **Verify the actual code before changing anything** — this doc is a summary, not a
-   substitute for reading:
-   - `app/src/main/java/com/duoshield/app/call/watch/WatchTogetherActivity.java`
-   - `app/src/main/java/com/duoshield/app/call/watch/WatchTogetherPlayerView.java`
-   - `app/src/main/res/layout/activity_watch_together.xml`
-   - `app/src/main/res/layout/activity_call.xml` (the new `btnWatchLayout` block, and how
-     `btnChatLayout` is bound/shown in `CallActivity.java` — that is the pattern to mirror)
-4. **Establish a working toolchain and build before writing more code:**
+2. **Read this document in full**, especially §6 (clock safety), §9 (do-not-touch),
+   §11 (known issues), and §14 (settled decisions — do not relitigate them).
+3. **THE TOP PRIORITY: run a real Gradle build.** This has now been deferred for THREE
+   sessions and is the single largest risk. The entire `call/watch/` package plus the
+   Session 3 `CallActivity` edits have never been compiled.
    ```bash
-   ./gradlew :app:testDebugUnitTest      # must pass: 59 tests in call/watch (Session 1)
-   ./gradlew :app:assembleDebug          # must pass — first-ever compile of the watch/ package
-   node scripts/check-watch-together.js  # fast structural smoke check (Session 1 files only)
+   ./gradlew :app:testDebugUnitTest      # expect ~59 call/watch unit tests (Sessions 1)
+   ./gradlew :app:assembleDebug          # first-ever compile of the watch/ package + wiring
+   node scripts/check-watch-together.js  # fast structural smoke check (now 17 checks)
    ```
-   If the JDK/Gradle is missing again, say so explicitly and rely on
-   `scripts/check-watch-together.js`, but **do not report the build as verified.** This has
-   now been deferred for two sessions in a row — treat it as the top risk, not a formality.
-5. **Fix any compile errors in `app/src/main/java/com/duoshield/app/call/watch/` first**,
-   including the two new Session 2 files. That whole package has never been compiled.
-6. **Then do Remaining Work items 7–9** (extend the checker, wire `CallActivity`, add the
-   manifest entry) — that is the next coherent batch, and it is what makes the feature
-   reachable from the UI for the first time.
-7. After that, item 10 (heartbeat) and item 11 (invite/awareness) are the next batch.
+   If JDK/Gradle is still missing, **say so explicitly and do NOT report the build as
+   verified** — fall back to `node scripts/check-watch-together.js` only.
+4. **Fix any compile errors** revealed by the build, in `call/watch/` and in the
+   `CallActivity` wiring. Likely first suspects if it fails: the `WatchTogetherRepository`
+   constructor now needs a `Context` (does anything construct it without one?), and
+   `WebView`/`JavascriptInterface`/`SystemClock` imports in the player/Activity.
+5. **On-device / emulator click-through** (now possible for the first time): from a video
+   call, tap the Watch Together control, paste a YouTube link, and verify start / play /
+   pause / seek / rate / rejoin-after-background / stop / call-end cleanup, AND that call
+   audio+video and in-call chat still work throughout. See §12 item 13.
+6. **Then the optional polish batch:** §12 item 10 (heartbeat writer, at most one write per
+   `HEARTBEAT_INTERVAL_MS` while playing) and item 11 (invite/awareness prompt — use a
+   one-shot `fetchState`, do NOT add a second always-on listener in `CallActivity`).
+7. **Run the Firestore rules tests** where Java is available (§12 item 12).
 8. Do **not** modify `CallManager.java`. Do **not** add a WebRTC data channel. Do **not**
-   restructure the in-call chat. Do **not** redo the repository audit or rework WebRTC —
-   both are explicitly out of scope again for this feature.
+   restructure the in-call chat. Do **not** redo the repository audit or rework WebRTC.
 9. After each batch: re-run whatever build/validation is available, then **update §7, §8,
-   §10, §11, §12, and §15 of this document** to reflect what is actually true — not what was
-   planned.
+   §10, §11, §12, and §15 of this document** to reflect what is actually true.
+
+### Copy-paste prompt for the next session
+
+> Continue the DuoShield Watch Together implementation. This is a NEW AI session. Read
+> `docs/watch-together/IMPLEMENTATION_STATE.md` first, then verify the actual code.
+> The feature is now wired end-to-end in code (Session 3): `CallActivity` binds and
+> launches `WatchTogetherActivity`, and the manifest entry exists. It is NOT compiler-
+> verified — no JDK/Gradle has been available in three sessions.
+> **CURRENT GOAL:** (1) establish a JDK/Gradle toolchain and run
+> `./gradlew :app:testDebugUnitTest :app:assembleDebug`; fix any compile errors in
+> `app/src/main/java/com/duoshield/app/call/watch/` and the `CallActivity` wiring first.
+> (2) If a device/emulator is available, click through start/play/pause/seek/rate/rejoin/
+> stop and confirm call audio+video and in-call chat still work. Then, only if time
+> remains, add the heartbeat writer (§12 item 10) and the invite/awareness prompt using a
+> one-shot `fetchState` (§12 item 11 — do NOT add a second always-on listener).
+> **RULES:** Do not modify `CallManager.java`, do not add a WebRTC data channel, do not
+> rework the in-call chat or redo the WebRTC/repository audit, do not refactor unrelated
+> code. Work in small verified batches, keep the build green, and update
+> `IMPLEMENTATION_STATE.md` after each task. If Gradle is unavailable, say so and rely on
+> `node scripts/check-watch-together.js` — do not claim the build is verified.
 
 ---
 
@@ -614,10 +664,21 @@ Settled. Do not reconsider without a concrete new reason.
   All other Session 2 changes are new files in the same new package as Session 1, which
   nothing pre-existing imports, so they cannot break the existing app even if they contained
   an error — same reasoning as Session 1's assessment, still valid.
-- **Runtime behavior:** **unchanged from before Session 1.** Watch Together is still not
-  reachable from any UI (see §11 item 4), so calls, in-call chat, and WebRTC behave exactly
-  as they did before this feature existed.
-- **Feature reachability:** none — the player/Activity layer is built but not wired into
-  `CallActivity`, and the manifest entry is missing.
-- **Next verification owed:** `./gradlew :app:testDebugUnitTest` and
-  `./gradlew :app:assembleDebug` (see §13 step 4) — now owed across two sessions.
+- **Working tree at end of Session 3** (branch `v0/xojow11866-8151-31108357`):
+  - Modified: `app/src/main/java/com/duoshield/app/call/CallActivity.java` (button field +
+    bind + reveal + click listener + `openWatchTogether()` + import — all additive),
+    `app/src/main/AndroidManifest.xml` (new `WatchTogetherActivity` `<activity>` entry),
+    `scripts/check-watch-together.js` (Session 2 files added to structural checks + new
+    integration-points section)
+  - New: none (all Session 3 work is edits to existing files)
+- **Runtime behavior:** Watch Together is now **reachable** from an active **video** call:
+  the control-bar button appears, and tapping it opens `WatchTogetherActivity`. Voice-only
+  calls are unaffected (the button stays `gone`, exactly like the chat button). Calls,
+  in-call chat, and WebRTC are otherwise unchanged — Session 3 only added to `CallActivity`.
+- **Feature reachability:** **wired end-to-end in code**, pending compiler + device proof.
+- **Build state:** still **NOT compiler-verified** — no JDK/Gradle in this container in any
+  of the three sessions. Static checker (17 checks) passes; `CallActivity` raw brace balance
+  164/164; all touched XML parses clean; `Theme.DuoShield.FullScreen` confirmed present.
+- **Next verification owed (top priority):** `./gradlew :app:testDebugUnitTest` and
+  `./gradlew :app:assembleDebug` (see §13) — now owed across THREE sessions — followed by a
+  two-device click-through.

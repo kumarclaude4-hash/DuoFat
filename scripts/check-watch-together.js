@@ -26,6 +26,8 @@ const FILES = [
   `${MAIN}/WatchTogetherState.java`,
   `${MAIN}/YouTubeUrlParser.java`,
   `${MAIN}/WatchTogetherRepository.java`,
+  `${MAIN}/WatchTogetherPlayerView.java`,
+  `${MAIN}/WatchTogetherActivity.java`,
   `${TEST}/WatchTogetherStateTest.java`,
   `${TEST}/YouTubeUrlParserTest.java`,
 ];
@@ -220,6 +222,89 @@ if (!/"watch"/.test(repo)) {
   fail('CallSignalRepository.deleteCallDoc does not sweep the "watch" subcollection');
 } else {
   pass('CallSignalRepository sweeps the "watch" subcollection');
+}
+
+// ── CallActivity ⇄ WatchTogetherActivity integration checks ──────────────────
+// These assert the feature is actually reachable from the call UI: the control-bar
+// button is declared in the layout, bound + revealed + launched in CallActivity,
+// the Activity declares the extras CallActivity passes, and the manifest declares
+// the Activity. Any one of these missing means the feature silently does nothing.
+
+function readFileOrFail(rel, label) {
+  const abs = path.join(ROOT, rel);
+  if (!fs.existsSync(abs)) {
+    fail(`${label} not found at ${rel}`);
+    return null;
+  }
+  return fs.readFileSync(abs, 'utf8');
+}
+
+const callLayout = readFileOrFail('app/src/main/res/layout/activity_call.xml', 'activity_call.xml');
+const callActivity = readFileOrFail(
+  'app/src/main/java/com/duoshield/app/call/CallActivity.java', 'CallActivity.java');
+const watchActivity = sources['WatchTogetherActivity.java'] || '';
+const manifest = readFileOrFail('app/src/main/AndroidManifest.xml', 'AndroidManifest.xml');
+const watchLayout = 'app/src/main/res/layout/activity_watch_together.xml';
+
+// 1. Control-bar button ids present in the call layout.
+if (callLayout) {
+  for (const id of ['@+id/btnWatchLayout', '@+id/btnWatch']) {
+    if (!callLayout.includes(id)) fail(`activity_call.xml missing id "${id}"`);
+  }
+  if (callLayout.includes('@+id/btnWatchLayout') && callLayout.includes('@+id/btnWatch')) {
+    pass('activity_call.xml declares btnWatchLayout + btnWatch');
+  }
+}
+
+// 2. CallActivity binds, reveals, listens on, and launches from the button.
+if (callActivity) {
+  const requirements = [
+    ['binds btnWatch', /findViewById\(R\.id\.btnWatch\)/],
+    ['binds btnWatchLayout', /findViewById\(R\.id\.btnWatchLayout\)/],
+    ['reveals btnWatchLayout', /btnWatchLayout[\s\S]{0,40}setVisibility\(View\.VISIBLE\)/],
+    ['sets a click listener on btnWatch', /btnWatch\.setOnClickListener/],
+    ['defines openWatchTogether()', /void\s+openWatchTogether\s*\(/],
+    ['launches WatchTogetherActivity', /new\s+Intent\(\s*this\s*,\s*WatchTogetherActivity\.class\s*\)/],
+    ['imports WatchTogetherActivity', /import\s+com\.duoshield\.app\.call\.watch\.WatchTogetherActivity;/],
+  ];
+  let ok = true;
+  for (const [label, re] of requirements) {
+    if (!re.test(callActivity)) { fail(`CallActivity.java does not ${label}`); ok = false; }
+  }
+  if (ok) pass('CallActivity binds, reveals, and launches Watch Together');
+
+  // Extras passed by CallActivity must match constants declared on the Activity.
+  const passedExtras = callActivity.match(/WatchTogetherActivity\.(EXTRA_[A-Z_]+)/g) || [];
+  const uniqueExtras = [...new Set(passedExtras.map((s) => s.split('.')[1]))];
+  for (const extra of uniqueExtras) {
+    const re = new RegExp(`String\\s+${extra}\\s*=`);
+    if (!re.test(watchActivity)) {
+      fail(`CallActivity passes WatchTogetherActivity.${extra} but the Activity does not declare it`);
+    }
+  }
+  if (uniqueExtras.length && uniqueExtras.every((e) => new RegExp(`String\\s+${e}\\s*=`).test(watchActivity))) {
+    pass(`WatchTogetherActivity declares all extras CallActivity passes (${uniqueExtras.join(', ')})`);
+  }
+}
+
+// 3. Manifest declares the Activity as a non-exported component.
+if (manifest) {
+  const activityBlock =
+    (manifest.match(/<activity[^>]*\.call\.watch\.WatchTogetherActivity[\s\S]*?\/>/) || [])[0];
+  if (!activityBlock) {
+    fail('AndroidManifest.xml does not declare .call.watch.WatchTogetherActivity');
+  } else if (!/android:exported="false"/.test(activityBlock)) {
+    fail('WatchTogetherActivity manifest entry is not exported="false"');
+  } else {
+    pass('AndroidManifest.xml declares WatchTogetherActivity (exported=false)');
+  }
+}
+
+// 4. The Watch Together screen layout exists.
+if (!fs.existsSync(path.join(ROOT, watchLayout))) {
+  fail(`${watchLayout} not found`);
+} else {
+  pass('activity_watch_together.xml exists');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
