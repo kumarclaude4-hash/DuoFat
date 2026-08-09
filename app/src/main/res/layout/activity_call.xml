@@ -337,6 +337,28 @@
                     android:contentDescription="Chat" />
             </LinearLayout>
 
+            <!-- Watch Together (video calls only) -->
+            <LinearLayout
+                android:id="@+id/btnWatchLayout"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:visibility="gone">
+                <ImageView
+                    android:id="@+id/btnWatch"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:src="@drawable/ic_watch_together"
+                    android:padding="14dp"
+                    android:background="@drawable/bg_call_btn_circle"
+                    app:tint="#FFFFFF"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Watch together" />
+            </LinearLayout>
+
             <!-- End call -->
             <LinearLayout
                 android:layout_width="0dp"

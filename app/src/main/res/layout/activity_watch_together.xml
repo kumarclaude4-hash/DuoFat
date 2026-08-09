@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ds_background">
+
+    <!-- ── Header row ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <ImageView
+            android:id="@+id/btnMinimizeWatch"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="12dp"
+            android:src="@drawable/ic_arrow_down"
+            app:tint="#FFFFFF"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Back to call" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Watch Together"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center" />
+
+        <ImageView
+            android:id="@+id/btnCloseWatch"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:padding="12dp"
+            android:src="@drawable/ic_close"
+            app:tint="#FFFFFF"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="End watch together" />
+    </LinearLayout>
+
+    <!-- ── Ephemeral notice banner ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="8dp"
+        android:padding="12dp"
+        android:background="@drawable/bg_incall_notice">
+
+        <ImageView
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:src="@drawable/ic_lock"
+            app:tint="#9A81FF"
+            android:importantForAccessibility="no" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="The video plays on each device directly from YouTube. This session ends when the call ends."
+            android:textColor="#BBBBBB"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- ── Player surface ── -->
+    <FrameLayout
+        android:id="@+id/playerContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="#000000">
+
+        <com.duoshield.app.call.watch.WatchTogetherPlayerView
+            android:id="@+id/watchPlayer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Shown before a session starts and after it ends -->
+        <TextView
+            android:id="@+id/tvPlayerPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="24dp"
+            android:text="Paste a YouTube link below to start watching together."
+            android:textColor="#CCCCCC"
+            android:textSize="15sp" />
+    </FrameLayout>
+
+    <!-- ── Who is watching ── -->
+    <TextView
+        android:id="@+id/tvWatchStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textColor="@color/ds_text_caption"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:paddingTop="8dp"
+        android:paddingBottom="4dp" />
+
+    <!-- ── Playback controls (visible during an active session) ── -->
+    <LinearLayout
+        android:id="@+id/watchControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnSeekBack"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:minWidth="64dp"
+            android:text="-10s"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:contentDescription="Rewind 10 seconds" />
+
+        <ImageView
+            android:id="@+id/btnPlayPause"
+            android:layout_width="58dp"
+            android:layout_height="58dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:src="@drawable/ic_play_audio"
+            android:padding="14dp"
+            android:background="@drawable/bg_call_btn_circle"
+            app:tint="#FFFFFF"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Play or pause" />
+
+        <Button
+            android:id="@+id/btnSeekForward"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:minWidth="64dp"
+            android:text="+10s"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:contentDescription="Forward 10 seconds" />
+    </LinearLayout>
+
+    <!-- ── Start / change video input row ── -->
+    <LinearLayout
+        android:id="@+id/watchStartRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="20dp">
+
+        <EditText
+            android:id="@+id/etWatchUrl"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/bg_incall_input"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:hint="Paste a YouTube link..."
+            android:textColorHint="@color/ds_text_tertiary"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:imeOptions="actionGo"
+            android:autofillHints="url"
+            android:gravity="center_vertical" />
+
+        <Button
+            android:id="@+id/btnStartWatch"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:minWidth="88dp"
+            android:background="@drawable/bg_fab"
+            android:text="Watch"
+            android:textColor="#FFFFFF"
+            android:textAllCaps="false"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+</LinearLayout>

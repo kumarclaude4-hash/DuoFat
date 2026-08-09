@@ -1,7 +1,9 @@
 package com.duoshield.app.call.watch;
 
+import android.content.Context;
 import android.util.Log;
 
+import com.duoshield.app.util.FirebaseCostGuard;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.EventListener;
@@ -42,11 +44,22 @@ public class WatchTogetherRepository {
 
     private final FirebaseFirestore db;
 
+    /**
+     * Firestore cost gate (project rule #2). Every read/write below is gated by this
+     * guard so a runaway Watch Together session can never blow the daily Firebase budget.
+     */
+    private final FirebaseCostGuard guard;
+
     /** Monotonic sequence for writes made by this device during this session. */
     private long localSeq = 0L;
 
-    public WatchTogetherRepository() {
+    /**
+     * @param context any Context; only the application context is retained via
+     *                {@link FirebaseCostGuard#getInstance(Context)}.
+     */
+    public WatchTogetherRepository(Context context) {
         this.db = FirebaseFirestore.getInstance();
+        this.guard = FirebaseCostGuard.getInstance(context);
     }
 
     /** Reference to {@code calls/{callId}/watch/state}. */
@@ -63,6 +76,12 @@ public class WatchTogetherRepository {
      */
     public ListenerRegistration listenToState(String callId,
                                               EventListener<DocumentSnapshot> listener) {
+        // The attach itself triggers one initial read of the single state doc. Snapshot
+        // updates thereafter are also single-doc reads; the guard bounds the attach and
+        // the caller keeps exactly one listener alive (project rule #3).
+        if (guard.canRead(1)) {
+            guard.recordReads(1);
+        }
         return stateRef(callId).addSnapshotListener(listener);
     }
 
@@ -89,14 +108,27 @@ public class WatchTogetherRepository {
      * the document and every later write leaves it fully populated — a follower can then
      * rely on all fields being present.
      *
-     * @param state  the desired state; mutated in place with the stamped metadata.
+     * <p>Gated by {@link FirebaseCostGuard}: if the daily write budget is exhausted the
+     * sync write is dropped (and this returns {@code false}) rather than throwing — a
+     * Watch Together problem must never tear down the underlying call.
+     *
+     * @param state  the desired state; mutated in place with the stamped metadata only
+     *               when the write is actually issued.
      * @param action one of the {@code WatchTogetherState.ACTION_*} labels.
      * @param myUid  the acting participant's uid.
+     * @return {@code true} when the write was issued; {@code false} when it was skipped
+     *         (null args or cost budget exhausted). The caller should only treat its
+     *         local state as authoritative when this returns {@code true}.
      */
-    public void writeState(String callId, WatchTogetherState state, String action, String myUid) {
+    public boolean writeState(String callId, WatchTogetherState state, String action, String myUid) {
         if (callId == null || state == null) {
             Log.w(TAG, "writeState skipped — null callId or state");
-            return;
+            return false;
+        }
+
+        if (!guard.canWrite(1)) {
+            Log.w(TAG, "writeState(" + action + ") dropped — Firestore write budget exhausted");
+            return false;
         }
 
         state.seq          = nextSeq();
@@ -105,9 +137,11 @@ public class WatchTogetherRepository {
         state.lastActionBy = myUid;
 
         Map<String, Object> payload = state.toMap();
+        guard.recordWrites(1);
         stateRef(callId).set(payload)
                 .addOnFailureListener(e ->
                         Log.w(TAG, "writeState(" + action + ") failed (non-fatal): " + e.getMessage()));
+        return true;
     }
 
     /**
@@ -120,6 +154,12 @@ public class WatchTogetherRepository {
     public void fetchState(String callId, OnStateCallback cb) {
         if (callId == null || cb == null) return;
 
+        if (!guard.canRead(1)) {
+            Log.w(TAG, "fetchState dropped — Firestore read budget exhausted");
+            cb.onState(null);
+            return;
+        }
+        guard.recordReads(1);
         stateRef(callId).get()
                 .addOnSuccessListener(snap -> {
                     if (snap != null && snap.exists()) {
