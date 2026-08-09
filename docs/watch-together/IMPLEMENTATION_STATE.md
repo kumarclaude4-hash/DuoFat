@@ -254,6 +254,21 @@ participants to write, and there is a rules test asserting the non-host can paus
 
 ## 7. Current Implementation Status
 
+> **SESSION 5 HEADLINE — the feature is now COMPILER-VERIFIED.** A real JDK 17 + Android
+> SDK 34 toolchain was provisioned in this container and the project was built for the
+> first time ever. `:app:compileDebugJavaWithJavac` and `:app:assembleDebug` both
+> **SUCCEED** and produce real APKs. `:app:lintDebug` **SUCCEEDS**. All 58 Watch Together
+> JVM unit tests **PASS**. The Firestore rules tests **were actually executed** against the
+> real emulator — **151/151 pass, including all 7 `watch/state` tests**. The phrase
+> "not compiler-verified", which appeared throughout Sessions 1–4, is now obsolete and has
+> been removed from the rows below.
+>
+> Two caveats, stated precisely: (1) **device/emulator verification is still NOT done** —
+> it is hard-blocked, no `/dev/kvm` in this container (§10). (2) `:app:testDebugUnitTest`
+> as a *whole task* still FAILS, on **13 pre-existing `BackupRoundTripTest` failures that
+> have nothing to do with Watch Together** (root cause and proof of pre-existence in §11
+> item 8). No Watch Together test fails.
+
 | Component | Status | Notes |
 |---|---|---|
 | `WatchTogetherState` (model + sync math) | **COMPLETE** | Fields, `toMap`/`fromMap`, `projectedPositionMs`, `shouldSeek`, `shouldApply`, `isPlayable`, `copy`. Defensive parsing. |
@@ -261,17 +276,17 @@ participants to write, and there is a rules test asserting the non-host can paus
 | `WatchTogetherRepository` (Firestore transport) | **COMPLETE** | `stateRef`, `listenToState`, `writeState`, `fetchState`, `endSession`, `nextSeq`/`observeRemoteSeq`. **Session 2: now takes a `Context` and calls `FirebaseCostGuard`** — `listenToState` and `fetchState` gate/record one read; `writeState` gates/records one write and returns `boolean` (false = dropped, budget exhausted or null args) instead of `void`. |
 | Firestore rules for `/watch/{docId}` | **COMPLETE** | Participant-gated, mirrors the ICE/chat rules. |
 | Ephemeral sweep on call end | **COMPLETE** | `"watch"` added to `deleteCallDoc`'s subcollection list. |
-| Unit tests — sync model | **COMPLETE** | `WatchTogetherStateTest`, 26 tests. |
-| Unit tests — URL parser | **COMPLETE** | `YouTubeUrlParserTest`, 33 tests. |
-| Firestore rules tests for `watch` | **COMPLETE** (written, not executed — see §10) | 7 tests added to `rules.test.js`. |
+| Unit tests — sync model | **COMPLETE + PASSING** | `WatchTogetherStateTest` — **executed Session 5: 26 tests, 26 passed, 0 failed.** |
+| Unit tests — URL parser | **COMPLETE + PASSING** | `YouTubeUrlParserTest` — **executed Session 5: 32 tests, 32 passed, 0 failed.** (Sessions 1–4 documented "33 tests"; the real count reported by the JUnit XML is **32**. The doc was wrong, the tests are fine. Total Watch Together unit tests = **58**.) |
+| Firestore rules tests for `watch` | **COMPLETE + PASSING (executed Session 5)** | 7 tests in `rules.test.js`. **Actually run against the real Firestore emulator this session: all 7 pass** (`caller can start`, `callee can start`, `callee can read caller's state`, `either participant can control playback`, `outsider cannot read`, `outsider cannot hijack`, `unauthenticated denied`). Whole suite: 151/151. |
 | Static validation script | **COMPLETE (Session 3: now covers the player/Activity + UI wiring)** | `scripts/check-watch-together.js` now structurally checks `WatchTogetherPlayerView.java` and `WatchTogetherActivity.java` (tokenizer brace/paren balance + package), and adds an integration-points section: control-bar ids present in `activity_call.xml`; `CallActivity` binds/reveals/listens/launches + imports the Activity; extras passed match constants declared on the Activity; manifest declares `WatchTogetherActivity` as `exported="false"`; `activity_watch_together.xml` exists. **Session 4** added four safety-invariant checks: exactly-one snapshot listener (attach + guard + ≥2 remove sites), single-writer heartbeat (`lastActionBy` guard + `ACTION_HEARTBEAT`), repository cost-guarding of every read/write, and CallActivity awareness being one-shot `fetchState` with no listener and no writes. **All 21 checks pass.** |
-| **`WatchTogetherPlayerView`** (WebView host/bridge, `app/.../call/watch/WatchTogetherPlayerView.java`) | **COMPLETE, not compiler-verified** | Wraps a `WebView` that loads `file:///android_asset/watch_together/player.html` (Session 1 asset). `@JavascriptInterface` bridge (`onReady`, `onStateChange`, `onPlaybackRateChange`, `onCurrentTime`, `onPlayerError`) posts back to the main thread via a `Handler`; Java→JS calls (`loadVideo`, `play`, `pause`, `seekTo`, `setPlaybackRate`) go through `evaluateJavascript`. JS execution is scoped to this WebView only; `setAllowFileAccess`/universal access left at safe defaults. Exposes a `Listener` callback interface consumed by `WatchTogetherActivity`. |
-| **`WatchTogetherActivity`** (`app/.../call/watch/WatchTogetherActivity.java`) | **COMPLETE, not compiler-verified** | Extends `AppCompatActivity` (documented rationale comment repeating the `InCallChatActivity` precedent, per rule §9.1). Reads `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`. Owns exactly one `listenToState` `ListenerRegistration`, removed in `onDestroy()`. Implements the full sync protocol from §6: `shouldApply` → `observeRemoteSeq` → local `SystemClock.elapsedRealtime()` receipt stamp → `projectedPositionMs` → `shouldSeek` drift gating. Uses an `applyingRemote` flag to suppress write-back feedback loops when reconciling a remote snapshot. Validates both the locally-parsed and the remotely-received video ID through `YouTubeUrlParser`/`isValidVideoId` before ever loading it. **Heartbeat writer IS implemented** (`maybeWriteHeartbeat`, single-writer) — see the Heartbeat writer row below. |
+| **`WatchTogetherPlayerView`** (WebView host/bridge, `app/.../call/watch/WatchTogetherPlayerView.java`) | **COMPLETE, COMPILES (Session 5)** | Wraps a `WebView` that loads `file:///android_asset/watch_together/player.html` (Session 1 asset). `@JavascriptInterface` bridge (`onReady`, `onStateChange`, `onPlaybackRateChange`, `onCurrentTime`, `onPlayerError`) posts back to the main thread via a `Handler`; Java→JS calls (`loadVideo`, `play`, `pause`, `seekTo`, `setPlaybackRate`) go through `evaluateJavascript`. JS execution is scoped to this WebView only; `setAllowFileAccess`/universal access left at safe defaults. Exposes a `Listener` callback interface consumed by `WatchTogetherActivity`. |
+| **`WatchTogetherActivity`** (`app/.../call/watch/WatchTogetherActivity.java`) | **COMPLETE, COMPILES (Session 5)** | Extends `AppCompatActivity` (documented rationale comment repeating the `InCallChatActivity` precedent, per rule §9.1). Reads `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`. Owns exactly one `listenToState` `ListenerRegistration`, removed in `onDestroy()`. Implements the full sync protocol from §6: `shouldApply` → `observeRemoteSeq` → local `SystemClock.elapsedRealtime()` receipt stamp → `projectedPositionMs` → `shouldSeek` drift gating. Uses an `applyingRemote` flag to suppress write-back feedback loops when reconciling a remote snapshot. Validates both the locally-parsed and the remotely-received video ID through `YouTubeUrlParser`/`isValidVideoId` before ever loading it. **Heartbeat writer IS implemented** (`maybeWriteHeartbeat`, single-writer) — see the Heartbeat writer row below. |
 | **`activity_watch_together.xml`** | **COMPLETE** | URL input + Start row, `FrameLayout` player container hosting the `WatchTogetherPlayerView`, play/pause/seek-back/seek-forward controls, status text, minimize/close buttons. Reuses existing drawables (`ic_arrow_down`, `ic_close`, `ic_play_audio`/`ic_pause_audio`, `bg_incall_input`, `bg_call_btn_circle`) — no new drawables except the control-bar icon below. |
 | **Watch Together button in the call control bar** | **COMPLETE (Session 3)** | `activity_call.xml` has the `btnWatchLayout`/`btnWatch` block (mirrors `btnChatLayout`/`btnChat`), icon `ic_watch_together.xml`. It is `visibility="gone"` by default and `CallActivity` now reveals it (`View.VISIBLE`) in the `isVideo` block right after `btnChatLayout`, and attaches a click listener. |
-| **`CallActivity` wiring** | **COMPLETE (Session 3), not compiler-verified** | `CallActivity.java`: imports `com.duoshield.app.call.watch.WatchTogetherActivity`; declares `btnWatch`/`btnWatchLayout` fields; binds both via `findViewById`; reveals `btnWatchLayout` for video calls; `btnWatch.setOnClickListener(v -> openWatchTogether())`; new `openWatchTogether()` mirrors `openInCallChat()` (guards on `callId`/`myUid`, then launches `WatchTogetherActivity` with `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`). Raw brace balance verified (164/164). |
+| **`CallActivity` wiring** | **COMPLETE (Session 3), COMPILES (Session 5)** | `CallActivity.java`: imports `com.duoshield.app.call.watch.WatchTogetherActivity`; declares `btnWatch`/`btnWatchLayout` fields; binds both via `findViewById`; reveals `btnWatchLayout` for video calls; `btnWatch.setOnClickListener(v -> openWatchTogether())`; new `openWatchTogether()` mirrors `openInCallChat()` (guards on `callId`/`myUid`, then launches `WatchTogetherActivity` with `EXTRA_CALL_ID`/`EXTRA_MY_UID`/`EXTRA_PARTNER_NAME`). Raw brace balance verified (164/164). |
 | **Session-invite / "partner started watching" awareness** | **PARTIAL (Session 4)** | `CallActivity.refreshWatchTogetherAwareness()` does a **one-shot** `fetchState` when the watch button is revealed; if a session is already active it sets the button's content description to "Rejoin Watch Together" and `setSelected(true)` (semantic-only cue, no new drawables, no second listener, no writes). This covers the "I can tell a session is live and tapping rejoins" case. **NOT done:** an active push/notification/toast that alerts B in real time the instant A starts a session while B is on the call screen but has not opened Watch Together — deliberately deferred to avoid a second always-on listener on `CallActivity`. |
-| **Heartbeat writer** | **COMPLETE, not compiler-verified** | `WatchTogetherActivity.maybeWriteHeartbeat()` runs on a `Handler` posted every `HEARTBEAT_INTERVAL_MS` (started in `onStart`, cancelled in `onStop`/`onDestroy`). Single-writer: only the participant matching `appliedState.lastActionBy` writes, and only while `playing`, using `ACTION_HEARTBEAT` through the budget-gated `writeState`. This bounds write cost to at most one per interval and never lets both devices write. |
+| **Heartbeat writer** | **COMPLETE, COMPILES (Session 5)** | `WatchTogetherActivity.maybeWriteHeartbeat()` runs on a `Handler` posted every `HEARTBEAT_INTERVAL_MS` (started in `onStart`, cancelled in `onStop`/`onDestroy`). Single-writer: only the participant matching `appliedState.lastActionBy` writes, and only while `playing`, using `ACTION_HEARTBEAT` through the budget-gated `writeState`. This bounds write cost to at most one per interval and never lets both devices write. |
 | **FirebaseCostGuard integration** | **COMPLETE** | See `WatchTogetherRepository` row above. Mandatory-before-merge item from Session 1 is now resolved. |
 | **Manifest entry for the new Activity** | **COMPLETE (Session 3)** | `WatchTogetherActivity` is declared in `AndroidManifest.xml` directly after `InCallChatActivity`, with identical attributes: `exported="false"`, `screenOrientation="portrait"`, `windowSoftInputMode="adjustResize"`, `theme="@style/Theme.DuoShield.FullScreen"` (theme verified to exist in `themes.xml`). |
 
@@ -349,6 +364,26 @@ Session 4 touched **nothing** on any do-not-touch list. The only pre-existing pr
 file changed is `CallActivity.java`, again by additive insertion. `WatchTogetherActivity.java`
 (which contains the merged heartbeat writer) was **not** modified this session — only read
 and validated.
+
+### Modified files, Session 5 (build verification — exactly ONE source file changed)
+
+Session 5 was a **verification** session, not a feature session. No Watch Together source
+file needed any change: the entire `call/watch/` package compiled correctly on its first
+ever compile. Exactly one file was edited, and it was **not** a Watch Together file.
+
+| File | Change |
+|---|---|
+| `app/src/main/java/com/duoshield/app/BaseActivity.java` | **Fixed a hard compile error that was blocking the entire build** — and therefore blocking all Watch Together verification. `BaseActivity` called `FcmUnregisterWorker.enqueue(getApplicationContext(), uidBeforeSignOut)` (2 args), but `FcmUnregisterWorker` declares `enqueue(Context)` (1 arg), so `javac` failed with *"method enqueue in class FcmUnregisterWorker cannot be applied to given types"*. Removed the now-pointless `userBeforeSignOut`/`uidBeforeSignOut` capture (the worker uses `FirebaseMessaging.deleteToken()`, which needs neither a uid nor a bearer token) and replaced the guard with a plain `FirebaseAuth.getInstance().getCurrentUser() != null` check so the de-registration is still only scheduled when a real session existed. Net −12/+7 lines. **This bug was pre-existing and unrelated to Watch Together** — see §11 item 7 for the proof. |
+
+**No files were created or deleted in Session 5.** `scripts/check-watch-together.js` was
+re-run but **not modified** — all 21 checks already passed unchanged, so there was nothing
+to fix and no check was weakened.
+
+Untracked, gitignored build scaffolding was generated locally to make the build possible
+(`local.properties`, `app/google-services.json` from `app/google-services.json.template`,
+`app/build/`). All three are matched by `.gitignore` (verified with `git check-ignore -v`),
+so **`git status --porcelain` is empty apart from the one source edit above.** Nothing
+secret or environment-specific was committed.
 
 ---
 
