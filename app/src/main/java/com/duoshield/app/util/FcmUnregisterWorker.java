@@ -5,7 +5,6 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.work.BackoffPolicy;
-import androidx.work.Data;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
 import androidx.work.Worker;
@@ -41,11 +40,21 @@ import java.util.concurrent.TimeUnit;
  * and is valid for up to one hour). {@link FirebaseMessaging#deleteToken()} does
  * not require any caller-supplied auth — the FCM SDK manages its own registration
  * independently of the Firebase Auth session — so no credential is stored at all.
+ *
+ * <h3>No uid anywhere in this job (S06-H2)</h3>
+ * {@code deleteToken()} operates on this device's own FCM registration and needs no
+ * uid to do it, so none is accepted, stored in {@link Data}, or used as a WorkManager
+ * tag. WorkManager persists both a job's input {@link Data} and its tags in its own
+ * SQLite database ({@code androidx.work.workdb}), and neither is touched by
+ * {@code WipeHelper.eraseLocalData()} — that database lives outside the app's own
+ * encrypted prefs/SQLCipher stores this app controls directly. A tag like
+ * {@code "fcm_unregister_<uid>"} (the previous design) would sit there in plaintext
+ * indefinitely, including through a duress wipe: exactly the kind of forensic residue
+ * a "the phone was wiped, nothing to find" defense depends on not existing.
  */
 public class FcmUnregisterWorker extends Worker {
 
-    private static final String TAG      = "FcmUnregisterWorker";
-    private static final String DATA_UID = "uid";
+    private static final String TAG = "FcmUnregisterWorker";
 
     /** Jitter window: 5-40 seconds after the sign-out that scheduled this job. */
     private static final long JITTER_MIN_MS   = 5_000L;
@@ -56,25 +65,16 @@ public class FcmUnregisterWorker extends Worker {
     }
 
     /**
-     * Schedules a jittered FCM token de-registration for {@code uid}.
-     * No bearer token required — {@link FirebaseMessaging#deleteToken()} handles
-     * its own authentication via the FCM SDK's device registration state.
+     * Schedules a jittered FCM token de-registration for the device this call runs on.
+     * No bearer token, no uid — {@link FirebaseMessaging#deleteToken()} handles its own
+     * authentication via the FCM SDK's device registration state, and needs to know
+     * nothing about which account was signed out.
      */
-    public static void enqueue(Context ctx, String uid) {
-        if (uid == null || uid.isEmpty()) {
-            Log.w(TAG, "enqueue skipped — missing uid.");
-            return;
-        }
+    public static void enqueue(Context ctx) {
         long jitterMs = JITTER_MIN_MS + (long) (new SecureRandom().nextDouble() * JITTER_RANGE_MS);
-
-        Data input = new Data.Builder()
-                .putString(DATA_UID, uid)
-                .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(FcmUnregisterWorker.class)
                 .setInitialDelay(jitterMs, TimeUnit.MILLISECONDS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .setInputData(input)
-                .addTag("fcm_unregister_" + uid)
                 .build();
         WorkManager.getInstance(ctx.getApplicationContext()).enqueue(request);
     }
@@ -82,15 +82,12 @@ public class FcmUnregisterWorker extends Worker {
     @NonNull
     @Override
     public Result doWork() {
-        String uid = getInputData().getString(DATA_UID);
-        if (uid == null || uid.isEmpty()) return Result.success();
-
         try {
             // deleteToken() invalidates this device's FCM registration token at the
             // FCM protocol level — no Firebase Auth session required. The push server
             // will naturally stop delivering to a deleted token on its next attempt.
             Tasks.await(FirebaseMessaging.getInstance().deleteToken(), 30, TimeUnit.SECONDS);
-            Log.d(TAG, "FCM token deleted for signed-out account (" + uid + ").");
+            Log.d(TAG, "FCM token deleted for this device.");
             return Result.success();
         } catch (Exception e) {
             Log.w(TAG, "FCM token delete failed — will retry: " + e.getMessage());
