@@ -417,7 +417,7 @@ public class WatchTogetherActivity extends AppCompatActivity
         finish();
     }
 
-    // ── UI state ───────────────────────────────────��────────────────────────
+    // ── UI state ────────────────────────────────────────────────────────────
 
     private void showActiveUi() {
         if (tvPlaceholder != null) tvPlaceholder.setVisibility(View.GONE);
