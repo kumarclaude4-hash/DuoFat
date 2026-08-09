@@ -1,9 +1,24 @@
 # Session 06 — Duress & Account Locks
 
-_Audit session 06 of the DuoShield security review. Scope frozen at the code state on branch
-`course-curriculum-management`._
+_Audit session 06 of the DuoShield security review. Original pass scope frozen at the code state on
+branch `course-curriculum-management`._
 
-**Severity counts: 0 Critical / 3 High / 3 Medium / 4 Low / 3 Informational**
+**Severity counts: 2 Critical / 5 High / 6 Medium / 6 Low / 4 Informational**
+
+> **Second pass (addendum, §7-§8).** A follow-up review found ten additional findings —
+> `S06-C1`, `S06-C2`, `S06-H4`, `S06-H5`, `S06-M4`, `S06-M5`, `S06-M6`, `S06-L5`, `S06-L6`,
+> `S06-I4` — and re-verified that **every** finding from the first pass is still unfixed.
+> `S06-C2` supersedes `S06-H1` in scope: the cloud backup is reachable with the seed phrase alone,
+> so the lock's single enforcement point is bypassed rather than defeated. Three spot checks:
+> `grep -n accountLock server/index.js` shows hits only in `/duress-lock`, the admin list, and
+> admin unfreeze — never in `/mintToken` (**S06-H1 open**); `grep -rn pruneWork app/src/main/java`
+> matches only `SelfDestructScheduler`'s own unrelated tag (**S06-H2 open**);
+> `firestore.indexes.json` has no TTL policy on `expiresAt` (**S06-M2 open**).
+>
+> **Line-number drift.** `DuressManager.java` has since grown to 673 lines and gained the slot-B
+> armed flag, the constant-work decoy, and the neutralised `session_migration_pending` name. The
+> first pass's citations (`:56-114`, `:154-325`, …) no longer resolve. Addendum findings cite
+> **current** line numbers; §3 citations should be read as historical.
 
 ---
 
@@ -46,14 +61,28 @@ network reachability.
 | `accountLock` cannot be read/written cross-account | ✅ **Correct** — rules + tests |
 | `_duressNonces` / `waitlist` unreachable from clients | ✅ **Correct** |
 | **The lock actually prevents a restore** | ❌ **NO** — client-side only, post-auth (S06-H1) |
+| **The lock protects the cloud backup** | ❌ **NO** — `backups/` is owner-only, no lock check (S06-C2) |
+| **A coerced seed cannot reconstruct the data** | ❌ **NO** — backup key is derived from the seed alone (S06-C2) |
 | **The lock is set when the attacker controls the network** | ❌ **NO** — silent no-op offline (S06-H3) |
 | **The wipe leaves no evidence a duress code was entered** | ❌ **NO** — WorkManager residue (S06-H2) |
 | Eligibility is a server-enforced boundary | ❌ **NO** — cached client bool only (S06-M1) |
+| **The device presents as unconfigured after the wipe** | ❌ **NO** — device gate survives and rejects the duress PIN (S06-C1) |
+| **Arming a duress code reliably arms it** | ❌ **NO** — silent no-op on length mismatch (S06-H4) |
+| **The duress code cannot be located without triggering it** | ❌ **NO** — unthrottled oracle in PIN settings (S06-H5) |
+| The user can verify their duress code works | ❌ **NO** — untestable; only test is destructive (S06-M4) |
+| Duress protection survives being used once | ❌ **NO** — one-shot, no re-arm path (S06-M6) |
+| The wipe is atomic / resumable | ❌ **NO** — ~30 s window, no resume (S06-M5) |
 
 The cryptographic and transactional plumbing built in the previous hardening pass is sound. The
 **enforcement** of what that plumbing produces is not: the lock is an advisory client-side check,
 and the two guarantees the feature exists to provide can each be defeated without touching the
 server.
+
+The addendum sharpens that conclusion. `S06-C1` and `S06-H5` need **no** tooling at all — no root,
+no forensic image, no patched APK, no network control. Reopening the app after a duress wipe, or
+walking the PIN keyspace through the app's own settings screen, is sufficient. Deniability is
+currently defended by naming discipline and PBKDF2 timing parity — both genuinely well built —
+while the feature's observable behaviour contradicts it outright.
 
 ---
 
@@ -513,6 +542,30 @@ Verified against the code, not just the comments — worth recording so a later 
   attacker-controlled connectivity). The feature should be described as **not currently providing
   either of its two advertised guarantees**, notwithstanding that its cryptographic and
   transactional internals are well built.
+- **S06-C2 is the finding to lead with.** It is the only one where the adversary needs *nothing*
+  but the coerced seed phrase — no device, no app, no APK, no root, no network control — and it
+  defeats the feature's primary advertised guarantee outright. It also reframes S06-H1: the issue
+  is not merely that `/mintToken` skips the lock, but that `backups/{uid}` (the complete dataset,
+  encrypted under a key derived solely from the seed) has no lock check in the rules at any level.
+  For Session 07+, treat "does this collection consult `accountLock`?" as a standing question for
+  every new collection, since the answer is currently *no* for all of them.
+- **Addendum raises that to six independent defeats.** S06-C1 (device gate rejects the duress PIN
+  after the wipe) and S06-H5 (PIN-settings oracle locates the duress code) join the three above,
+  and S06-H4 means the code may never have been armed in the first place. Rank S06-C1 and S06-H5
+  **above** all first-pass findings in the synthesis: they require no root, no forensic image, no
+  patched APK, and no network control — only the phone and patience. S06-H2's `workdb` residue, by
+  contrast, needs a forensic image, so it should be ranked *below* them despite equal nominal
+  severity. Sort the duress findings by attacker capability required, not by CVSS-style severity.
+- **S06-H4 and S06-M4 are one story: silent failure.** Both produce a user who believes they are
+  protected and is not. Together with S06-H3's silent offline failure, "fails silently and cannot
+  be rehearsed" is the dominant *class* of defect in this feature and should be called out as such
+  rather than as three separate items.
+- **S06-I4 is a fix-ordering hazard, not a bug.** Flag it prominently for whoever schedules the
+  S06-H1 remediation; enforcing the lock without reordering the panic sync silently breaks the
+  sync for every online duress trigger.
+- **S06-L5 crosses into availability.** Unlike every other finding here, its victim is the
+  legitimate user, not the adversary. Group it with availability/DoS findings rather than with the
+  deniability set.
 
 ---
 
@@ -546,6 +599,398 @@ exists, which is itself the deniability-breaking fact. The mitigation is that th
 hardware-backed `SecurePrefs` and is destroyed by the wipe. Recorded as an accepted design
 trade-off, not a defect; it does mean `SecurePrefs`' hardware backing is load-bearing for
 deniability and should be verified in the client-side session that covers key storage.
+
+---
+
+## 7. Addendum — second-pass findings
+
+_All line numbers in this section are against the **current** tree, not the frozen §3 scope._
+
+### S06-C2 — The cloud backup ignores `accountLock` entirely; the seed phrase alone reconstructs everything
+
+**Severity: Critical** · **Location:** `firestore.rules:282-313`, `ui/RestoreFromSeedActivity.java:223-271`, `server/index.js:1596+` (`/mintToken`), `crypto/BackupCryptoHelper.java:57-59`
+
+S06-H1 framed this as "`/mintToken` does not consult `accountLock`". Reading the backup subsystem
+shows that understates it. **`accountLock` is enforced in exactly one place in the entire codebase:
+a client-side `if` in the restore UI, evaluated *after* authentication has already succeeded.** The
+backup — which is the complete dataset — is not gated by it at any layer.
+
+The chain:
+
+1. `BackupManager` continuously uploads messages, contacts, and groups to
+   `backups/{uid}/{messages,contacts,groups}` (`:58-61`), AES-256-GCM encrypted under
+   `deriveBackupKey(mnemonic)` = `HKDF-SHA256(PBKDF2-SHA512(mnemonic), "DUOSHIELD_BACKUP_V1")`
+   (`BackupCryptoHelper.java:57-59`). Media goes to B2. **The backup key is a pure function of the
+   seed phrase** — no device secret, no server secret, nothing the wipe can destroy.
+2. `/mintToken` (`server/index.js:1596`) verifies only `sha256(identityPubKeyHex)` against
+   `identities/{userId}`, rate-limits by IP and uid, and checks `waitlist` for new accounts. It
+   **never reads `accountLock`**, so it mints a valid custom token for a locked account.
+3. `RestoreFromSeedActivity` calls `signInWithSeed` at `:223`; the session is live and
+   `restoreSessionEstablished = true` at `:243`. Only **then**, at `:262-268`, does it read
+   `accountLock` and abort.
+4. `firestore.rules:282-313` guards `backups/{userId}` and all three subcollections with nothing
+   but `request.auth.uid == userId`. **No lock check at any level.**
+
+So an adversary holding a coerced seed needs no device, no app, no patched APK, and no root: call
+`/mintToken`, get a token for the victim's uid, read `backups/{uid}/messages` over the Firestore
+REST API, derive the key from the same mnemonic, decrypt offline. Step 3 — the only enforcement
+that exists — is code they never execute.
+
+This is precisely the guarantee the feature exists to provide (§2, guarantee **a**), and it rests
+on a client-side conditional.
+
+**Two aggravating factors that change the fix, not just the severity:**
+
+- **Fixing `/mintToken` alone is insufficient.** `signInWithCustomToken` yields a long-lived
+  refresh token. Any token minted *before* the lock lands keeps working indefinitely, and S06-M5
+  hands the adversary a ~30 s window they can widen at will by holding the network down. Closing
+  this needs `admin.auth().revokeRefreshTokens(uid)` inside `/duress-lock` **and** a rules-level
+  check, so a surviving token still cannot read the backup.
+- **B2 media is ungated too.** `grep -n accountLock server/index.js` returns hits only at `:2572`,
+  `:2620`, `:2636`, `:2854`, `:2874`, `:2892` — `/duress-lock` and the two admin routes. The
+  presign path (`b2PresignUrl`, `:3111`) never consults the lock, so backed-up media is reachable
+  by the same minted token.
+
+**Where the effort went.** `RestoreFromSeedActivity:244-262` dispatches the `identities` and
+`accountLock` reads concurrently *specifically* so a locked and an unlocked account take identical
+wall-clock time, returning `GENERIC_RESTORE_FAILURE` for both. That is careful work — and it
+defends a check the adversary does not run, in a code path they do not enter. Same shape as S06-C1:
+real rigour spent on a side channel while the front door stands open.
+
+**Fix — defence in depth, four parts:**
+1. `/mintToken` refuses to mint when `accountLock/{userId}.locked == true` (this is S06-H1), read
+   inside the existing transaction, reusing the current 403 string verbatim.
+2. `/duress-lock` calls `revokeRefreshTokens(uid)` after writing the lock, killing live sessions.
+3. `firestore.rules` gates `backups/{userId}` **and** its subcollections on
+   `!exists(/databases/$(database)/documents/accountLock/$(userId))`.
+4. The B2 presign path performs the same server-side check.
+
+Part 3 carries a real cost that needs a decision: a rules `exists()` is a billed document read and
+`restoreAllSync` paginates at `PAGE_LIMIT = 1000` (`BackupManager.java:63`), so a large restore
+multiplies it. Parts 1, 2 and 4 are cheap and close the practical attack; part 3 is the only one
+that survives a bypassed or compromised server. See §8.
+
+---
+
+### S06-C1 — The device gate survives the duress wipe holding the *primary* PIN, and the duress PIN is rejected by it
+
+**Severity: Critical** · **Location:** `PinManager.java:191-243`, `util/WipeHelper.java` (`eraseLocalData`), `SignInActivity.java:93-104`
+
+This is the most direct deniability break in the feature, and it is structural rather than a
+slip. Three correct-in-isolation decisions combine into a total failure:
+
+1. `WipeHelper.eraseLocalData` clears account-scoped `SecurePrefs` with `.clear().commit()`, but
+   `SecurePrefs.getDeviceGate()` is a **deliberately isolated file that every wipe preserves** —
+   isolation the first pass correctly identified as load-bearing and told future readers not to
+   touch (§4, "Device-gate isolation preserved").
+2. `PinManager.setPin` (`:75`) syncs the device-gate PIN to the **primary** PIN via
+   `setDevicePin` (`:191`). `DuressManager` never touches the device gate at all.
+3. `SignInActivity:93` routes to `DevicePinGateActivity` whenever
+   `PinManager.deviceGateSatisfiedThisProcess` is false — and that flag is a `volatile static`
+   (`PinManager.java:64`) that resets on process death.
+
+So after a duress wipe the adversary force-stops the app or reboots the phone — both routine when
+handling a seized device, and step 2 of the S06-H3 exploit path already has them in airplane mode —
+then reopens it. **Two tells fire simultaneously:**
+
+- A genuinely unconfigured or factory-fresh install has **no** device-gate PIN, so
+  `hasDevicePinSet` (`:178`) is false and no gate appears. The prompt's mere existence proves the
+  device was configured. The advertised guarantee is that it "presents as unconfigured".
+- They type the code the victim just surrendered. `verifyDevicePin` (`:210`) checks it against the
+  **primary** hash, so it returns false: **"Wrong PIN."** Thirty seconds earlier that exact code
+  did something. Now it does not. That is tooling-free proof the surrendered code was special,
+  which simultaneously proves the victim withheld the real one.
+
+The constant-work decoy in `ensureSecondarySlotInitialized` (`:140`) and `clearDuressPin`'s
+refusal to `remove()` (`:84-98`) are careful, expensive work to close a few-hundred-millisecond
+timing channel. Both are defeated by a plain wrong-PIN toast on a screen nobody wired duress into.
+
+**Fix.** This is what the approved redesign in §8 addresses: promote the duress PIN to primary
+(including the device gate) as part of the wipe, so the surrendered code keeps working and opens
+an empty-but-plausible app. Note that `PinManager.promoteDevicePinToCurrentUser` (`:244`) already
+exists and moves a gate PIN into the user scope — the redesign needs the inverse direction.
+
+---
+
+### S06-H4 — `setDuressPin`'s return value is discarded; arming can silently not happen
+
+**Severity: High** · **Location:** `ui/ManageUnlockCodesActivity.java:157-160`, `DuressManager.java:170-176`, `PinManager.java:112-115`
+
+```java
+157:  DuressManager.setDuressPin(this, codeToSave);
+158:  runOnUiThread(() -> {
+159:      Toast.makeText(this, "Code saved.", Toast.LENGTH_SHORT).show();
+```
+
+The boolean is dropped on the floor and the toast reads "Code saved." unconditionally.
+`setDuressPin` returns `false` whenever `pin.length() != PinManager.getPinLength(context)`
+(`DuressManager.java:174`). The entry panel validates only `code.length() < 4 || code.length() > 6`
+(`ManageUnlockCodesActivity.java:129`) plus a not-equal-to-primary check — it **never compares
+against the primary PIN's length**.
+
+Concrete failure: primary PIN is 6 digits, user chooses a 5-digit second code. `setDuressPin`
+returns `false`, nothing is armed, the toast says "Code saved.", the screen `finish()`es, and the
+add-code button is now hidden forever — `btnAddCode` is gated on `(eligible && !hasSecondary)`
+(`:99`) and `hasDuressPin` (`:241`) reads the armed flag, which was never set. The user believes
+they have a duress code. They have nothing.
+
+`getPinLength`'s fallback widens the blast radius: it returns `DEFAULT_PIN_LEN = 6`
+(`PinManager.java:46`, `:115`) when `app_pin_length_<uid>` was never written — i.e. any account
+whose PIN predates that key. Those users **cannot** arm a duress code unless they happen to pick
+exactly 6 digits, and are never told why.
+
+The length coupling itself is a UI constraint (the keypad auto-submits at a fixed length) being
+enforced in the crypto layer, which is precisely why it fails silently instead of visibly.
+
+**Fix.** Enforce the primary PIN's length in the entry panel with a live hint ("6 digits"), check
+`setDuressPin`'s return value, and only show a success toast when it returned `true`. On `false`,
+keep the panel open and say why. Failing closed and loudly is mandatory here — see S06-M4 for why
+the user has no other way to find out.
+
+---
+
+### S06-H5 — The PIN-change screen is an unthrottled duress-PIN oracle
+
+**Severity: High** · **Location:** `ui/SecurityPrivacySettingsActivity.java:183-196`, `PinManager.java` (no lockout)
+
+```java
+189:  boolean clashWithDuress = DuressManager.isDuressPin(this, pin);
+190:  if (!clashWithDuress) PinManager.setPin(this, pin);
+...
+194:  if (clashWithDuress) {   // toast: "That PIN can't be used. Choose a different one."
+```
+
+The code is careful that the message does not explain *why*. But **the existence of a rejection is
+the leak.** Every 4-6 digit code is accepted except exactly one — the duress code. Anyone holding
+the primary PIN can enumerate the keyspace through this screen and locate the duress code
+**without triggering it, without a wipe, and without any forensic tooling.**
+
+There is no rate limiting to stop them: `grep -n "attempt\|lockout\|fail" PinManager.java` returns
+nothing. No wrong-PIN counter, no backoff, no lockout anywhere in the PIN layer. At roughly 0.3 s
+per 310 000-iteration PBKDF2, a 4-digit space is ~50 minutes of scripted taps; 6 digits is
+feasible overnight.
+
+**Why this is worse than S06-M1.** The relevant threat model is the adversary who has already
+coerced the **real** primary PIN and wants to prove the victim withheld a second code. This oracle
+answers that definitively and silently. They then know the mechanism exists, know the specific
+code to avoid, and know the victim lied — defeating the entire hidden-UI and eligibility edifice
+far more cheaply than S06-M1's patched-APK route, and without the account-creation footprint.
+
+**Fix.** Do not branch observably on duress membership. Options, best first: (a) resolve the clash
+silently — accept the new primary PIN and re-arm the duress slot to a fresh unmatchable decoy,
+which is honest because a colliding duress code is already useless; (b) require re-authentication
+plus a hard lockout (5 attempts, exponential backoff, persisted across process death) before this
+screen accepts any candidate. Add the lockout regardless — S06-L5 needs it too.
+
+---
+
+### S06-M4 — The duress code is unverifiable, and the only way to test it is destructive
+
+**Severity: Medium** · **Location:** `ui/ManageUnlockCodesActivity.java:87-99`, `DuressManager.java:330`
+
+There is no way for a user to confirm their duress code is armed and working. The only way to
+exercise it is to enter it on the lock screen, which performs a full local wipe **and** writes a
+permanent `accountLock` that only an operator can clear
+(`server/index.js` `/admin/api/locked/unfreeze`; the rules deny client delete and deny
+`locked:false`).
+
+Compose that with S06-H4 and the result is the feature's worst failure mode: a user can hold a
+**silently unarmed** duress code, and the only way to discover it is a coercion event, at the exact
+moment it matters. A safety feature that fails silently and cannot be rehearsed manufactures false
+confidence — the same pathology the first pass identified for the offline case in S06-H3, now
+present a second time by an independent route.
+
+There is also **no rotation path**. `refreshListPanel` hard-hides `rowSecondaryCode`
+(`:94`, unconditional `View.GONE`) and shows `btnAddCode` only when `!hasSecondary` (`:99`). The
+sole way to change a duress code today is to clear the primary PIN entirely.
+
+**Fix.** Add a non-destructive verify affordance inside the (already eligibility-gated) manage
+screen: prompt for the code and confirm "this code is armed" by comparing against slot B, with no
+wipe. Add an explicit rotate action on `rowSecondaryCode`. Both live behind the existing
+eligibility gate, so they add no feature-existence disclosure beyond what that screen already
+implies.
+
+---
+
+### S06-M5 — An interrupted duress wipe leaves all data intact, and nothing ever resumes it
+
+**Severity: Medium** · **Location:** `DuressManager.java:330-480`, `MainActivity.java:89`, `DuoShieldMessagingService.java:98`
+
+`performLogout` runs, on one background thread and **before any erasure**: a 5 s lock write, a 5 s
+ID-token fetch, a 10 s + 10 s nonce HTTP round trip, then a 10 s panic sync — reaching
+`WipeHelper.eraseLocalData` only at `:468`. That is up to ~30 s in which the SQLCipher database,
+slot B, and all key material are fully intact. A network-controlling adversary can **force** every
+one of those calls to its full timeout (they are already in airplane mode per S06-H3), maximising
+the window deliberately.
+
+If the process dies in that window — force-stop, low-memory kill, dead battery, reboot — `:468`
+never runs. **Nothing retries it.** `isResetPending` (`:284`) has exactly two consumers,
+`MainActivity:89` and `DuoShieldMessagingService:98`, and both only *route*; neither re-invokes the
+wipe. The result is that all data survives, and `session_migration_pending` is left set.
+
+**Fix.** This needs a design decision, not a patch, because erase-first conflicts with the
+panic-sync goal. Recommended: make erasure the first durable act, and move "upload unsynced
+messages" to a queue committed **before** the wipe begins (or accept the loss). Whichever way it
+goes, `isResetPending` must become a *resume* trigger — on next launch, if it is set, re-run
+`eraseLocalData` to completion before any UI. That single change makes the wipe idempotent and
+crash-safe regardless of ordering.
+
+---
+
+### S06-M6 — Duress protection is one-shot; re-arming is impossible by construction
+
+**Severity: Medium** · **Location:** `DuressManager.java:512-589`, `ui/ManageUnlockCodesActivity.java:87-99`
+
+After a duress wipe, slot B is gone (account-scoped prefs cleared). The user restores from seed.
+To re-arm they need `isDuressEligibleCached` → `refreshEligibility` (`:525`), which requires a
+signed-in Firebase session. But the account is **locked** — and once S06-H1 is fixed properly they
+cannot sign in at all until an operator unfreezes. Even after unfreezing, the operator must
+re-check `duressEligibility`.
+
+The steady state after a single use is therefore: restored account, **no** duress code, no visible
+way to add one, and no signal to the user that their protection is gone. Additionally, until they
+set a PIN again `ensureSecondarySlotInitialized` has not run, so the constant-work property that
+S06-C1's cousin findings depend on does not hold either.
+
+**Fix.** Covered by §8: unfreeze must hand back a re-armable state, and the forced primary-PIN
+rotation is the natural moment to re-arm slot B.
+
+---
+
+### S06-L5 — No wrong-PIN lockout, so an accidental duress trigger is an unrecoverable self-DoS
+
+**Severity: Low** · **Location:** `PinManager.java` (no lockout), `LockScreenActivity.java`
+
+`grep -n "attempt\|lockout\|fail" PinManager.java` returns nothing: there is no wrong-PIN counter,
+backoff, or lockout. Combined with duress firing on an exact match and the first pass's deliberate
+removal of the wrong-guess threshold (§4, "Trigger has no guess-count fallback"), anyone who picks
+up the device and mashes the keypad — a child, a pocket, a curious colleague — can eventually hit
+the duress code. That wipes the device **and permanently locks the account** pending out-of-band
+operator action.
+
+Per-attempt probability is low; blast radius is total and recovery is manual. Worth an explicit,
+documented decision rather than an accident.
+
+**Fix.** Add a persisted attempt counter with exponential backoff on the lock screen (which S06-H5
+requires independently). Consider requiring the duress code to be entered as a deliberate,
+full-length submission rather than matching mid-stream.
+
+---
+
+### S06-L6 — `accountLock` update permits rewriting `lockedAt`, destroying the trigger timestamp
+
+**Severity: Low** · **Location:** `firestore.rules` (`accountLock` match block)
+
+The one-way latch correctly requires `request.resource.data.locked == true` on both create and
+update and denies delete — verified in §4 and covered by tests. But because `update` is allowed at
+all, a client holding the victim's uid can re-`set` the doc with `locked: true` and a **fresh**
+`lockedAt`, repeatedly. The latch holds; the forensic value does not. An adversary who wants to
+obscure *when* the duress event happened, or an operator reviewing `/admin/api/locked`, both lose
+the real trigger time.
+
+**Fix.** Pin the timestamp on create only:
+`allow update: if ... && request.resource.data.lockedAt == resource.data.lockedAt`. Better, write
+`lockedAt` with a server timestamp inside `/duress-lock` and forbid client updates entirely, since
+the client has no legitimate reason to update an existing lock.
+
+---
+
+### S06-I4 — Enforcing the lock will break the panic sync, because the lock is written first
+
+**Severity: Informational** · **Location:** `DuressManager.java:330-480`, `server/index.js` (`/mintToken`, `/duress-lock`)
+
+An ordering conflict that is latent today and becomes a live bug the moment S06-H1 is fixed. Step
+1a writes `accountLock` **before** the panic sync runs. Today that is harmless precisely *because*
+nothing enforces the lock (S06-H1). As soon as enforcement lands — especially if it is added at the
+rules level rather than only in `/mintToken` — the account locks itself out of the very sync the
+duress path is trying to complete, and the panic sync fails for every online duress trigger.
+
+**Fix.** Sequence the lock **after** the panic sync, or exempt the sync path explicitly. Whoever
+implements S06-H1 must read this finding first; it is the kind of regression that presents as
+"panic sync mysteriously stopped working" long after the change that caused it.
+
+---
+
+## 8. Approved remediation design (promote-and-rotate)
+
+Recorded here because it resolves S06-C1, S06-M6, and part of S06-M4 as a single coherent state
+machine rather than as three patches. The duress PIN **becomes** the primary PIN at wipe time,
+instead of the account being left in a state that advertises what happened.
+
+| State | Primary PIN | Slot B | Device gate | `accountLock` |
+|---|---|---|---|---|
+| Normal | `P` | `D`, armed | `P` | absent |
+| Duress fired with `D` | `D` | **disarmed decoy** | `D` | `locked: true` |
+| Operator unfreezes | `D` | disarmed decoy | `D` | absent + rotation required |
+| After forced rotation | `P2` | `D` re-armed | `P2` | absent |
+
+Properties this buys:
+
+- **S06-C1 closed.** The surrendered code still opens the app after a reboot, and opens an empty
+  one. No wrong-PIN tell, and no "why is there a gate on an unconfigured device" tell.
+- **Slot B must be disarmed during the duress-active state.** Non-obvious and mandatory: if `D`
+  stayed armed while also being primary, re-entering it would re-trigger the whole duress sequence
+  — repeated wipes, repeated nonce requests, repeated `accountLock` writes, and fresh S06-H2
+  residue on every unlock. Disarm via `clearDuressPin` (`:84`), which overwrites with a decoy
+  rather than removing, preserving constant-work timing.
+- **The old primary `P` must stop working.** If both `P` and `D` opened the app, the existence of
+  two valid codes is itself the disclosure. Promotion must overwrite, not add.
+- **S06-M6 closed.** Forced rotation after unfreeze is the natural re-arm point: the user sets
+  `P2` and slot B is re-armed with `D`. Keeping `D` unchanged is safe — an adversary who returns
+  and enters it triggers duress again and gets nothing.
+- Rotation must reject `P2 == D` — and per S06-H5 that rejection must not be an observable oracle.
+
+Open dependencies before implementation: the wipe must be resumable (S06-M5) or a promotion
+interrupted midway can leave `P` and `D` both valid; the unfreeze endpoint must signal
+"rotation required" durably enough to survive reinstall.
+
+### 8.1 Backup coverage — confirmed by reading the code
+
+The design's "everything is already backed up" premise **holds**, which makes the local wipe
+recoverable rather than destructive:
+
+| Data | Backed up | Where | Key |
+|---|---|---|---|
+| Messages | ✅ | `backups/{uid}/messages` | AES-256-GCM, seed-derived |
+| Contacts | ✅ | `backups/{uid}/contacts` | same |
+| Groups + members | ✅ | `backups/{uid}/groups` | same |
+| Media | ✅ | B2, pre-cached on restore (`RestoreFromSeedActivity:384-423`) | B2 presign |
+| Deletions | ✅ soft-delete only (`isDeleted:true`, rules deny hard delete) | — | — |
+
+Sync runs incrementally on every `BackupSyncWorker` pass (`syncIncremental`, `:455`) and contacts
+and groups re-sync on **every** incremental run (`:543-590`), so coverage does not silently drift.
+`restoreAllSync` (`:160`) + `restoreContactsSync` (`:839`) + the B2 media pre-cache reconstruct the
+account.
+
+Two caveats to state at enrollment rather than discover later:
+
+- **`getUnsyncedCount` (`:953`) can be non-zero at duress time.** Anything not yet uploaded is lost
+  by the wipe. That is exactly what the panic sync in `performLogout` exists to flush, which is why
+  S06-M5's ordering question is a data-loss question, not just a robustness one.
+- **`SIZE_WARN_LIMIT = 10_000` (`:67`) only warns.** Beyond that, sync is degraded-but-silent, so a
+  heavy account may have weaker coverage than the table implies.
+
+### 8.2 The premise that holds is also the vulnerability
+
+The same property that makes promote-and-rotate safe — a complete, seed-recoverable cloud backup —
+is what makes S06-C2 critical. `deriveBackupKey` is a pure function of the mnemonic, so the wipe
+cannot revoke access to the backup; **only the lock can**, and the lock does not cover
+`backups/`. Promote-and-rotate therefore fixes the *local* deniability story (S06-C1) while leaving
+the *remote* data story wide open.
+
+This gives a clean split for sequencing:
+
+1. **S06-C2 first** (server + rules: mint refusal, token revocation, `backups/` and B2 gating). It
+   is the only finding where the adversary needs nothing but the seed phrase, and no amount of
+   client-side work can compensate for it.
+2. **Then promote-and-rotate** (S06-C1, S06-M6) plus the wipe-resume work (S06-M5), since the
+   promotion must be interruption-safe.
+3. **Then the arming and oracle fixes** (S06-H4, S06-H5, S06-M4, S06-L5), which are self-contained
+   client changes.
+
+Doing 2 before 1 would produce a device that convincingly presents as unconfigured while the entire
+message history stays one `/mintToken` call away — the worst possible combination, because it
+maximises the user's confidence while leaving the actual data exposed.
 
 ---
 
