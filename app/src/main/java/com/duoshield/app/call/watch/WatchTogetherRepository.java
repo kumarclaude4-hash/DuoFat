@@ -73,16 +73,34 @@ public class WatchTogetherRepository {
      *
      * <p>The caller owns the returned registration and MUST remove it in {@code onStop()}
      * / {@code onDestroy()}, per the project's one-listener-per-screen rule.
+     *
+     * <p>Unlike {@link #writeState} and {@link #fetchState}, both the attach-time read
+     * <em>and</em> every subsequent snapshot delivery are billable reads for as long as
+     * the listener stays attached. So the guard here does two things the other ops don't
+     * need to: it refuses to attach at all once the daily read budget is exhausted
+     * (mirroring how the other ops refuse to issue their call), and it keeps charging the
+     * budget for every live update the listener receives, not just the initial one —
+     * Watch Together must degrade (no listener, feature disabled) rather than let an
+     * open-ended stream of updates run unmetered.
+     *
+     * @return the registration, or {@code null} when the read budget is exhausted and no
+     *         listener was attached. The caller must null-check before removing it.
      */
     public ListenerRegistration listenToState(String callId,
                                               EventListener<DocumentSnapshot> listener) {
-        // The attach itself triggers one initial read of the single state doc. Snapshot
-        // updates thereafter are also single-doc reads; the guard bounds the attach and
-        // the caller keeps exactly one listener alive (project rule #3).
-        if (guard.canRead(1)) {
-            guard.recordReads(1);
+        if (!guard.canRead(1)) {
+            Log.w(TAG, "listenToState skipped — Firestore read budget exhausted");
+            return null;
         }
-        return stateRef(callId).addSnapshotListener(listener);
+        return stateRef(callId).addSnapshotListener((snap, error) -> {
+            // Every delivery — including the initial one the attach itself triggers — is
+            // a billable read; account for each one rather than only the attach, even
+            // though we never block a live delivery once attached (dropping a mid-session
+            // update would silently desync the two participants, which is worse than a
+            // slightly stale budget).
+            guard.recordReads(1);
+            listener.onEvent(snap, error);
+        });
     }
 
     /**
@@ -180,9 +198,16 @@ public class WatchTogetherRepository {
      * <p>Deleting would race with the other participant's listener and could leave their
      * player open with no state to reconcile against. The document is removed for real
      * when the call ends, by {@code CallSignalRepository.deleteCallDoc}.
+     *
+     * @param current the caller's last applied state, if any. Its descriptive fields
+     *                 (notably {@code videoId}) are preserved on the ended write so both
+     *                 participants can still distinguish "a session ran and ended" from
+     *                 "no session ever started" — {@code isPlayable()} already returns
+     *                 {@code false} for either case since {@code active} is cleared, so
+     *                 only the descriptive fields need to survive.
      */
-    public void endSession(String callId, String myUid) {
-        WatchTogetherState ended = new WatchTogetherState();
+    public void endSession(String callId, WatchTogetherState current, String myUid) {
+        WatchTogetherState ended = current != null ? current.copy() : new WatchTogetherState();
         ended.active  = false;
         ended.playing = false;
         writeState(callId, ended, WatchTogetherState.ACTION_STOP, myUid);

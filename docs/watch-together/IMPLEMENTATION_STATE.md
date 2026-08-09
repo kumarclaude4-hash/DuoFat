@@ -5,7 +5,7 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 6 (2026-08-09)
+- **Last updated:** Session 8 (2026-08-10)
 - **Branch:** `v0/kevibaf520-3621-84819b1b` (off `main`)
 - **Reconciled against commit:** `19a11ff` — merge of PR #42
   ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
@@ -26,9 +26,67 @@
   - **What still remains is on-device / two-participant runtime verification.** It is
     **BLOCKED**, not skipped: this container has no `/dev/kvm`, no `vmx`/`svm` CPU flags,
     no emulator binary, and no attached device. See §10 and §11 item 9.
-  - **No Watch Together defect has ever been observed** — in five sessions of static
-    checking and two sessions of real compilation, zero bugs have been found in
-    `call/watch/`. That is not the same as the feature being proven to work; see §13.
+  - **Correction (Session 7):** the "zero bugs ever found" claim above was wrong. A full
+    audit against the actual repo (not this doc) found and fixed two blocking defects and
+    four secondary ones — see the Session 7 entry in §10-adjacent history below and the
+    `git log` for the exact diffs. The most significant: `shouldApply`'s strict-greater
+    `seq` check could permanently desync two devices that raced to the same `seq` (e.g.
+    simultaneous session start), and playback rate was fully plumbed end-to-end but had
+    **no UI control**, making it unreachable despite being listed as done in §1 item 4.
+    Both are fixed as of this session. Static/compile verification has not been re-run in
+    this sandbox (no JDK available here); re-run the Session 6 toolchain before trusting
+    a "PASS" claim again.
+  - **Session 8 (final validation of the Session 7 audit fixes, commit `e46012a`):**
+    this sandbox has no JDK/Android SDK and no Firebase CLI — same toolchain gap as
+    Session 7, not a new regression. Results, run individually rather than assumed:
+    - `:app:compileDebugJavaWithJavac` — **BLOCKED** (no `java`/`javac` on PATH).
+    - `:app:assembleDebug` — **BLOCKED** (same).
+    - `:app:lintDebug` — **BLOCKED** (same).
+    - Watch Together JVM tests (`WatchTogetherStateTest`, incl. the two new Session 7
+      tests `equalSeqWithDifferentContentIsAppliedAsARaceResolution` and
+      `equalSeqWithIdenticalContentIsRejectedAsAnEcho`) — **BLOCKED** (needs the JDK
+      above); verified by manual read-through instead (see below).
+    - Firestore rules tests (`firestore-tests/rules.test.js`) — **BLOCKED** (requires the
+      Firebase Emulator; no `firebase` binary and no emulator JAR present in this sandbox).
+      Not touched by the Session 7 commit anyway (it changed no `.rules` file).
+    - `node scripts/check-watch-together.js` — **PASS** (Node is available). All 21
+      static checks passed, including the pre-existing single-listener,
+      single-writer-heartbeat, and cost-guard-gating checks that the Session 7 fixes
+      touch. Full output preserved in the git history of this session.
+    - **Targeted regression review of the six Session 7 fixes** (`git show e46012a` diffs
+      only, not a fresh audit): read every changed line in
+      `WatchTogetherState.java`, `WatchTogetherRepository.java`,
+      `WatchTogetherActivity.java`, `activity_watch_together.xml`, and
+      `WatchTogetherStateTest.java`. All six fixes hold up:
+      1. Same-`seq` tiebreak (`shouldApply`/`isSameWrite`) — correct, and the two added
+         unit tests cover both branches (race vs. echo).
+      2. Playback-rate control — `btnPlaybackRate` is bound with a null-check before use,
+         `cycleRate()` writes through the existing `performLocalWrite`/`ACTION_RATE`
+         path with no new write path, `updateRateButton` is called from `reconcile()`
+         alongside the existing icon sync.
+      3. `FirebaseCostGuard` listener enforcement — `listenToState` can now return `null`;
+         confirmed every call site (`onStart`, both `onStop`/`onDestroy` removal spots)
+         already null-checks `stateListener` before calling `.remove()`, so this is safe
+         and simply retries on the next `onStart`.
+      4. Heartbeat takeover — `HEARTBEAT_INTERVAL_MS` and `appliedReceiptRealtime` both
+         already existed and are used consistently; the early-return guard
+         (`appliedState == null || !isPlayable() || !playing`) still runs before the new
+         staleness check, so there's no divide-by-zero/uninitialized-timestamp path at
+         cold start.
+      5. `playerReady` removal — zero remaining references anywhere under `app/src/` or
+         `docs/`.
+      6. `endSession` preserving `videoId` — its one call site
+         (`endSessionAndFinish`) was updated to pass `appliedState`, and the repository
+         method already null-checks `current`.
+    - **One pre-existing, out-of-scope issue found (not a regression from Session 7,
+      not fixed here per this session's scope):** `WatchTogetherActivity.java` line ~420
+      has a stray U+FFFD replacement character baked into a `// ── UI state ──` comment
+      divider. Confirmed present in `HEAD~1` (i.e. it predates the Session 7 commit) and
+      confirmed to be valid UTF-8 (`file`/`iconv` both pass), so it does not block
+      compilation — cosmetic only. Left untouched per this session's "do not fix
+      unrelated project failures" instruction; worth a one-line cleanup in a future
+      session if someone is already touching that file.
+    - **No new Watch Together defect was found or fixed this session.**
 
 ---
 

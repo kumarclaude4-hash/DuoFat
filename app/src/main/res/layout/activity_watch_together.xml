@@ -162,6 +162,19 @@
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:contentDescription="Forward 10 seconds" />
+
+        <Button
+            android:id="@+id/btnPlaybackRate"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="56dp"
+            android:text="1x"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textAllCaps="false"
+            android:contentDescription="Change playback speed" />
     </LinearLayout>
 
     <!-- ── Start / change video input row ── -->

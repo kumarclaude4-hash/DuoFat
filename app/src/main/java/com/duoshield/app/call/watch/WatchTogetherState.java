@@ -190,13 +190,44 @@ public class WatchTogetherState {
     /**
      * True when {@code incoming} should replace {@code applied}.
      *
-     * <p>Any first state is applied. Afterwards only a strictly greater {@link #seq} wins,
-     * which drops Firestore's local echo of our own write and any out-of-order delivery.
+     * <p>Any first state is applied, and a strictly greater {@link #seq} always wins.
+     *
+     * <p><strong>Tie handling.</strong> Two devices can both write the very first state
+     * (e.g. simultaneously pasting a link, or one rejoining before it has observed the
+     * peer's counter) and land on the <em>same</em> {@code seq}. Firestore's single-doc
+     * {@code set()} resolves that race server-side to exactly one winning document, and
+     * every listener — including the "losing" writer's own — eventually receives that
+     * winning snapshot with the same {@code seq} the loser stamped on its own write.
+     * A strict {@code >} check would drop that snapshot as a mere echo, leaving the
+     * loser permanently stuck showing its own overwritten state. So on a tie we only
+     * skip when {@code incoming} is content-identical to {@code applied} (a genuine echo
+     * of the write we already applied); any other tie is a real race and we adopt the
+     * incoming snapshot, since it reflects what Firestore actually now holds.
      */
     public static boolean shouldApply(WatchTogetherState applied, WatchTogetherState incoming) {
         if (incoming == null) return false;
         if (applied == null)  return true;
-        return incoming.seq > applied.seq;
+        if (incoming.seq != applied.seq) return incoming.seq > applied.seq;
+        return !isSameWrite(applied, incoming);
+    }
+
+    /**
+     * True when two same-{@code seq} states carry identical playback-relevant content,
+     * meaning {@code incoming} is an echo of a write already applied rather than a
+     * competing write that raced to the same sequence number.
+     */
+    private static boolean isSameWrite(WatchTogetherState a, WatchTogetherState b) {
+        return a.active == b.active
+                && a.playing == b.playing
+                && a.positionMs == b.positionMs
+                && Double.compare(a.playbackRate, b.playbackRate) == 0
+                && eq(a.videoId, b.videoId)
+                && eq(a.hostUid, b.hostUid)
+                && eq(a.lastActionBy, b.lastActionBy);
+    }
+
+    private static boolean eq(String a, String b) {
+        return a == null ? b == null : a.equals(b);
     }
 
     /** True when a session is running and actually has a video to show. */
