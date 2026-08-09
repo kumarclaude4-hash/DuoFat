@@ -5,18 +5,30 @@
 > It must describe the ACTUAL state of the code, not the original plan.
 > Do not delete prior useful context — amend it.
 
-- **Last updated:** Session 4 (2026-08-09)
-- **Branch:** `v0/xojow11866-8151-97dea628` (off `main`; Session 4 work committed here, PR pending)
-- **Overall feature status:** **FEATURE-COMPLETE FOR CORE FLOW + POLISH, NOT COMPILER-VERIFIED** —
-  the feature is reachable from the call UI (Session 3: `CallActivity` binds/reveals/launches
-  the watch button; manifest entry exists). Since then: the **host heartbeat writer**
-  (`maybeWriteHeartbeat`, single-writer via a last-actor guard, `ACTION_HEARTBEAT`) is present
-  in `WatchTogetherActivity`, and Session 4 added a **one-shot awareness cue** on the call
-  screen's watch button (a "Rejoin Watch Together" hint driven by a single `fetchState`, with
-  no second listener). The static checker now enforces **21 checks**, including the
-  exactly-one-listener, single-writer-heartbeat, cost-guard, and one-shot-awareness invariants.
-  **What still remains** is, critically, **a real Gradle build + on-device verification** —
-  no JDK/Gradle has been available in any of the four sessions. See §7, §11, and §13.
+- **Last updated:** Session 6 (2026-08-09)
+- **Branch:** `v0/kevibaf520-3621-0cf60639` (off `main`)
+- **Reconciled against commit:** `19a11ff` — merge of PR #42
+  ("Enable Watch Together for synchronized YouTube viewing in calls"), which merged
+  `0c9e6e6` (the `BaseActivity` FCM de-registration fix) and `76eb2d0` (the Session 5
+  doc update). **The repo + HEAD are the source of truth for everything below.**
+- **Overall feature status:** **FEATURE-COMPLETE FOR THE CORE FLOW + POLISH, AND
+  BUILD-VERIFIED — BUT NOT RUNTIME-VERIFIED.**
+  - The feature is reachable from the call UI (Session 3: `CallActivity`
+    binds/reveals/launches the watch button; manifest entry exists). The **heartbeat writer**
+    (`maybeWriteHeartbeat`, single-writer via a last-actor guard, `ACTION_HEARTBEAT`) is
+    present in `WatchTogetherActivity`, and Session 4 added a **one-shot awareness cue**
+    ("Rejoin Watch Together") driven by a single `fetchState` with no second listener.
+  - **Session 6 re-established a JDK 17 + Android SDK 34 toolchain from scratch and
+    independently re-verified the build in a fresh container:**
+    `:app:compileDebugJavaWithJavac` **PASS**, `:app:assembleDebug` **PASS** (real APKs),
+    `:app:lintDebug` **PASS**, **58/58 Watch Together JVM tests PASS** (forced rerun, not a
+    cached result), static checker **21/21 PASS**.
+  - **What still remains is on-device / two-participant runtime verification.** It is
+    **BLOCKED**, not skipped: this container has no `/dev/kvm`, no `vmx`/`svm` CPU flags,
+    no emulator binary, and no attached device. See §10 and §11 item 9.
+  - **No Watch Together defect has ever been observed** — in five sessions of static
+    checking and two sessions of real compilation, zero bugs have been found in
+    `call/watch/`. That is not the same as the feature being proven to work; see §13.
 
 ---
 
