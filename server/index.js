@@ -738,6 +738,11 @@ function sha256hex(hexStr) {
   return crypto.createHash("sha256").update(Buffer.from(hexStr, "hex")).digest("hex");
 }
 
+// Constant-time hex-digest comparison used by the /mintToken identity check.
+// Implementation lives in ./lib/pure (unit-tested there) so index.js and the
+// tests exercise the same function rather than two copies that can drift.
+const timingSafeEqualHex = pure.timingSafeEqualHex;
+
 // ── SSRF guard helpers for /linkPreview ───────────────────────────────────────
 // Block private/loopback addresses and cloud metadata endpoints. Applied both
 // to the initial user-supplied URL and to every redirect hop (see
@@ -1617,6 +1622,10 @@ http.createServer((req, res) => {
   //
   if (req.method === "POST" && req.url === "/mintToken") {
     collectBody(req, res, async (body) => {
+      // Declared outside the try so the catch below can also release the
+      // reserved per-userId cooldown slot (S02-M1). Assigned once the userId is
+      // known and the slot has actually been claimed; stays a no-op before that.
+      let releaseCooldown = () => {};
       try {
         // ── IP rate limit (checked before parsing body) ──────────────────────
         const clientIp = getClientIp(req);
@@ -1636,11 +1645,26 @@ http.createServer((req, res) => {
         }
 
         // ── Per-userId cooldown (prevents rapid re-auth from same account) ───
-        // Set the cooldown timestamp synchronously, before the first `await`
-        // below, not after the token is minted. Setting it post-mint left a
-        // window where two concurrent requests for the same userId could both
-        // read the old timestamp and both pass the check before either write
-        // landed, bypassing the 60s limit entirely.
+        //
+        // S02-M1: this is a two-phase claim, and the ordering matters in both
+        // directions.
+        //
+        // The cooldown must be *reserved* before the first `await` — a purely
+        // post-mint write left a window in which two concurrent requests for the
+        // same userId both read the old timestamp, both passed, and the 60 s
+        // limit was bypassed entirely.
+        //
+        // But an unconditional pre-auth write turned this rate limit into a
+        // denial-of-service primitive against a specific account: `userId` is
+        // derived from a seed and is not a secret, so anyone could POST that uid
+        // with garbage key material once a minute, forever. Each attempt was
+        // rejected 403 yet still stamped the cooldown, so the legitimate owner —
+        // who never authenticated successfully — was held at 429 indefinitely.
+        //
+        // Resolution: reserve the slot now to close the race, then release it on
+        // any failure path (see the `catch` below, and the finally-style release
+        // on 403). Only a *successful* mint leaves the stamp in place, so failed
+        // guesses cost the attacker nothing they can inflict on the victim.
         const now  = Date.now();
         const last = mintCooldown.get(userId) || 0;
         if (now - last < 60_000) {
@@ -1649,6 +1673,14 @@ http.createServer((req, res) => {
           return;
         }
         mintCooldown.set(userId, now);
+        // Restores the previous cooldown state when this attempt does not result
+        // in an issued token. Set back to the prior timestamp rather than
+        // deleting, so an in-flight legitimate cooldown is never cleared by a
+        // concurrent failed attempt.
+        releaseCooldown = () => {
+          if (last === 0) mintCooldown.delete(userId);
+          else            mintCooldown.set(userId, last);
+        };
 
         const incomingHash = sha256hex(identityPubKeyHex);
 
@@ -1712,9 +1744,29 @@ http.createServer((req, res) => {
             });
             isNewAccount = true;
           } else {
-            // Existing account — re-verify hash inside the transaction
+            // Existing account — re-verify the binding inside the transaction.
+            //
+            // S07-H1: this check used to read `if (storedHash && storedHash !==
+            // incomingHash)`, which failed **open**. An identity document with a
+            // missing, empty, or non-string `identityPubKeyHash` — a partially
+            // written record, a legacy doc from before the field existed, or one
+            // created by any other write path — made the guard vacuous, so the
+            // caller was handed a token for that uid without proving anything at
+            // all. A record we cannot evaluate must be treated as a failure to
+            // prove ownership, never as permission.
             const storedHash = snap.data().identityPubKeyHash;
-            if (storedHash && storedHash !== incomingHash) {
+            if (typeof storedHash !== "string" || storedHash.length !== 64) {
+              // Deliberately reuses the "Key mismatch" 403 rather than reporting
+              // "unverifiable account": the response must not distinguish a
+              // damaged identity record from a wrong key, or it becomes an
+              // oracle for probing which uids are in a weak state.
+              console.error(
+                `mintToken: identity doc for uid=${uidTag(userId)} has no usable ` +
+                `identityPubKeyHash — refusing to mint (S07-H1 fail-closed)`
+              );
+              throw Object.assign(new Error("Key mismatch"), { status: 403 });
+            }
+            if (!timingSafeEqualHex(storedHash, incomingHash)) {
               throw Object.assign(new Error("Key mismatch"), { status: 403 });
             }
           }
@@ -1729,6 +1781,11 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ token }));
       } catch (e) {
+        // S02-M1: no token was issued on any path that lands here, so the
+        // reserved cooldown slot must not be left burnt against the account. A
+        // rejected attempt — wrong key, unapproved invite, locked account, or an
+        // internal fault — must not be able to hold the legitimate owner at 429.
+        releaseCooldown();
         if (e.status === 403) {
           // Thrown from inside the Firestore transaction: either a key mismatch
           // (F2 fix) or a missing/unapproved waitlist request for a new account.
@@ -1747,7 +1804,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /requestAccess ──────────────────────────────────────────────────────
+  // ── POST /requestAccess ───────────────────────────���──────────────────────────
   //
   // Body: none required.
   //

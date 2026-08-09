@@ -34,13 +34,18 @@ android {
         // ndk.abiFilters removed — splits.abi block below handles ABI restriction.
         // Having both simultaneously causes a Gradle configuration conflict.
 
-        // B2 — local.properties first, fall back to Replit Secrets (env vars)
-        def b2KeyId   = (localProps.getProperty('b2.key.id',          '') ?: '').trim()
-        def b2AppKey  = (localProps.getProperty('b2.application.key', '') ?: '').trim()
+        // B2 — bucket/region only. These two are non-secret routing values.
+        //
+        // SC-02: the credential pair is deliberately NOT read here. Previously
+        // `b2.key.id` / `b2.application.key` were resolved from local.properties
+        // or the environment, which pulled the live B2 master credential into
+        // the Gradle process on every build — one careless `buildConfigField`
+        // away from being compiled into a public APK, and recoverable from any
+        // build scan or cached Gradle log even while unused. The safest place
+        // for a secret the client does not need is nowhere near the client
+        // build, so the lookup itself is gone, not just its output.
         def b2Bucket  = (localProps.getProperty('b2.bucket',          '') ?: '').trim()
         def b2Region  = (localProps.getProperty('b2.region',          '') ?: '').trim()
-        if (b2KeyId.isEmpty())   b2KeyId   = (System.getenv('B2_KEY_ID')          ?: '').trim()
-        if (b2AppKey.isEmpty())  b2AppKey  = (System.getenv('B2_APPLICATION_KEY') ?: '').trim()
         if (b2Bucket.isEmpty())  b2Bucket  = (System.getenv('B2_BUCKET')          ?: 'yyush-duoshield').trim()
         if (b2Region.isEmpty())  b2Region  = (System.getenv('B2_REGION')          ?: 'eu-central-003').trim()
         def b2Endpoint = "https://s3.${b2Region}.backblazeb2.com"
@@ -67,14 +72,23 @@ android {
         if (workerUrl.isEmpty()) workerUrl = (System.getenv('WORKER_URL') ?: '').trim()
         buildConfigField "String", "WORKER_URL", "\"${workerUrl}\""
 
-        // Shared auth token for the Cloudflare Worker.
-        // Every Worker request (PUT/GET/DELETE/stats) must include:
-        //   Authorization: Bearer <WORKER_SECRET>
-        // Set in local.properties as `worker.secret=<token>`
-        // or via the WORKER_SECRET environment variable.
-        def workerSecret = (localProps.getProperty('worker.secret', '') ?: '').trim()
-        if (workerSecret.isEmpty()) workerSecret = (System.getenv('WORKER_SECRET') ?: '').trim()
-        buildConfigField "String", "WORKER_SECRET", "\"${workerSecret}\""
+        // S08-H1 / SC-02: BuildConfig.WORKER_SECRET is gone, along with the
+        // local.properties and environment lookups that fed it.
+        //
+        // The Worker's shared bearer token was compiled into every APK, so a
+        // single `strings`/`apktool` pass over a public release recovered an
+        // operator credential that authorised media PUT/GET/DELETE — and the
+        // /stats view — for the entire bucket, not just the extracting user's
+        // own objects. Rotating it was also useless in practice, because the
+        // replacement had to be shipped to clients in the next APK, i.e.
+        // published again.
+        //
+        // Client media access is now brokered per object: the push server mints
+        // a short-lived capability token scoped to one key and one verb, which
+        // the Worker verifies (SEC-A01, see B2StorageHelper). WORKER_SECRET
+        // remains a server/operator-only secret held in the Worker's own
+        // Wrangler secret store, and the Worker fails closed when it is unset.
+        // Verified: no Java source references BuildConfig.WORKER_SECRET.
 
         // TURN credentials are now fetched at runtime from the push server
         // (/turnCredentials endpoint) using TURN_TOKEN_ID + TURN_API_TOKEN

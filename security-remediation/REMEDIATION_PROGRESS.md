@@ -36,7 +36,7 @@ Single source of truth for **where the program actually stands** — source-veri
 | Workspace reconciliation & gap analysis | DONE (`RECONCILIATION.md`) |
 | Dependency model / execution order | DONE (`DEPENDENCY_GRAPH.md`) |
 | Trust-boundary revalidation plan | DONE (`architecture/TRUST_BOUNDARIES.md`) |
-| **Round 1 — P0** | **NOT STARTED** (`sessions/SESSION-01.md`) |
+| **Round 1 — P0** | **IN PROGRESS** — 6 of 11 fixed in code (`sessions/SESSION-01.md`) |
 | **Round 2 — P1** | **NOT STARTED** (`sessions/SESSION-02.md`) |
 | **Round 3 — P2 + hard stop** | **NOT STARTED** (`sessions/SESSION-03.md`) |
 | Final report | NOT WRITTEN — authored only after R3 closes |
@@ -50,25 +50,56 @@ tracked in `migration/MIGRATION_PLAN.md`), not a separate terminal state.
 
 | Metric | Count | Of 116 |
 |---|---|---|
-| Fixed | 0 | 0% |
+| Fixed (code landed + source-verified) | 6 | 5% |
 | Accepted | 0 | 0% |
 | Deferred-with-justification | 0 | 0% |
-| **Open (no disposition yet)** | **116** | **100%** |
+| **Open (no disposition yet)** | **110** | **95%** |
+
+`fixed` here means the code change is in-repo **and** re-read against the finding's exploit path per
+§6. Two of the six additionally require an out-of-band credential rotation before the exposure is
+truly ended — tracked as `fixed+runbook`, see the rotation note below.
 
 ### Severity remaining
 
 | Severity (governing) | Total | Remaining open |
 |---|---|---|
-| Critical | 4 | **4** |
-| High | 30 | **30** |
-| Medium | 26 | **26** |
-| Low | 33 | **33** |
+| Critical | 4 | **2** |
+| High | 30 | **28** |
+| Medium | 26 | **25** |
+| Low | 33 | **32** |
 | Informational | 23 | **23** |
-| **Total** | **116** | **116** |
+| **Total** | **116** | **110** |
 
-Criticals outstanding: `S07-C1` (mint accepts a public value as ownership proof) · `S08-C1` (admin
-service-account key in every APK) · `SC-01` (unreproducible vendored libsignal JAR) · `SC-02` (release
-workflow bakes backend secrets into the APK).
+Criticals outstanding: `SC-01` (unreproducible vendored libsignal JAR) · `S07-C1` (mint accepts a
+public value as ownership proof — **partially** reduced: the fail-open branch is closed, but the
+proof is still a hash of a public key; the signature challenge is the remaining work).
+
+Criticals closed in code: `S08-C1` (admin service-account key no longer written into the APK) ·
+`SC-02` (no backend secret is injected into any client build).
+
+### Session of 2026-08-09 — findings dispositioned
+
+| Finding | Sev | Change | Verification |
+|---|---|---|---|
+| `S08-C1` | Critical | Deleted the `Write service-account.json` step from `release.yml` and the three stub-writing steps in `ci.yml`. Rewrote `app/src/main/assets/README.txt`, which had instructed readers to place the admin key there. | `grep -rn service-account app/src` → only a comment; no code ever read the file. `grep` over `.github/workflows` → 0 injection sites. |
+| `SC-02` | Critical | Removed `B2_KEY_ID` / `B2_APPLICATION_KEY` / `WORKER_SECRET` from `release.yml` **and** `ci.yml` (the latter runs on pull requests, so its exposure surface was wider). Deleted the credential lookups from `app/build.gradle` so the values never enter the Gradle process. | `grep -rn "secrets.B2_KEY_ID\|secrets.WORKER_SECRET" .github/workflows` → none. |
+| `S08-H1` | High | Dropped `buildConfigField "WORKER_SECRET"`. The shared Worker bearer token is no longer compiled into the APK; clients use per-object capability tokens (SEC-A01). | No Java source references `BuildConfig.WORKER_SECRET`. Worker still fails closed when its own secret is unset. |
+| `S07-H1` | High | `/mintToken` existing-account check was `if (storedHash && storedHash !== incoming)` — **fail-open**. An identity doc with a missing/empty/non-string hash skipped the guard entirely and minted a token. Now requires a well-formed 64-char digest and compares in constant time, reusing the existing 403 so a damaged record is not distinguishable from a wrong key. | 5 new unit tests in `server/lib/pure.test.js` covering the exact exploit shape (absent, empty, wrong-type, both-absent, malformed-hex). 32/32 pass. |
+| `S02-M1` | Medium | The per-`userId` mint cooldown was stamped **before** authentication. Since `userId` is not secret, anyone could POST a victim's uid with junk keys once a minute and hold the real owner at HTTP 429 indefinitely. The slot is still reserved pre-`await` (that ordering closes the original concurrency race), but is now released on every non-issuing path. | `releaseCooldown()` reachable from all failure exits; verified no early `return` sits between the claim and the `catch`. |
+| `S02-L1` | Low | Added `timingSafeEqualHex()` for digest comparison. The pre-existing `safeTokenEqual()` was unsuitable: it coerces with `String()`, so `undefined` compares equal to `"undefined"`. | Unit-tested in `pure.js` (single implementation, required by `index.js` — no drift copy). |
+
+**Not attempted this session, and why:** `S07-C1`'s full remediation replaces the
+`identityPubKeyHash` proof with a signature challenge across `server/index.js` plus the Android
+`AuthTokenHelper` chokepoint, and cannot be landed without device testing of the sign-in and restore
+flows. `SC-12` (branch protection) and the credential rotations are console actions, not code.
+
+> **Rotation still outstanding — the code fix alone does not end the exposure.** Every credential
+> that was previously shipped in an APK or written into a CI runner must be treated as public and
+> rotated: the Firebase service-account key, `B2_KEY_ID` / `B2_APPLICATION_KEY`, and `WORKER_SECRET`.
+> Already-published APKs continue to carry the old admin key, so rotation is the only thing that
+> revokes it. Rotate **after** these changes are deployed, per
+> [`migration/MIGRATION_PLAN.md`](./migration/MIGRATION_PLAN.md) — rotating first merely re-leaks the
+> replacement through the next build.
 
 ## 3. Coverage
 
