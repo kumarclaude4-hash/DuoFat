@@ -52,8 +52,14 @@ caused all three failures, and re-deriving trust after a bad session costs far m
     grepped `server/index.js` for `signature|challenge|nonce|crypto.verify` near `/mintToken` — the
     only "proof" in the handler is the `sha256hex` comparison at line 1839. `S07-C1` is **open, not
     partial, not reduced.** `FINDING_INDEX.md`, `REMEDIATION_PROGRESS.md`, and `SESSION_INDEX.md`
-    have all been corrected to say this as of 2026-08-10. Do not re-run this check as a first task —
-    it's done; go straight to implementing the fix (§5 cluster 1 below).
+    have all been corrected to say this as of 2026-08-10.
+  - **Update, same day, later $2 session:** `S07-C1` part 1 of 2 landed — `server/lib/challengeStore.js`
+    (single-use, TTL'd nonce issuance/consumption) and `POST /mintChallenge` in `server/index.js`.
+    Verified this session: `node --check index.js` clean, `node --test lib/challengeStore.test.js` →
+    9/9 pass. `S07-C1` is **still `open`** — `/mintToken` does not require or verify any signature
+    yet, so the nonce currently has no consumer and no security effect. Do not re-verify part 1's
+    existence as a first task in the next session — it's confirmed done. Go straight to part 2, which
+    is now the entire remaining scope of cluster 1 (§5 below has the exact next-session prompt).
 - **Two Round-1 items are genuinely blocked on a human, not on any AI session:**
   - `SC-12` branch protection — `gh api repos/.../branches/main/protection` returns 404 "Branch not
     protected." Setting it requires repo admin rights exercised by a human (or an explicit,
@@ -137,16 +143,45 @@ Always write a disposition based on:
 Use the clusters already identified in `REMEDIATION_PLAN.md`. Do not attempt a full round in one
 session; a round is many clusters. Suggested next clusters, in order:
 
-1. **`S07-C1` — implement the real fix.** This is confirmed missing (§0 above, verified 2026-08-10 —
-   do not re-verify this as a first step, go straight to work). Replace the `sha256(identityPubKeyHex)`
-   ownership proof in `server/index.js`'s `/mintToken` (around line 1755/1839) with an actual
-   proof-of-possession: the client signs a server-issued one-time challenge/nonce with the identity
-   **private** key, and the server verifies that signature against the public key on file — a hash of
-   a value anyone can read (`firestore.rules:17`) can never be proof of holding the private key.
-   Likely touches the Android `AuthTokenHelper` sign-in path too (client must sign the challenge).
-   Given $5/session, this may itself need to split into (a) server-side challenge issuance + signature
-   verification, and (b) the Android client-side signing call — treat each as its own cluster if one
-   session's budget runs out mid-way; record exactly where you stopped.
+1. **`S07-C1` part 2 of 2 — signature verification (server) + signing call (Android client).**
+   Part 1 (nonce issuance) is done — see §0. This is the exact prompt to paste into the next session:
+
+   > Read `security-remediation/SESSION_PROTOCOL.md` in full first. Then: `S07-C1` part 2 of 2.
+   > `POST /mintChallenge` already issues a single-use nonce (`server/lib/challengeStore.js`,
+   > tested). Your job: make `/mintToken` actually require and verify a signature over that nonce
+   > before minting a token, replacing the current `sha256(identityPubKeyHex)` check (which is not
+   > proof of anything, since the public key it hashes is readable by any authenticated user —
+   > `firestore.rules:17`).
+   >
+   > Concretely:
+   > 1. Confirm what signature scheme the Android client's identity key actually uses — grep
+   >    `app/src/main/java/com/duoshield/app/crypto/signal/` for `Curve.calculateSignature` /
+   >    `verifySignature` / `IdentityKeyPair` to see the exact library calls already in use
+   >    (confirmed present as of 2026-08-10, not yet read in detail).
+   > 2. On the server, verify that signature using **`@signalapp/libsignal-client`**, Signal's own
+   >    official npm package with native Node bindings (confirmed to exist via web search
+   >    2026-08-10 — not yet installed, not yet vetted in this repo; check its actual `PublicKey`
+   >    verify API in its own docs/typings before writing code, don't guess the method name). Do
+   >    **not** hand-roll XEdDSA/Curve25519 verification math in plain Node crypto — that is exactly
+   >    the kind of "plausible but wrong" work that produced this program's worst fabrication
+   >    (`SESSION-01.md`'s invented `xed25519.js`). Use the vetted library or stop and say so.
+   > 3. Update `/mintToken`: require `{userId, identityPubKeyHex, nonce, signatureHex}`, call
+   >    `mintChallengeStore.consume(userId, nonce)` first (reject if it returns `false`), then verify
+   >    `signatureHex` over the nonce bytes against `identityPubKeyHex` before proceeding to the
+   >    existing hash/lock/waitlist transaction logic — keep the existing checks, add this as an
+   >    additional required gate, don't remove the hash check (defense in depth, cheap to keep).
+   > 4. Add the client-side signing call in the Android sign-in/restore path (likely
+   >    `app/auth/AuthTokenHelper.java` and/or `ui/RestoreFromSeedActivity.java` — verify exact paths,
+   >    don't trust this description) to fetch a nonce from `/mintChallenge`, sign it with the
+   >    identity private key, and send `nonce`+`signatureHex` to `/mintToken`.
+   > 5. Write unit tests for the server-side verify function using a **real signature produced by
+   >    the same library you verify with** (or, ideally, cross-checked against the Android library's
+   >    output for one fixed test vector) — not a signature you invent by hand, which is how prior
+   >    "tests" in this program were fabricated.
+   > 6. If budget runs out after server-side verification but before the Android call is wired in,
+   >    stop there, verify what you did against source per §4, and record precisely that split (not
+   >    "S07-C1 fixed") — a server that correctly demands a signature no client yet sends is a
+   >    partial fix, not a false one, as long as it's recorded as partial.
 2. **Round 2, cluster A — media/duress:** `S03-H1` (typed media scope) + `S06-H2`/`S06-H3`/`S06-I2`
    (durable duress lock). These are grouped in the plan because they touch the same code paths.
 3. **Round 2, cluster B — egress/SSRF:** `S04-H1`/`S04-H2`/`S04-H3`/`S08-H4` (link-preview SSRF +

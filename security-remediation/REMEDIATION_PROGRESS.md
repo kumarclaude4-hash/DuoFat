@@ -107,6 +107,16 @@ Criticals closed in code: `S08-C1` (admin service-account key no longer written 
 `AuthTokenHelper` chokepoint, and cannot be landed without device testing of the sign-in and restore
 flows. `SC-12` (branch protection) and the credential rotations are console actions, not code.
 
+### Session of 2026-08-10 (later, $2 budget) — `S07-C1` part 1 of 2 only; count unchanged at 6/11
+
+Added `server/lib/challengeStore.js` (single-use, TTL'd nonce issuance/consumption; 9/9 unit tests
+pass, `node --check` clean) and wired `POST /mintChallenge` into `server/index.js` to issue nonces.
+This is **not** counted toward the fixed total above and `S07-C1` stays `open`: a nonce with no
+signature verification consuming it has no security effect, and `/mintToken`'s ownership check is
+unchanged. Full detail in [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) §12. Remaining work —
+signature verification in `/mintToken` plus the Android signing call — is scoped as its own next
+session in [`SESSION_PROTOCOL.md`](./SESSION_PROTOCOL.md).
+
 > **Rotation still outstanding — the code fix alone does not end the exposure.** Every credential
 > that was previously shipped in an APK or written into a CI runner must be treated as public and
 > rotated: the Firebase service-account key, `B2_KEY_ID` / `B2_APPLICATION_KEY`, and `WORKER_SECRET`.

@@ -10,6 +10,12 @@
 > proof-of-possession check exists anywhere in source; `/mintToken` still authenticates by hashing a
 > value that is public by design. See `sessions/SESSION-01.md`'s 2026-08-10 correction notice for
 > the full verification.
+>
+> **Update, 2026-08-10 (same day, later session, $2 budget):** part 1 of 2 of the real fix landed —
+> `POST /mintChallenge` issues a single-use nonce (`server/lib/challengeStore.js`, 9/9 tests pass).
+> `/mintToken` still does not verify a signature over it, so **the finding is still `open` and the
+> attack is still live** — do not read "part 1 landed" as "fixed." See `sessions/SESSION-01.md` §12
+> and `SESSION_PROTOCOL.md`'s "Next session" prompt for the remaining work.
 
 The remediation program is executed in **three fixed rounds**. Round numbers 01–03 are fixed slots;
 each round's actual work may span many individual working sessions (see the protocol's budget
@@ -17,7 +23,7 @@ guidance) — the table below tracks the round, not a session count.
 
 | # | Round | Priority | Log | Status (verified from source, not self-reported) | Findings |
 |---|---|---|---|---|---|
-| 01 | Stop the bleeding | P0 | [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) | **IN PROGRESS.** `S07-C1` reopened (Critical, still exploitable — see notice above). `S07-H1`, `S02-M1`, `S06-H1` genuinely fixed in source. 2 items (`SC-12`, credential rotation) blocked on operator/console access. | S08-C1, SC-02, S08-H1, S03-L1, **S07-C1 (REOPENED)**, S07-H1, S02-L1, S06-H1, S02-M1, SC-12, S02-I3(partial) |
+| 01 | Stop the bleeding | P0 | [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) | **IN PROGRESS.** `S07-C1` still open/exploitable — nonce issuance (`/mintChallenge`) landed, signature verification did not (see update above). `S07-H1`, `S02-M1`, `S06-H1` genuinely fixed in source. 2 items (`SC-12`, credential rotation) blocked on operator/console access. | S08-C1, SC-02, S08-H1, S03-L1, **S07-C1 (open, part 1/2 done)**, S07-H1, S02-L1, S06-H1, S02-M1, SC-12, S02-I3(partial) |
 | 02 | Advertised guarantees | P1 | [`sessions/SESSION-02.md`](./sessions/SESSION-02.md) | **NOT STARTED** — file does not exist | S03-H1, S06-H2, S06-H3, S06-I2, S08-H5, S07-M1, S04-H1, S04-H2, S04-H3, S08-H4, S05-H1, S05-H3, S05-I1, S08-H2, S08-H3, S10-N2, S07-L4, S10-N3, SC-05, SC-04, SC-01, S04-I2 |
 | 03 | P2 batch + HARD STOP | P2 | [`sessions/SESSION-03.md`](./sessions/SESSION-03.md) | **NOT STARTED** — file does not exist | all remaining (see log) |
 

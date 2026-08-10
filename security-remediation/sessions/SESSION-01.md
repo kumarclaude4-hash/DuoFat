@@ -81,7 +81,7 @@ Round 1 is the gate for Rounds 2 and 3. Neither may begin until Round 1 is close
 |---|---|---|---|---|
 | `S08-C1` | **Critical** | Admin GCP service-account key written into `app/src/main/assets/`, shipped in every APK | `fixed+runbook` — code closed, **rotation outstanding** | Source: step deleted from `release.yml`. Artifact check #29 is MANUAL |
 | `SC-02` | **Critical** | Release workflow bakes the full backend credential set into the client build | `fixed+runbook` — code closed, **rotation outstanding** | Source: `local.properties` block now writes only public URLs |
-| `S07-C1` | **Critical** | `/mintToken` accepts a public value (identity pubkey) as proof of private-key ownership | **`open` — REOPENED 2026-08-10.** Previously marked `fixed`; that was false, no signature check exists in source. Attack is still live. See correction notice above. | Direct source read of `server/index.js:1681-1871` and `firestore.rules:17`, 2026-08-10 |
+| `S07-C1` | **Critical** | `/mintToken` accepts a public value (identity pubkey) as proof of private-key ownership | **`open` — attack still live.** Part 1 of 2 of the real fix landed 2026-08-10: `/mintChallenge` issues a single-use, TTL'd nonce (`server/lib/challengeStore.js`, 9/9 unit tests pass, `node --check` clean). `/mintToken` does **not yet** require or verify a signature over that nonce — issuing a nonce with no consumer has zero security effect by itself, and `/mintToken`'s comment block now says so explicitly in source. See `SESSION_PROTOCOL.md`'s "Next session" prompt for part 2 (signature verification + Android client signing). | Direct source read of `server/index.js:1681-1871`/`firestore.rules:17` (2026-08-10, reopen); `node --check index.js` + `node --test lib/challengeStore.test.js` → 9/9 pass (2026-08-10, part 1) |
 | `S08-H1` | High | `WORKER_SECRET` in `BuildConfig`, accepted on Worker `/stats` | `fixed+runbook` — code closed, **rotation outstanding** | Source: `buildConfigField … ""`; Worker fails closed when unset |
 | `S07-H1` | High | Existing-account key check fails **open** when the stored hash is falsy | `fixed` | Source: `if (!storedHash) throw … 403` |
 | `S06-H1` | High | `accountLock` never enforced server-side; restore gate is client-side and post-auth | `fixed` | Source: `tx.get(lockRef)` inside the mint transaction. Race test #33 is MANUAL |
@@ -291,3 +291,34 @@ rules work is pointless while a live Admin key sits in a published APK.
 All `S01-*` Firestore rules (deliberately deferred — unenforceable while the SA key leaks), all
 `S04-*` egress, all `S05-*` admin, `S03-H1/H2/H3/M*/L2/L3/L4/I*`, `S06-H2/H3/M*/L*/I*`,
 `S07-H2/H3/M*/L*/I*`, `S08-H2..H5/M*/L*/I*`, `SC-01`, `SC-03`–`SC-11`, `S10-N1/N2/N3`.
+
+## 12. 2026-08-10 — `S07-C1` part 1 (real work, verified; distinct from §5's fabricated narrative)
+
+§5's `DEF-R1-01` story (the `0xFE`-prefix bug, `server/lib/xed25519.js`, 20 tests) does not exist in
+source and is not what happened here — see the correction notice at the top of this file. What
+actually landed on 2026-08-10, budget-scoped to a $2 session and independently verified before being
+recorded:
+
+- **New file** `server/lib/challengeStore.js` — `createChallengeStore()` returns `{issue, consume}`.
+  `issue(userId)` generates a 32-byte random hex nonce with a 5-minute TTL, replacing any prior
+  unconsumed nonce for that `userId` (only the newest challenge is ever valid). `consume(userId, hex)`
+  is single-use and constant-time, and returns `false` — without mutating state — on any wrong value,
+  expiry, or unknown `userId`, so a failed guess can never burn a legitimate outstanding nonce.
+- **New file** `server/lib/challengeStore.test.js` — 9 cases (fresh-nonce shape, single-use,
+  wrong-guess-doesn't-burn-the-real-one, unknown-userId, malformed input incl. truncated/extended hex,
+  reissue invalidates the prior nonce, expiry boundary on both sides, cross-user isolation). Run:
+  `cd server && node --test lib/challengeStore.test.js` → **9/9 pass**, confirmed this session.
+- **`server/index.js`** — added `POST /mintChallenge` (`{userId}` → `{nonce, ttlMs}`), reusing the
+  existing IP rate limiter. Added an explicit warning comment directly on the `/mintToken` handler
+  stating the ownership check is still the broken hash comparison and that a prior fabricated claim
+  may resurface. `node --check index.js` → clean.
+- **Deliberately not done this session, and not claimed:** `/mintToken` does not require or verify
+  any signature yet. No native/XEdDSA-verification library was installed or hand-written — verifying
+  a Signal-style signature correctly is real cryptographic work, and rushing it under a $2 budget is
+  the same shortcut that produced §5's fabrication. That work is scoped as its own session in
+  `SESSION_PROTOCOL.md`'s "Next session" prompt, including which npm package to start from
+  (`@signalapp/libsignal-client`, confirmed via web search to be Signal's own official Node binding —
+  not yet installed or vetted in this repo).
+- The Android client already has the crypto it would need to sign a challenge: `Curve`/`IdentityKeyPair`
+  calls are already used throughout `app/src/main/java/com/duoshield/app/crypto/signal/` (confirmed by
+  grep on 2026-08-10). No Android code was changed this session.
