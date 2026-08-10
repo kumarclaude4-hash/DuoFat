@@ -55,11 +55,25 @@ caused all three failures, and re-deriving trust after a bad session costs far m
     have all been corrected to say this as of 2026-08-10.
   - **Update, same day, later $2 session:** `S07-C1` part 1 of 2 landed — `server/lib/challengeStore.js`
     (single-use, TTL'd nonce issuance/consumption) and `POST /mintChallenge` in `server/index.js`.
-    Verified this session: `node --check index.js` clean, `node --test lib/challengeStore.test.js` →
-    9/9 pass. `S07-C1` is **still `open`** — `/mintToken` does not require or verify any signature
-    yet, so the nonce currently has no consumer and no security effect. Do not re-verify part 1's
-    existence as a first task in the next session — it's confirmed done. Go straight to part 2, which
-    is now the entire remaining scope of cluster 1 (§5 below has the exact next-session prompt).
+    Verified: `node --check index.js` clean, `node --test lib/challengeStore.test.js` → 9/9 pass.
+  - **Update, 2026-08-10, part 2 + a recovery pass: `S07-C1` IS NOW FIXED — do not redo it.**
+    Part 2 landed in commit `d833df4` and was independently re-verified in a following session (the
+    part-2 session was interrupted mid-recording, so a recovery session confirmed the code from
+    source and filed the disposition). `/mintToken` now requires `{nonce, signatureHex}`, consumes the
+    nonce single-use, and verifies an XEdDSA signature over
+    `"DuoShield-mintToken-v1"‖0x00‖userId‖0x00‖nonce` using `@signalapp/libsignal-client` 0.54.1
+    (`server/lib/identityVerify.js`) — same library and version as the Android client. The old
+    `sha256(identityPubKeyHex)` check was **kept** alongside it, so `S07-H1` stays closed. Android
+    signs via `Curve.calculateSignature` in `AuthTokenHelper.java`. Reproduced 2026-08-10:
+    `npm test` → 83/83 pass, `node --test lib/identityVerify.test.js` → 16/16 pass.
+    **Two caveats that are not "open work" but must not be lost:**
+    (a) the Android module has never been compiled — no JDK/Gradle/Android SDK exists in this
+    environment, so an operator must run `./gradlew :app:assembleDebug` before release;
+    (b) server and APK **must deploy together**, because the server now hard-requires the new fields.
+    Making them optional to support old clients would reintroduce the takeover.
+    Full evidence: `sessions/SESSION-01.md` §13 and the `S07-C1` note in `FINDING_INDEX.md`.
+    **Note for any session that finds `server/node_modules/` missing:** that is a fresh-clone
+    artifact, not a fabricated dependency. Run `npm ci` in `server/` before concluding anything.
 - **Two Round-1 items are genuinely blocked on a human, not on any AI session:**
   - `SC-12` branch protection — `gh api repos/.../branches/main/protection` returns 404 "Branch not
     protected." Setting it requires repo admin rights exercised by a human (or an explicit,
@@ -143,8 +157,13 @@ Always write a disposition based on:
 Use the clusters already identified in `REMEDIATION_PLAN.md`. Do not attempt a full round in one
 session; a round is many clusters. Suggested next clusters, in order:
 
-1. **`S07-C1` part 2 of 2 — signature verification (server) + signing call (Android client).**
-   Part 1 (nonce issuance) is done — see §0. This is the exact prompt to paste into the next session:
+1. ~~**`S07-C1` part 2 of 2 — signature verification (server) + signing call (Android client).**~~
+   **DONE 2026-08-10 (commit `d833df4`, verified in a follow-up recovery session — see §0).** The
+   prompt below is retained **for the record only**. Do not execute it. The next cluster to work is
+   **Round 2 cluster A** (item 2 below); the ready-to-paste prompt for it is in §8.
+
+   <details>
+   <summary>Historical prompt for cluster 1 (already completed — do not run)</summary>
 
    > Read `security-remediation/SESSION_PROTOCOL.md` in full first. Then: `S07-C1` part 2 of 2.
    > `POST /mintChallenge` already issues a single-use nonce (`server/lib/challengeStore.js`,
@@ -182,6 +201,12 @@ session; a round is many clusters. Suggested next clusters, in order:
    >    stop there, verify what you did against source per §4, and record precisely that split (not
    >    "S07-C1 fixed") — a server that correctly demands a signature no client yet sends is a
    >    partial fix, not a false one, as long as it's recorded as partial.
+
+   </details>
+
+   *Outcome:* both halves landed. Step 6's split did not end up being needed for the code, but its
+   spirit applied to the **environment**: Android compilation could not be verified, so that
+   limitation is recorded explicitly rather than glossed as success.
 2. **Round 2, cluster A — media/duress:** `S03-H1` (typed media scope) + `S06-H2`/`S06-H3`/`S06-I2`
    (durable duress lock). These are grouped in the plan because they touch the same code paths.
 3. **Round 2, cluster B — egress/SSRF:** `S04-H1`/`S04-H2`/`S04-H3`/`S08-H4` (link-preview SSRF +
@@ -216,7 +241,58 @@ reports a result risks generating another false claim. Instead:
 
 ---
 
-## 7. What "done" looks like for this whole program
+## 7. Ready-to-paste prompt for the NEXT session (Round 2, cluster A — media/duress)
+
+`S07-C1` is closed (§0). The next cluster is **Round 2 cluster A**: `S03-H1` (typed media scope) +
+`S06-H2` / `S06-H3` / `S06-I2` (durable duress lock). Paste this verbatim:
+
+> Read `security-remediation/SESSION_PROTOCOL.md` in full first, then the `S03-H1`, `S06-H2`,
+> `S06-H3`, `S06-I2` rows in `FINDING_INDEX.md`, then `git status --short` and
+> `git log -5 --oneline`. Do **not** re-verify or touch `S07-C1` — it is closed and verified; §0 says
+> so and re-litigating it wastes the budget. Scope this session to **Round 2 cluster A only**.
+>
+> Per §3, before writing any code, falsify the inherited state for these four findings from source:
+>
+> 1. `S03-H1` — media-token scope confusion. Read the `/mediaToken` handler in `server/index.js`
+>    (grep `mediaToken`) and the group-membership check it relies on, plus `firestore.rules`'s
+>    `groups` create rule. The defect: a client can create `groups/{chatId}` self-asserting its own
+>    membership, then obtain a media token for a conversation it is not part of. Confirm whether the
+>    `partial (SEC-A01)` status in the index is still accurate — find the actual current check, don't
+>    trust the row.
+> 2. `S06-H2` / `S06-H3` / `S06-I2` — duress lock durability. Read
+>    `app/src/main/java/com/duoshield/app/.../DuressManager.java`, `AccountLockWorker.java`, and
+>    `FcmUnregisterWorker.java` (verify exact paths with Glob; the index's line numbers are from the
+>    audit and may have drifted). Two distinct defects: (a) WorkManager persists plaintext records
+>    that *prove a duress code was entered* — forensically incriminating, which is the whole point of
+>    duress; (b) an offline duress trigger silently fails to lock, and the attacker controls the
+>    network, so "silently fails" is the attacker's win condition. `S06-I2` (can't distinguish success
+>    from failure) is expected to be subsumed by the `S06-H3` durable-intent fix — confirm that rather
+>    than assuming it.
+>
+> Then implement. Guidance, not a spec — verify each claim against source first:
+> - For `S06-H3`, the fix shape is a **durable local intent** that survives reboot and retries until
+>   the server confirms the lock, plus a local lock that takes effect immediately and independently of
+>   network reachability. A lock that only exists server-side is not a duress lock.
+> - For `S06-H2`, WorkManager input data and any log/DB row must not encode *why* the work was
+>   queued. Prefer an indistinguishable payload over a "duress=true" flag, and make sure the same
+>   records exist on non-duress paths so their mere presence proves nothing.
+> - For `S03-H1`, bind the media token to a server-verified scope rather than a client-asserted one.
+>   Keep any existing checks; add, don't replace (the `S07-C1` fix's hash-check retention is the
+>   precedent).
+>
+> Testing: server-side changes get `node --test` unit tests under `server/lib/` following the
+> existing pattern in `server/lib/challengeStore.test.js` and `identityVerify.test.js` (real
+> library-produced values, never hand-written expected outputs). Run `cd server && npm ci && npm test`
+> and paste the real counts. **Android has no JDK/Gradle/SDK in this environment** — Java changes are
+> source-verifiable only; record Android compilation as `BLOCKED`, exactly as `S07-C1` §13.4 does,
+> and never imply an APK was built.
+>
+> Record per §4: update the four `FINDING_INDEX.md` rows with real command output from *this* session
+> and a commit hash obtained via `git log -1 --format=%H` **after** committing, then append one
+> session-log entry. If budget runs short, drop `S03-H1` and finish the duress items completely
+> rather than half-finishing all four — and record the split honestly.
+
+## 8. What "done" looks like for this whole program
 
 Unchanged from `REMEDIATION_PLAN.md`'s Round 3 hard stop: every one of the 116 findings has exactly
 one disposition in `FINDING_INDEX.md`, no Critical/High remains open, `FINAL_SECURITY_REPORT.md` and

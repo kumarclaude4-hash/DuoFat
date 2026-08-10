@@ -173,7 +173,7 @@ The **governing severity** used for prioritization is the audit's own cross-sess
 
 | ID | Sev (orig→gov) | Affected files | TB | Root cause | Status | Prio | Rnd | Verify | Planned Disp |
 |---|---|---|---|---|---|---|---|---|---|
-| S07-C1 | **Critical** | `AuthTokenHelper.java:101-120`,`server/index.js:1471,:1512-1518` | TB-2/TB-1 | `/mintToken` accepts a public value (identity pubkey) as proof of ownership → takeover w/o seed | open | P0 | R1 | pending | fixed |
+| S07-C1 | **Critical** | `server/lib/identityVerify.js`,`server/lib/challengeStore.js`,`server/index.js:6,:1706-1876`,`AuthTokenHelper.java:112-174,:189-249`,`DisplayNameActivity.java:126`,`RestoreFromSeedActivity.java:226` | TB-2/TB-1 | `/mintToken` accepted a public value (identity pubkey) as proof of ownership → takeover w/o seed | **fixed** (server verified by test; Android verified by source only — see note) | P0 | R1 | verified-source+test 2026-08-10 (`npm test` → 83/83 pass; `node --test lib/identityVerify.test.js` → 16/16 pass; `node --check` clean; Java/JS challenge bytes proven byte-identical). **Android compilation NOT verified — no JDK/Android SDK in env (BLOCKED).** | fixed |
 | S07-H1 | High | `server/index.js:1514-1517` | TB-1 | Existing-account key check fails open when `identityPubKeyHash` absent (dup of S02-L1) | open | P0 | R1 | pending | fixed |
 | S07-H2 | High | `BackupCryptoHelper.java:105-111`,`BackupManager.java` | TB-1 | Backup docs ship unkeyed SHA-256 of plaintext → offline plaintext-recovery oracle | open | P2 | R3 | pending | fixed |
 | S07-H3 | High | `GroupCipherHelper.java:43-79`,`firestore.rules:130-134` | TB-2 | Group messages have no AAD → sender attribution rules-only | open | P2 | R3 | pending | fixed |
@@ -187,6 +187,56 @@ The **governing severity** used for prioritization is the audit's own cross-sess
 | S07-I1 | Info | `DuoShieldSignalStore.java:371-384` | TB-2 | `SenderKeyStore` stub — Signal group primitive present but unused | open | P2 | R3 | pending | accepted (documented; enables S07-H3 fix path) |
 | S07-I2 | Info | `firestore.rules` groups | TB-2 | No add-member flow; rules permit key-less membership add | open | P2 | R3 | pending | accepted (documented) |
 | S07-I3 | Info | `SeedPhraseHelper.java:546-564` | TB-2 | Account ID uses only 64 bits of SHA-256(seed) and doubles as uid + slot key | open | P2 | R3 | pending | accepted (documented; entropy analysis in DECISION-LOG) |
+
+### Note — `S07-C1` evidence and the one thing that is *not* verified
+
+This is the finding this program falsely closed once before (`SESSION_PROTOCOL.md` §0, fabrication
+#3). The disposition above is therefore stated with its evidence and its limits explicit.
+
+**What was verified from source and from commands run on 2026-08-10 (session S07-C1 part 2, recording
+pass):**
+
+- `server/lib/identityVerify.js` exists and delegates verification to `PublicKey.verify()` from
+  `@signalapp/libsignal-client` — pinned `^0.54.1` in `server/package.json`, matching the Android
+  client's `org.signal:libsignal-android:0.54.1` / `libsignal-client:0.54.1` (`app/build.gradle:284-288`).
+  **No XEdDSA/Curve25519 math is hand-rolled**, which was the specific defect of the fabricated
+  `xed25519.js`. `npm ci` installs the package cleanly from the committed lockfile.
+- `server/index.js:1867` calls `verifyMintTokenSignature(...)` and returns 403 on failure, and
+  `:1853` calls `mintChallengeStore.consume(userId, nonce)` first, so the nonce is spent by the
+  attempt itself (no signature-grinding against one outstanding challenge, no replay).
+- `:1796-1801` makes `nonce` + `signatureHex` **mandatory** — a legacy client gets a 400, not a
+  bypass.
+- **The original `sha256(identityPubKeyHex)` check was kept, not removed** (`:1878` `incomingHash`,
+  `:1950` `storedHash`), so the `S07-H1` fail-closed branch is intact and the new gate is additive
+  defense-in-depth.
+- The signature is domain-separated: `"DuoShield-mintToken-v1" || 0x00 || utf8(userId) || 0x00 ||
+  nonce`, binding it to this endpoint and this account so a signed-prekey signature made by the same
+  identity key cannot be repurposed.
+- Client/server byte agreement was checked mechanically, not by eye: the Java builder
+  (`AuthTokenHelper.java:159-174`) and the JS builder produce the identical 71-byte string for a
+  fixed vector (`44756f...002a`), which also matches the vector printed by the test suite.
+- Both Android call sites pass a full `IdentityKeyPair` (`DisplayNameActivity.java:126`,
+  `RestoreFromSeedActivity.java:226`); no public-key-only call site remains.
+- Test output from this session, not remembered: `npm test` → `tests 83 / pass 83 / fail 0`;
+  `node --test lib/identityVerify.test.js` → `tests 16 / pass 16 / fail 0`. The suite covers all
+  eight required attack cases — invalid signature, wrong signing key, modified nonce, modified/wrong
+  public key, reused nonce, expired nonce, never-issued nonce, cross-account nonce, bare-nonce (no
+  context prefix), bit-flipped signature, malformed input, and the valid case. Signatures in the
+  tests are produced by the same vetted library, never hand-written.
+
+**What is NOT verified:** the Android module has **never been compiled**. This environment has no
+JDK, no Gradle on `PATH`, and no Android SDK (`ANDROID_HOME` unset), so `AuthTokenHelper.java`'s
+changes are verified by source review and cross-language byte comparison **only**. Treat Android
+compilation as `BLOCKED`, not as passing. **Required operator step before any release:** run
+`./gradlew :app:assembleDebug` (or CI equivalent) and confirm `AuthTokenHelper.java` compiles —
+`Curve.calculateSignature` and `IdentityKeyPair.getPrivateKey()` resolve against the `compileOnly`
+`libsignal-client` jar, and the stripped runtime jar must retain `org.signal.libsignal.protocol.ecc.Curve`.
+If it does not compile, sign-in is broken app-wide and this row drops back to `partial`.
+
+**Deployment ordering warning (not a defect):** the server now *requires* the challenge/signature
+fields, so **the server and the Android client must ship together.** An updated server in front of
+an old APK returns 400 on every sign-in. Do not "fix" that by making the fields optional — that
+restores the takeover this finding describes.
 
 ## Session 08 — Client platform (`../audit/SESSION-08-CLIENT-PLATFORM.md`)
 
