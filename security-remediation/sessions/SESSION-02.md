@@ -380,7 +380,7 @@ VERIFICATION: PASS: released .yml parses as valid YAML - loaded with a throwaway
                 real verification is the next live push to main; watch that run's logs (see PR-8).
               NOT RUN / NOT APPLICABLE: server npm test (untouched this session, no server/ file
                 edited); Android compilation (no Java edited)
-COMMIT: <fill from `git log -1 --format=%H` after committing>   WORKTREE: clean after this commit
+COMMIT: 7dfdea4309fe1f30a102f58bb4ecd76f5bf64d23 (+ this hash record)   WORKTREE: clean
 NEXT SESSION: single item, Java-only, no CI-runner gap this time — SC-06 (JitPack dependency,
               build.gradle:16) or SC-07 (unvalidated gradle-wrapper.jar). Both are audited in the same
               file (audit/SESSION-09-SUPPLY-CHAIN-CI.md, SC-06 at line ~306, SC-07 at line ~337) and
