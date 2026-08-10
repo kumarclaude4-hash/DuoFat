@@ -6,7 +6,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.Editable;
-import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
@@ -210,11 +209,34 @@ public class WatchTogetherActivity extends AppCompatActivity
             stateListener = null;
         }
         heartbeatHandler.removeCallbacksAndMessages(null);
+        // Drop any queued debounce so a pending search cannot fire against a dead Activity.
+        searchHandler.removeCallbacksAndMessages(null);
+        pendingSearch = null;
         if (player != null) {
             player.setListener(null);
             player.destroy();
             player = null;
         }
+    }
+
+    /**
+     * Back dismisses the search panel first, so browsing results is escapable without
+     * leaving the screen (and without ending the session for both participants).
+     */
+    @Override
+    public void onBackPressed() {
+        if (searchState.isPanelVisible()) {
+            cancelPendingSearch();
+            searchState.reset();
+            if (etUrl != null) {
+                suppressTextWatcher = true;
+                etUrl.setText("");
+                suppressTextWatcher = false;
+            }
+            renderSearch();
+            return;
+        }
+        super.onBackPressed();
     }
 
     // ── View setup ────────────────────────────────────────────────────────────
@@ -238,17 +260,31 @@ public class WatchTogetherActivity extends AppCompatActivity
         if (btnClose != null) btnClose.setOnClickListener(v -> endSessionAndFinish());
 
         Button btnStart = findViewById(R.id.btnStartWatch);
-        if (btnStart != null) btnStart.setOnClickListener(v -> startFromInput());
+        if (btnStart != null) btnStart.setOnClickListener(v -> submitInput());
 
         if (etUrl != null) {
             etUrl.setOnEditorActionListener((v, actionId, event) -> {
-                if (actionId == EditorInfo.IME_ACTION_GO) {
-                    startFromInput();
+                // The layout now asks for actionSearch, but accept GO too: some IMEs
+                // substitute it, and an unhandled action would silently do nothing.
+                if (actionId == EditorInfo.IME_ACTION_SEARCH
+                        || actionId == EditorInfo.IME_ACTION_GO) {
+                    submitInput();
                     return true;
                 }
                 return false;
             });
+
+            etUrl.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+                @Override public void afterTextChanged(Editable s) {
+                    if (suppressTextWatcher) return;
+                    onQueryChanged(s == null ? "" : s.toString());
+                }
+            });
         }
+
+        bindSearchViews();
 
         if (btnPlayPause != null) btnPlayPause.setOnClickListener(v -> togglePlayPause());
         if (btnPlaybackRate != null) btnPlaybackRate.setOnClickListener(v -> cycleRate());
@@ -330,30 +366,236 @@ public class WatchTogetherActivity extends AppCompatActivity
         updateRateButton(state.playbackRate);
     }
 
-    // ── Local control actions ─────────────────────────────────────────────────
+    // ── YouTube search ────────────────────────────────────────────────────────
 
-    private void startFromInput() {
-        if (etUrl == null) return;
-        String raw = etUrl.getText().toString().trim();
-        if (TextUtils.isEmpty(raw)) return;
+    private void bindSearchViews() {
+        searchPanel      = findViewById(R.id.searchPanel);
+        rvResults        = findViewById(R.id.rvSearchResults);
+        searchProgress   = findViewById(R.id.searchProgress);
+        searchMessageBox = findViewById(R.id.searchMessageBox);
+        tvSearchMessage  = findViewById(R.id.tvSearchMessage);
+        btnSearchRetry   = findViewById(R.id.btnSearchRetry);
 
-        String videoId = YouTubeUrlParser.extractVideoId(raw);
-        if (videoId == null) {
-            Toast.makeText(this, "That doesn't look like a YouTube link", Toast.LENGTH_SHORT).show();
+        if (rvResults != null) {
+            searchAdapter = new YouTubeSearchAdapter(this, this::onResultChosen);
+            rvResults.setLayoutManager(new LinearLayoutManager(this));
+            rvResults.setAdapter(searchAdapter);
+            // Fixed row height, so skip the per-item remeasure on every change.
+            rvResults.setHasFixedSize(true);
+        }
+
+        if (btnSearchRetry != null) {
+            btnSearchRetry.setOnClickListener(v -> retrySearch());
+        }
+    }
+
+    /**
+     * Called for every keystroke. Decides between "start a session now" (a pasted link),
+     * "search after a pause" and "say nothing yet".
+     */
+    private void onQueryChanged(String raw) {
+        cancelPendingSearch();
+
+        String normalized = YouTubeSearchState.normalizeQuery(raw);
+
+        if (normalized.isEmpty()) {
+            searchState.reset();
+            renderSearch();
             return;
         }
 
-        etUrl.setText("");
+        // A pasted link is not a search term. Leave the panel alone and let the user hit
+        // Go/Search — firing a session start mid-paste would be hostile.
+        if (YouTubeUrlParser.extractVideoId(normalized) != null) {
+            searchState.reset();
+            renderSearch();
+            return;
+        }
+
+        if (!YouTubeSearchState.isSearchable(normalized)) {
+            searchState.markTooShort();
+            renderSearch();
+            return;
+        }
+
+        // Debounce: one request per pause in typing, not one per character. This is the main
+        // protection for the shared server-side YouTube quota.
+        pendingSearch = () -> {
+            pendingSearch = null;
+            dispatchSearch(normalized, false);
+        };
+        searchHandler.postDelayed(pendingSearch, YouTubeSearchState.DEBOUNCE_MS);
+    }
+
+    /** Go button / IME action: a link starts a session, anything else searches immediately. */
+    private void submitInput() {
+        if (etUrl == null) return;
+        String raw = etUrl.getText().toString();
+        String normalized = YouTubeSearchState.normalizeQuery(raw);
+        if (normalized.isEmpty()) return;
+
+        String videoId = YouTubeUrlParser.extractVideoId(normalized);
+        if (videoId != null) {
+            startSessionWithVideoId(videoId, YouTubeUrlParser.extractStartMs(normalized));
+            return;
+        }
+
+        if (!YouTubeSearchState.isSearchable(normalized)) {
+            searchState.markTooShort();
+            renderSearch();
+            return;
+        }
+
+        // Explicit intent beats the timer: drop any queued debounce and go now.
+        cancelPendingSearch();
+        hideKeyboard();
+        dispatchSearch(normalized, true);
+    }
+
+    /**
+     * @param force when {@code true} the request is sent even if the same query already has
+     *              results on screen — that is what makes the Go button and Retry feel
+     *              responsive instead of inert.
+     */
+    private void dispatchSearch(String normalized, boolean force) {
+        String query = YouTubeSearchState.clampQuery(normalized);
+        if (!force && !searchState.shouldDispatch(query)) return;
+
+        final long token = searchState.beginSearch(query);
+        renderSearch();
+
+        YouTubeSearchClient.search(query, YouTubeSearchState.PAGE_SIZE,
+                new YouTubeSearchClient.Callback() {
+                    @Override
+                    public void onResults(List<YouTubeSearchResult> results, boolean cached) {
+                        // isDestroyed guard: the callback is main-thread but the Activity may
+                        // have gone away while the request was in flight.
+                        if (isFinishing() || isDestroyed()) return;
+                        if (searchState.onResults(token, results)) renderSearch();
+                    }
+
+                    @Override
+                    public void onError(int status, String message) {
+                        if (isFinishing() || isDestroyed()) return;
+                        Log.w(TAG, "YouTube search failed, status=" + status);
+                        if (searchState.onError(token, message)) renderSearch();
+                    }
+                });
+    }
+
+    private void retrySearch() {
+        String query = searchState.activeQuery();
+        if (query == null || query.isEmpty()) {
+            // Nothing to retry against — fall back to whatever is in the field.
+            submitInput();
+            return;
+        }
+        dispatchSearch(query, true);
+    }
+
+    private void cancelPendingSearch() {
+        if (pendingSearch != null) {
+            searchHandler.removeCallbacks(pendingSearch);
+            pendingSearch = null;
+        }
+    }
+
+    /**
+     * A result was tapped. Only the {@code videoId} crosses into the session — titles,
+     * thumbnails and channel names are display-only and are deliberately never written to
+     * Firestore, so the search feature adds nothing to the synced document's shape.
+     */
+    private void onResultChosen(YouTubeSearchResult result) {
+        if (result == null || !result.isUsable()) {
+            Toast.makeText(this, "That result can't be played", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startSessionWithVideoId(result.videoId, 0L);
+    }
+
+    /** The single entry point into the existing session/sync flow. */
+    private void startSessionWithVideoId(String videoId, long startMs) {
+        if (videoId == null || videoId.isEmpty()) return;
+
+        cancelPendingSearch();
+        searchState.reset();
+
+        if (etUrl != null) {
+            suppressTextWatcher = true;
+            etUrl.setText("");
+            suppressTextWatcher = false;
+        }
+        hideKeyboard();
+        renderSearch();
 
         WatchTogetherState s = new WatchTogetherState();
         s.active       = true;
         s.videoId      = videoId;
         s.hostUid      = myUid;
         s.playing      = true;
-        s.positionMs   = YouTubeUrlParser.extractStartMs(raw);
+        s.positionMs   = Math.max(0L, startMs);
         s.playbackRate = WatchTogetherState.DEFAULT_PLAYBACK_RATE;
         performLocalWrite(WatchTogetherState.ACTION_START, s);
     }
+
+    /** Renders {@link #searchState}. The only place search view visibility is decided. */
+    private void renderSearch() {
+        if (searchPanel == null) return;
+
+        YouTubeSearchState.Phase phase = searchState.phase();
+
+        searchPanel.setVisibility(searchState.isPanelVisible() ? View.VISIBLE : View.GONE);
+
+        if (searchProgress != null) {
+            searchProgress.setVisibility(phase == YouTubeSearchState.Phase.LOADING
+                    ? View.VISIBLE : View.GONE);
+        }
+
+        boolean hasResults = phase == YouTubeSearchState.Phase.RESULTS;
+        if (rvResults != null) {
+            rvResults.setVisibility(hasResults ? View.VISIBLE : View.GONE);
+        }
+        if (searchAdapter != null) {
+            searchAdapter.setResults(hasResults ? searchState.results() : null);
+            if (hasResults) rvResults.scrollToPosition(0);
+        }
+
+        String message;
+        switch (phase) {
+            case TOO_SHORT:
+                message = "Keep typing to search YouTube\u2026";
+                break;
+            case EMPTY:
+                message = "No results for \u201C" + searchState.activeQuery() + "\u201D";
+                break;
+            case ERROR:
+                message = searchState.message();
+                break;
+            default:
+                message = null;
+                break;
+        }
+
+        if (searchMessageBox != null) {
+            searchMessageBox.setVisibility(message == null ? View.GONE : View.VISIBLE);
+        }
+        if (tvSearchMessage != null && message != null) {
+            tvSearchMessage.setText(message);
+        }
+        if (btnSearchRetry != null) {
+            btnSearchRetry.setVisibility(phase == YouTubeSearchState.Phase.ERROR
+                    ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void hideKeyboard() {
+        if (etUrl == null) return;
+        InputMethodManager imm =
+                (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(etUrl.getWindowToken(), 0);
+    }
+
+    // ── Local control actions ─────────────────────────────────────────────────
 
     private void togglePlayPause() {
         if (appliedState == null || !appliedState.isPlayable() || player == null) return;
@@ -468,8 +710,8 @@ public class WatchTogetherActivity extends AppCompatActivity
         if (tvPlaceholder != null) {
             boolean hadSession = state != null && state.videoId != null && !state.videoId.isEmpty();
             tvPlaceholder.setText(hadSession
-                    ? "Watch Together ended. Paste a link to start again."
-                    : "Paste a YouTube link below to start watching together.");
+                    ? "Watch Together ended. Search or paste a link to start again."
+                    : "Search YouTube or paste a link below to start watching together.");
             tvPlaceholder.setVisibility(View.VISIBLE);
         }
         if (tvStatus != null) tvStatus.setText("");
