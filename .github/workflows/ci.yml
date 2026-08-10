@@ -174,6 +174,19 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The emulator needs the command-line tools on PATH so the runner action
+      # can invoke avdmanager/sdkmanager/emulator. Without this the action can
+      # fail to provision the AVD and then time out waiting on a device that
+      # was never created ("No compatible devices connected").
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # AVD snapshot cache. The cache is only restored on an exact key hit, so
+      # the key must encode every AVD-defining property (api-level, target,
+      # arch). A stale/partial restore is worse than no cache: the runner is
+      # then told an AVD exists (force-avd-creation: false) when the snapshot
+      # is unusable, which surfaces as
+      # "Failed to start Emulator console for 5554".
       - name: Cache AVD
         uses: actions/cache@v4
         id: avd-cache
@@ -181,24 +194,73 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-api30
+          key: avd-api30-aosp_atd-x86_64-v2
+
+      # Create the AVD once and snapshot it, WITHOUT running any test. This
+      # separates "provision the device" from "run the tests", so a
+      # provisioning failure is reported as a provisioning failure instead of
+      # as a mysterious test-task error. Runs only on a cache miss.
+      - name: Create AVD and generate snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: aosp_atd
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "Generated AVD snapshot for caching."
 
       - name: Run instrumented tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
+          # api-level/target/arch/profile MUST match the snapshot step above,
+          # or the cached AVD does not apply to this run.
           api-level: 30
-          target: default
+          target: aosp_atd
           arch: x86_64
+          profile: pixel_2
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew :app:connectedDebugAndroidTest --no-daemon
+          # Prove a device is actually present and finished booting BEFORE
+          # handing control to Gradle. If this fails the job fails here with a
+          # clear device-level cause, rather than inside the test task.
+          script: |
+            adb devices
+            adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+            adb shell getprop ro.build.version.sdk
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon
+
+      # Fail the job if the test task "succeeded" without actually executing any
+      # test. connectedDebugAndroidTest can exit 0 on an empty run, which would
+      # otherwise show up as a green Espresso job that tested nothing.
+      - name: Verify Espresso tests actually executed
+        if: always()
+        run: |
+          RESULTS_DIR=app/build/outputs/androidTest-results/connected
+          if [ ! -d "$RESULTS_DIR" ]; then
+            echo "::error::No instrumentation results directory — tests did not run."
+            exit 1
+          fi
+          TOTAL=$(grep -ho 'tests="[0-9]*"' "$RESULTS_DIR"/*.xml 2>/dev/null \
+                  | grep -o '[0-9]*' | paste -sd+ - | bc)
+          TOTAL=${TOTAL:-0}
+          echo "Espresso tests executed: $TOTAL"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "::error::Instrumentation ran 0 tests — treating as failure."
+            exit 1
+          fi
 
       - name: Upload instrumented test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: instrumented-test-report
-          path: app/build/reports/androidTests/connected/**
+          path: |
+            app/build/reports/androidTests/connected/**
+            app/build/outputs/androidTest-results/connected/**
           if-no-files-found: warn
           retention-days: 14
