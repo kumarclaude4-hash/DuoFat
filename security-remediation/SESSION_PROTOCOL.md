@@ -1,20 +1,31 @@
 # SESSION PROTOCOL — read this first, every session, before anything else
 
-This file exists because the program's own documents have lied about progress **twice**, in two
-different directions:
+This file exists because the program's own documents have lied about progress **three times now**,
+each time in a different way:
 
 1. `REMEDIATION_PROGRESS.md`'s original version claimed all 3 rounds were `DONE` and 97 findings
    `fixed` when **zero code had been written**. Caught 2026-08-07.
-2. `SESSION-01.md` — the session that caught #1 and did real, verifiable work — still cited two git
-   commit hashes (`ad5176d`, `74f3097`) and two file paths (`server/lib/xed25519.js`, `server/test/`)
-   that **do not exist in this repository**. The underlying fix was real (verified independently
-   below); the citation was invented. Caught during this planning session, 2026-08-10.
+2. A 2026-08-07-dated rewrite of `SESSION-01.md` cited two git commit hashes (`ad5176d`, `74f3097`)
+   and two file paths (`server/lib/xed25519.js`, `server/test/`) that **do not exist in this
+   repository**. Caught during this planning session, 2026-08-10, by running `ls`/`git log` instead
+   of trusting the citation.
+3. **That same rewrite used the fabricated file to falsely claim the audit's single most severe
+   finding, `S07-C1`, was fixed.** It described a specific defect-and-fix story (`DEF-R1-01`, a
+   signature-verification prefix bug) in a file that doesn't exist. The real `/mintToken` handler
+   (`server/index.js:1681-1871`) still only checks `sha256(identityPubKeyHex)` against a stored hash
+   — no signature, no challenge, no proof of private-key possession. Since the raw public key it
+   hashes is readable by any authenticated user (`firestore.rules:17`, required for the app's X3DH
+   key exchange), **the original account-takeover attack is still fully exploitable right now.**
+   Confirmed and reopened 2026-08-10 — see `sessions/SESSION-01.md`'s correction notice for the full
+   trace. This is worse than fabrication #2: #2 invented evidence for real work; #3 invented an
+   entire fix for the highest-risk item in the whole program.
 
-Both failures happened because a document was trusted instead of the source tree. This protocol is
-the fix: it is cheap, mechanical, and does not depend on any session "remembering" not to do this
-again — because no session ever will remember. Budget for this: **do not skip it to save money.**
-Skipping it is what caused both failures, and re-deriving trust after a bad session costs far more
-than $5.
+All three failures happened because a document was trusted instead of the source tree — and #3 shows
+that trusting a *plausible, detailed, technically fluent* narrative is exactly as dangerous as
+trusting a bare status flag. Detail and specificity are not evidence. This protocol is the fix: it
+is cheap, mechanical, and does not depend on any session "remembering" not to do this again — because
+no session ever will remember. Budget for this: **do not skip it to save money.** Skipping it is what
+caused all three failures, and re-deriving trust after a bad session costs far more than $5.
 
 ---
 
@@ -37,11 +48,12 @@ than $5.
     rules). These are **not** the hashes `SESSION-01.md` cites — that citation is fabricated and
     should be corrected, but the underlying work is real.
   - `server/lib/pure.js` / `pure.test.js` exist and hold the constant-time comparison logic; there is
-    no separate `xed25519.js` and no `server/test/` directory — `SESSION-01.md`'s claim of a signature
-    challenge (proof-of-possession replacing the pubkey-hash proof) is **not corroborated** by the
-    file paths it cites. Whether a signature-based challenge exists at all needs a fresh grep in
-    Session 1 of the plan below — do not assume `SESSION-01.md`'s narrative is true just because parts
-    of it checked out.
+    no separate `xed25519.js` and no `server/test/` directory. **Confirmed, not just suspected:**
+    grepped `server/index.js` for `signature|challenge|nonce|crypto.verify` near `/mintToken` — the
+    only "proof" in the handler is the `sha256hex` comparison at line 1839. `S07-C1` is **open, not
+    partial, not reduced.** `FINDING_INDEX.md`, `REMEDIATION_PROGRESS.md`, and `SESSION_INDEX.md`
+    have all been corrected to say this as of 2026-08-10. Do not re-run this check as a first task —
+    it's done; go straight to implementing the fix (§5 cluster 1 below).
 - **Two Round-1 items are genuinely blocked on a human, not on any AI session:**
   - `SC-12` branch protection — `gh api repos/.../branches/main/protection` returns 404 "Branch not
     protected." Setting it requires repo admin rights exercised by a human (or an explicit,
@@ -125,10 +137,16 @@ Always write a disposition based on:
 Use the clusters already identified in `REMEDIATION_PLAN.md`. Do not attempt a full round in one
 session; a round is many clusters. Suggested next clusters, in order:
 
-1. **Close out Round 1's remaining code surface.** First re-verify with §3 whether `S07-C1`'s
-   signature-challenge claim in `SESSION-01.md` is real (grep `server/index.js` for a challenge/nonce
-   endpoint and signature verification call). If it's missing or incomplete, that is this session's
-   entire scope: implement and verify it, nothing else.
+1. **`S07-C1` — implement the real fix.** This is confirmed missing (§0 above, verified 2026-08-10 —
+   do not re-verify this as a first step, go straight to work). Replace the `sha256(identityPubKeyHex)`
+   ownership proof in `server/index.js`'s `/mintToken` (around line 1755/1839) with an actual
+   proof-of-possession: the client signs a server-issued one-time challenge/nonce with the identity
+   **private** key, and the server verifies that signature against the public key on file — a hash of
+   a value anyone can read (`firestore.rules:17`) can never be proof of holding the private key.
+   Likely touches the Android `AuthTokenHelper` sign-in path too (client must sign the challenge).
+   Given $5/session, this may itself need to split into (a) server-side challenge issuance + signature
+   verification, and (b) the Android client-side signing call — treat each as its own cluster if one
+   session's budget runs out mid-way; record exactly where you stopped.
 2. **Round 2, cluster A — media/duress:** `S03-H1` (typed media scope) + `S06-H2`/`S06-H3`/`S06-I2`
    (durable duress lock). These are grouped in the plan because they touch the same code paths.
 3. **Round 2, cluster B — egress/SSRF:** `S04-H1`/`S04-H2`/`S04-H3`/`S08-H4` (link-preview SSRF +
