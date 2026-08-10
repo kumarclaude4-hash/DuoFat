@@ -250,7 +250,14 @@ jobs:
             echo "::error::No instrumentation results directory — tests did not run."
             exit 1
           fi
-          TOTAL=$(grep -ho 'tests="[0-9]*"' "$RESULTS_DIR"/*.xml 2>/dev/null \
+          # AGP writes connectedDebugAndroidTest's TEST-*.xml files one level
+          # deeper than this, inside a per-device subdirectory (e.g.
+          # connected/<device-name>/TEST-*.xml) — never directly under
+          # connected/. A non-recursive "$RESULTS_DIR"/*.xml glob therefore
+          # matches nothing on every run, silently defaulting TOTAL to 0 and
+          # failing the job even when every test actually passed. find -name
+          # is used instead so nested result files are counted correctly.
+          TOTAL=$(find "$RESULTS_DIR" -name '*.xml' -exec grep -ho 'tests="[0-9]*"' {} + 2>/dev/null \
                   | grep -o '[0-9]*' | paste -sd+ - | bc)
           TOTAL=${TOTAL:-0}
           echo "Espresso tests executed: $TOTAL"
