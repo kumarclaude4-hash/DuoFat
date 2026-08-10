@@ -411,7 +411,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ── Per-UID authenticated-endpoint rate limiter ───────────────────────────────
+// ── Per-UID authenticated-endpoint rate limiter ───────────���───────────────────
 // Prevents an authenticated user from flooding B2 presign/delete or other
 // server-mediated endpoints.  Each endpoint has its own per-minute bucket.
 const AUTH_RATE_WINDOW_MS = 60_000;
@@ -623,6 +623,39 @@ async function callerMayAccessScope(uid, scopeId) {
 // static /admin page itself carries no data — only the API calls it makes
 // need the token — so serving the HTML shell without auth leaks nothing.
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+
+// S05-H1: the line above used to be the ENTIRE validation of the credential
+// guarding waitlist approval and account unfreeze — any non-empty string was
+// accepted, so `ADMIN_TOKEN=admin` shipped a five-character admin password.
+//
+// Checked at startup rather than per request, because startup is the only moment
+// a weak secret is still a fixable deployment error instead of an invisible
+// standing exposure. Failing CLOSED (refusing to boot) is deliberate: booting
+// with a guessable admin token is strictly worse than not booting, since the
+// operator would have no signal until the panel was already abused.
+//
+// Note the asymmetry with "unset", which does NOT abort — an unset token leaves
+// the panel returning 503 (see requireAdminAuth), which is already safe, and
+// hard-failing there would break deployments that legitimately never enable the
+// admin panel. A *weak* token is the dangerous case, because it is open.
+const adminSecret = require("./lib/adminSecret");
+if (ADMIN_TOKEN) {
+  const verdict = adminSecret.evaluateSecretStrength("ADMIN_TOKEN", ADMIN_TOKEN);
+  if (!verdict.ok) {
+    console.error("FATAL: refusing to start with a weak ADMIN_TOKEN.");
+    console.error(`  ${verdict.reason}`);
+    console.error(`  ${verdict.remedy}`);
+    // Abort rather than continue: see reasoning above.
+    process.exit(1);
+  }
+  console.log(`admin auth: ADMIN_TOKEN accepted (~${verdict.bits} bits of entropy)`);
+} else {
+  console.warn(
+    "admin auth: ADMIN_TOKEN is not set — the admin panel will refuse every " +
+    "request with 503. Set it to enable operator actions (see server/README.md)."
+  );
+}
+
 const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_IP_MAX_FAILS = 10;
 const adminIpFails = new Map(); // ip → { count, windowStart }
@@ -658,6 +691,33 @@ function recordAdminAuthFailure(ip) {
   } else {
     rec.count++;
   }
+}
+
+// S05-H3: admin ACTIONS were already written to adminAuditLog (waitlist approve,
+// unfreeze, duress enroll/revoke), so that half of the finding row is stale. What
+// was genuinely missing is admin AUTHENTICATION: login success, login failure,
+// lockout and logout left no durable trace at all. Only `console.warn` recorded
+// them, and Render's logs roll, so the single most important forensic question —
+// "did anyone other than us get into the admin panel, and when?" — was
+// unanswerable after a few days.
+//
+// Writes are deliberately fire-and-forget: an audit sink that can block or fail
+// a login would become an availability problem, and a failed write is itself
+// logged. adminAuditLog is server-only (`allow read, write: if false` in
+// firestore.rules), so entries cannot be read or tampered with by any client.
+function auditAdminEvent(action, req, extra = {}) {
+  db.collection("adminAuditLog")
+    .add({
+      action,
+      adminIp: getClientIp(req),
+      // Retained because a rotating IP with a constant user-agent (or vice
+      // versa) is the signal that distinguishes one operator on mobile data
+      // from a distributed guessing attempt.
+      userAgent: String(req.headers["user-agent"] || "").slice(0, 200),
+      at: FieldValue.serverTimestamp(),
+      ...extra,
+    })
+    .catch((err) => console.warn(`[admin] audit write failed (${action}):`, err.message));
 }
 
 // Constant-time comparison so token-guessing can't be timed byte-by-byte.
@@ -704,6 +764,7 @@ function hasValidAdminSession(req) {
 function requireAdminAuth(req, res) {
   const ip = getClientIp(req);
   if (adminIpLocked(ip)) {
+    auditAdminEvent("admin_api_blocked_locked_out", req, { path: String(req.url).slice(0, 200) });
     res.writeHead(429, { "Content-Type": "text/plain" });
     res.end("Too many failed attempts — wait 15 min and retry");
     return false;
@@ -722,6 +783,13 @@ function requireAdminAuth(req, res) {
     // wiped by a restart between login and this call) is visible in Render
     // logs instead of silently bouncing the browser back to the login gate.
     console.warn(`admin api: 401 ip=${ip} path=${req.url} hasCookie=${Boolean(getCookie(req, "duoshield_admin_session"))}`);
+    auditAdminEvent("admin_api_unauthorized", req, {
+      path: String(req.url).slice(0, 200),
+      // Distinguishes "expired/wiped session" from "someone is guessing the
+      // token", which look identical in a bare 401 count.
+      hadSessionCookie: Boolean(getCookie(req, "duoshield_admin_session")),
+      suppliedToken: Boolean(supplied),
+    });
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Invalid admin token");
     return false;
@@ -838,15 +906,88 @@ const timingSafeEqualHex = pure.timingSafeEqualHex;
 // a malicious server redirect the fetch to an internal address afterwards.
 const isBlockedPreviewHost = pure.isBlockedPreviewHost;
 
+// S04-H1: the predicate above inspects the hostname STRING only. It never
+// resolves DNS and misses IPv6/alternate literal encodings, so a public-looking
+// name with a private A record (or `http://2130706433/`, or `http://[fd00::1]/`)
+// walked straight through it. `lib/egressGuard.js` closes those gaps and is
+// unit-tested in `lib/egressGuard.test.js`. Both checks run on every hop —
+// the old one is kept as cheap defence in depth, not replaced.
+const egressGuard = require("./lib/egressGuard");
+
+// ── Link-preview image proxy (S04-H3 / S08-H4) ────────────────────────────────
+// og:image URLs are rewritten to point at THIS server and signed with this
+// secret, so the recipient's device never contacts the linked host directly (see
+// lib/imageProxy.js for the full attack description).
+//
+// Deliberately reuses MEDIA_TOKEN_SECRET's operational shape but a SEPARATE key:
+// this secret authorises "fetch a public image", while MEDIA_TOKEN_SECRET
+// authorises B2 media access. Sharing one key across two different capabilities
+// means a weakness in either widens the blast radius of both.
+const imageProxy = require("./lib/imageProxy");
+
+// Absolute origin of THIS server, as the client should address it. Needed
+// because the proxied og:image URL is handed to Android's Glide, which cannot
+// resolve a root-relative path — a relative URL would simply render no image.
+// PUBLIC_BASE_URL wins when set (correct behind a proxy that rewrites Host);
+// otherwise derive it from the request the same way adminSessionCookie() decides
+// `Secure`, since Render terminates TLS upstream and req.socket is plain HTTP.
+function publicOriginFor(req) {
+  const configured = String(process.env.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  const proto = forwardedProto || (req.socket && req.socket.encrypted ? "https" : "http");
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  if (!host) return "";
+  return `${proto}://${host}`;
+}
+
+// A weak value here is treated as UNSET rather than fatal. The asymmetry with
+// ADMIN_TOKEN is intentional: a forgeable proxy signature must not be trusted,
+// but link previews are a cosmetic feature, and aborting the whole messaging
+// server over one would trade a small exposure for a total outage. Degrading to
+// "no preview images" fails closed without that cost.
+const LINK_PREVIEW_PROXY_SECRET = (() => {
+  const raw = process.env.LINK_PREVIEW_PROXY_SECRET || "";
+  if (!raw) {
+    console.warn(
+      "LINK_PREVIEW_PROXY_SECRET is not set — link previews will omit images " +
+      "rather than leaking recipient IPs to the linked host (S04-H3). Set it to a " +
+      "random 32-byte hex value to enable preview images."
+    );
+    return "";
+  }
+  const verdict = adminSecret.evaluateSecretStrength("LINK_PREVIEW_PROXY_SECRET", raw);
+  if (!verdict.ok) {
+    console.error(
+      `LINK_PREVIEW_PROXY_SECRET rejected (${verdict.reason}). Preview images are ` +
+      `DISABLED until this is fixed — a guessable signing key would turn ` +
+      `/linkPreviewImage into an open proxy. ${verdict.remedy}`
+    );
+    return "";
+  }
+  return raw;
+})();
+
 // Fetches targetUrl, manually validating and following redirects (instead of
-// `redirect: "follow"`) so each hop is re-checked against isBlockedPreviewHost
-// before it is fetched. Throws on a blocked/invalid hop or too many redirects.
+// `redirect: "follow"`) so each hop is re-checked before it is fetched. Throws
+// on a blocked/invalid hop or too many redirects.
 async function fetchFollowingSafeRedirects(targetUrl, { headers, timeoutMs, maxRedirects = 5 }) {
   let current = targetUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const parsed = new URL(current);
     if (!["http:", "https:"].includes(parsed.protocol) || isBlockedPreviewHost(parsed.hostname)) {
       throw new Error(`Blocked redirect target: ${parsed.hostname}`);
+    }
+    // S04-H1: full literal-form + DNS-resolved check on THIS hop. Doing it per
+    // hop matters as much as doing it at all: a public first host can 302 to
+    // `http://169.254.169.254/` or to a name whose A record is 10.x.
+    const targetVerdict = egressGuard.evaluatePreviewTarget(current);
+    if (!targetVerdict.ok) {
+      throw new Error(`Blocked redirect target (${targetVerdict.reason}): ${parsed.hostname}`);
+    }
+    const dnsVerdict = await egressGuard.resolveAndCheckHost(parsed.hostname);
+    if (!dnsVerdict.ok) {
+      throw new Error(`Blocked redirect target (${dnsVerdict.reason}): ${parsed.hostname}`);
     }
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -2685,6 +2826,91 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── /linkPreviewImage — signed image proxy (S04-H3, client half S08-H4) ────
+  // Serves an og:image on behalf of the client so the RECIPIENT's device never
+  // contacts the linked host (which would hand the attacker an IP address and a
+  // covert read receipt). Authorised by the HMAC in the URL rather than a bearer
+  // token, because Glide cannot attach one — see lib/imageProxy.js for why that
+  // is safe: the signature binds the exact target, so this is not an open proxy.
+  if (req.method === "GET" && req.url.startsWith(`${imageProxy.PROXY_PATH}?`)) {
+    (async () => {
+      try {
+        const query = new URL(req.url, "http://localhost").searchParams;
+        const verdict = imageProxy.verifyImageUrl(query, LINK_PREVIEW_PROXY_SECRET);
+        if (!verdict.ok) {
+          // Deliberately terse: distinguishing "expired" from "bad signature" to
+          // an unauthenticated caller is free information for a forgery attempt.
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden");
+          return;
+        }
+
+        // A valid signature is NOT a licence to fetch anything. Re-run the full
+        // egress check at fetch time: DNS records can change between the moment
+        // the URL was signed and now, and defence in depth here costs one call.
+        const targetVerdict = egressGuard.evaluatePreviewTarget(verdict.targetUrl);
+        if (!targetVerdict.ok) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden address");
+          return;
+        }
+
+        let upstream;
+        try {
+          const result = await fetchFollowingSafeRedirects(verdict.targetUrl, {
+            headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
+            timeoutMs: 6000,
+          });
+          upstream = result.response;
+        } catch (fetchErr) {
+          console.warn("/linkPreviewImage fetch failed:", fetchErr.message);
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Upstream fetch failed");
+          return;
+        }
+
+        const contentType = upstream.headers.get("content-type");
+        if (!upstream.ok || !imageProxy.isAllowedImageType(contentType)) {
+          // Allowlist, not blocklist: without this the endpoint would happily
+          // relay HTML or SVG (which can carry script) from an arbitrary host.
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Unsupported image response");
+          return;
+        }
+
+        let capped;
+        try {
+          // Same S04-H2 reasoning as the HTML path: cap what we READ, not just
+          // what we keep, so a multi-gigabyte "image" cannot exhaust the heap.
+          capped = await egressGuard.readCappedBody(upstream, egressGuard.MAX_PREVIEW_IMAGE_BYTES);
+        } catch (capErr) {
+          console.warn("/linkPreviewImage body rejected:", capErr.message);
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Image too large");
+          return;
+        }
+
+        res.writeHead(200, {
+          "Content-Type": String(contentType).split(";")[0].trim(),
+          "Content-Length": capped.buffer.length,
+          // Cache aggressively: the bytes are immutable for the life of the
+          // signature, and every cache hit is one fewer outbound fetch.
+          "Cache-Control": "private, max-age=3600",
+          // The bytes come from an arbitrary third-party host; forbid sniffing
+          // them into anything executable.
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+        });
+        res.end(capped.buffer);
+      } catch (e) {
+        console.error("/linkPreviewImage error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal server error");
+      }
+    })();
+    return;
+  }
+
   // ── /linkPreview — server-side OG fetch (F12: prevents sender IP leakage) ──
   if (req.method === "POST" && req.url === "/linkPreview") {
     collectBody(req, res, async (body) => {
@@ -2727,7 +2953,15 @@ http.createServer((req, res) => {
           });
           const preview = { url: targetUrl, domain: parsed.hostname.replace(/^www\./, "") };
           if (r.ok && (r.headers.get("content-type") || "").includes("text/html")) {
-            const html = (await r.text()).slice(0, 30000);
+            // S04-H2: `await r.text()` buffered the ENTIRE body before this
+            // `.slice()` could bound it, so a host that streams gigabytes (or
+            // advertises a small page and then doesn't stop) exhausted the heap
+            // and took the whole server down — the slice limited what we KEPT,
+            // never what we READ. readCappedBody() rejects an oversized declared
+            // Content-Length up front and otherwise stops reading at the cap,
+            // cancelling the upstream stream instead of draining it.
+            const capped = await egressGuard.readCappedBody(r, egressGuard.MAX_PREVIEW_HTML_BYTES);
+            const html = capped.buffer.toString("utf8").slice(0, 30000);
             const ogT = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']{1,200})["']/i)
                      || html.match(/<meta[^>]+content=["']([^"']{1,200})["'][^>]+property=["']og:title["']/i)
                      || html.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
@@ -2756,8 +2990,35 @@ http.createServer((req, res) => {
               const rawImageUrl = ogI[1].trim();
               try {
                 const imageUrlParsed = new URL(rawImageUrl, targetUrl); // resolve relative URLs
-                if (["http:", "https:"].includes(imageUrlParsed.protocol)) {
-                  preview.imageUrl = imageUrlParsed.href;
+                // S04-H3: returning imageUrlParsed.href directly is what leaked
+                // the RECIPIENT's IP and a covert read-receipt to the linked
+                // host — MessageAdapter.java hands preview.imageUrl straight to
+                // Glide, so every device that renders the message hits an
+                // attacker-chosen server. Re-check the extracted host through the
+                // egress guard (a page can point og:image at 169.254.169.254),
+                // then hand the client a SIGNED URL BACK TO US instead.
+                //
+                // The rewrite happens server-side on purpose: an already-shipped
+                // APK needs no change to benefit, which matters because the
+                // Android app cannot be compiled or verified in this
+                // environment (see PR-4 in RISK_REGISTER.md).
+                const imageVerdict = egressGuard.evaluatePreviewTarget(imageUrlParsed.href);
+                if (imageVerdict.ok) {
+                  const signedPath = imageProxy.signImageUrl(
+                    imageUrlParsed.href,
+                    LINK_PREVIEW_PROXY_SECRET
+                  );
+                  // A null signature means no secret is configured. Omit the
+                  // image in that case — never fall back to the raw URL, which
+                  // would silently restore the leak.
+                  //
+                  // Must be ABSOLUTE: Glide receives this string verbatim and
+                  // cannot resolve a root-relative path, so returning
+                  // signedPath as-is would render no image at all. If the
+                  // origin can't be determined we omit the image rather than
+                  // emit a URL the client can't load.
+                  const origin = publicOriginFor(req);
+                  if (signedPath && origin) preview.imageUrl = `${origin}${signedPath}`;
                 }
               } catch {
                 // Malformed image URL — silently omit it.
