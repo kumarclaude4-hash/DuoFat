@@ -701,6 +701,15 @@ function recordAdminAuthFailure(ip) {
 // "did anyone other than us get into the admin panel, and when?" — was
 // unanswerable after a few days.
 //
+// Wiring note (2026-08-10, cluster B completion): the first pass added this
+// function and called it from `requireAdminAuth()` only, while this comment
+// already claimed login/logout were covered. They were not — `POST /admin/login`
+// and `POST /admin/logout` still logged to the console alone, so the highest-value
+// events named above were still missing while the code read as if they were done.
+// All six call sites now exist; if you add another admin auth branch, audit it
+// here too rather than trusting this paragraph. Verify with:
+//   grep -n 'auditAdminEvent(' server/index.js
+//
 // Writes are deliberately fire-and-forget: an audit sink that can block or fail
 // a login would become an availability problem, and a failed write is itself
 // logged. adminAuditLog is server-only (`allow read, write: if false` in
@@ -3489,12 +3498,17 @@ http.createServer((req, res) => {
       const ip = getClientIp(req);
       if (adminIpLocked(ip)) {
         console.warn(`admin login: locked out ip=${ip}`);
+        // S05-H3: the login gate is the event an investigator cares about most,
+        // and until this call existed it was recorded ONLY in Render's rolling
+        // console. Every branch below writes durably for the same reason.
+        auditAdminEvent("admin_login_blocked_locked_out", req);
         res.writeHead(303, { "Location": "/admin?error=locked", "Cache-Control": "no-store" });
         res.end();
         return;
       }
       if (!ADMIN_TOKEN) {
         console.error("admin login: ADMIN_TOKEN is not configured on the server");
+        auditAdminEvent("admin_login_unconfigured", req);
         res.writeHead(303, { "Location": "/admin?error=unconfigured", "Cache-Control": "no-store" });
         res.end();
         return;
@@ -3502,12 +3516,23 @@ http.createServer((req, res) => {
       if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
         recordAdminAuthFailure(ip);
         console.warn(`admin login: invalid token ip=${ip} suppliedLen=${supplied.length}`);
+        // suppliedLength (not the token) distinguishes a fat-fingered operator
+        // from a scripted guesser walking a wordlist. The secret itself is never
+        // written to the audit log: a durable copy of a live credential would
+        // turn the audit trail into a second place to steal it from.
+        auditAdminEvent("admin_login_failed", req, {
+          suppliedLength: supplied.length,
+          failuresInWindow: (adminIpFails.get(ip) || {}).count || 1,
+        });
         res.writeHead(303, { "Location": "/admin?error=invalid", "Cache-Control": "no-store" });
         res.end();
         return;
       }
       const sessionId = createAdminSession();
       console.log(`admin login: success ip=${ip}`);
+      // Success is audited as deliberately as failure: "nobody failed" is not
+      // the same as "nobody got in", and only this row can answer the latter.
+      auditAdminEvent("admin_login_succeeded", req);
       res.writeHead(303, {
         Location: "/admin",
         "Cache-Control": "no-store",
@@ -3524,6 +3549,10 @@ http.createServer((req, res) => {
   if (req.method === "POST" && requestPath === "/admin/logout") {
     const sessionId = getCookie(req, "duoshield_admin_session");
     if (sessionId) adminSessions.delete(sessionId);
+    // S05-H3: closes the session's audit interval. Without a logout row, a
+    // login at 02:00 looks open-ended forever, so every later action is
+    // ambiguous as to whether that session was still the one in use.
+    auditAdminEvent("admin_logout", req, { hadSession: Boolean(sessionId) });
     res.writeHead(303, {
       Location: "/admin",
       "Cache-Control": "no-store",
@@ -3790,7 +3819,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/account/lookup?uid=... ────────────────────────────────
+  // ── GET /admin/api/account/lookup?uid=... ───────���────────────────────────
   //
   // Auth: x-admin-token header. Looks up whether an account with this UID
   // actually exists (identities/{uid}) and its current duress-PIN eligibility
