@@ -38,6 +38,15 @@ import com.duoshield.app.util.SecurePrefs;
  * nonce during ordinary foreground operation while online and parks it here, so the
  * duress path always has a usable credential even when it is triggered offline.
  *
+ * <p><strong>This depends on that method actually being called.</strong> Its only caller
+ * is {@code BaseActivity.onStart()}, in the branch reached when the session is valid and
+ * the app is foregrounded and unlocked. Between the original S06-H3 change and
+ * 2026-08-10 the method had <em>no caller at all</em>, which silently made the entire
+ * offline path above inert while this javadoc claimed otherwise — the warm token was
+ * never written, so {@code getWarmToken} always returned null on the duress path. If a
+ * future refactor removes that call site, the offline duress lock stops working and
+ * nothing will fail loudly; treat the call in {@code BaseActivity} as load-bearing.
+ *
  * <h3>Deniability constraints on this file</h3>
  * Every key name here reads as ordinary session/migration plumbing, and the file name
  * itself is neutral ({@code session_state_prefs}). This matters more here than anywhere

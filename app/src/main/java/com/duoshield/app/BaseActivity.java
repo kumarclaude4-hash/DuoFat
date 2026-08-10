@@ -119,6 +119,31 @@ public class BaseActivity extends AppCompatActivity {
             }
         } else {
             AppLockManager.onAppForegrounded(this);
+
+            // 3. Keep the duress lock credential warm (S06-H3).
+            //
+            // This is the ONLY caller of maintainLockCredential(), and without it the
+            // whole offline branch of the S06-H3 fix is inert: performLogout() reads a
+            // warm nonce out of PendingLockStore at trigger time, and if nothing ever
+            // put one there, an offline duress trigger records an intent with a null
+            // token, drainPendingLockIntent() finds nothing to send, and the account is
+            // never locked — silently, which is the attacker's win condition. The nonce
+            // fetch cannot happen on the duress path itself, because by then the app is
+            // offline and (moments later) signed out.
+            //
+            // Deliberately placed in this else-branch: reaching it means there is a
+            // valid session AND the app is genuinely foregrounded and unlocked, which is
+            // exactly the "ordinary online foreground operation" the method's javadoc
+            // requires. It self-throttles (no-ops if the warm nonce is under 12h old),
+            // no-ops when signed out or offline, and does its network I/O on its own
+            // background thread, so calling it from onStart() adds no main-thread work.
+            try {
+                com.duoshield.app.security.DuressManager
+                        .maintainLockCredential(getApplicationContext());
+            } catch (Exception e) {
+                // Never let credential upkeep break navigation into a screen.
+                Log.w(TAG, "Lock credential upkeep skipped: " + e.getMessage());
+            }
         }
     }
 

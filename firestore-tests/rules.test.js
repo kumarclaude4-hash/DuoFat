@@ -327,6 +327,67 @@ describe('/groups/{groupId}', () => {
     );
   });
 
+  // ── S03-H1 regression tests ────────────────────────────────────────────────
+  // The media-token scope check treats a groups/{id} membership as proof of
+  // access to conversation {id}. Chat IDs are deterministic (SHA-256 of the two
+  // sorted UIDs), so a group whose ID collides with an existing chat is a
+  // capability-escalation primitive, not a legitimate document.
+
+  test('S03-H1: cannot create a group whose id collides with an existing chat', async () => {
+    const SHADOWED_CHAT = 'chat_alice_bob';
+    await seed(`chats/${SHADOWED_CHAT}`, {
+      participants: ['alice', 'bob'],
+    });
+
+    // Eve self-asserts membership of a group named after Alice and Bob's chat.
+    // Without the exists() guard this create succeeds and buys Eve a media
+    // token for their conversation.
+    await assertFails(
+      asUser('eve').doc(`groups/${SHADOWED_CHAT}`).set({
+        members: ['eve'],
+        createdBy: 'eve',
+        name: 'Shadow',
+      })
+    );
+  });
+
+  test('S03-H1: shadow-group create is denied even for a real chat participant', async () => {
+    const SHADOWED_CHAT = 'chat_alice_bob_2';
+    await seed(`chats/${SHADOWED_CHAT}`, {
+      participants: ['alice', 'bob'],
+    });
+
+    // The ID-collision guard is unconditional: legitimate group IDs are random
+    // UUIDs (CreateGroupActivity), so a collision is never a real client flow.
+    await assertFails(
+      asUser('alice').doc(`groups/${SHADOWED_CHAT}`).set({
+        members: ['alice', 'bob'],
+        createdBy: 'alice',
+        name: 'Shadow',
+      })
+    );
+  });
+
+  test('S03-H1: cannot create a group claiming someone else as createdBy', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_4').set({
+        members: ['carol', 'alice'],
+        createdBy: 'alice',
+        name: 'Wrong creator',
+      })
+    );
+  });
+
+  test('S03-H1: cannot create a group whose createdBy is not in members', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_5').set({
+        members: ['carol'],
+        createdBy: 'dave',
+        name: 'Orphan creator',
+      })
+    );
+  });
+
   test('member can update the group', async () => {
     await assertSucceeds(
       asUser('bob').doc(`groups/${GROUP_ID}`).update({ name: 'Renamed' })

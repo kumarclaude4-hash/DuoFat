@@ -805,12 +805,26 @@ public class DuressManager {
 
         String token = PendingLockStore.getIntentToken(appCtx);
         if (token == null || token.isEmpty()) {
-            // No credential recorded yet (trigger happened fully offline with no warm
-            // token available either) — nothing to drain against the server. The
-            // account is still recorded as locally "believed unlocked" by
-            // hasLockIntent()'s mere presence, and AccountLockWorker / a future warm
-            // token refresh is the only path forward. Enqueue a best-effort worker
-            // retry now in case one was never enqueued.
+            // No credential recorded (the trigger happened fully offline AND no warm
+            // token had been parked by maintainLockCredential). Nothing can be drained:
+            // /duress-lock authenticates with the nonce itself, and /requestLockNonce
+            // needs the Firebase session that the wipe already destroyed, so this
+            // process can never obtain a credential for this uid again.
+            //
+            // No AccountLockWorker retry is enqueued here, deliberately —
+            // AccountLockWorker.enqueue() requires a nonce and returns immediately
+            // without one, so a call would be pure noise. (An earlier version of this
+            // comment claimed a "best-effort worker retry" was enqueued here; no such
+            // call ever existed. Corrected 2026-08-10.)
+            //
+            // The intent is intentionally NOT cleared: hasLockIntent() staying true is
+            // the honest record that this account is *believed unlocked* (S06-L4/S06-I2)
+            // and is what a recovery/support flow can surface, rather than silently
+            // pretending the lock succeeded. Keeping maintainLockCredential() alive on
+            // the foreground path (BaseActivity.onStart) is what prevents reaching this
+            // branch in the first place.
+            android.util.Log.w("DuressManager",
+                    "Pending lock intent has no usable credential — account believed UNLOCKED.");
             return true;
         }
 
