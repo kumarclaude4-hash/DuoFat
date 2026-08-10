@@ -8,6 +8,8 @@ import com.duoshield.app.BuildConfig;
 import com.google.firebase.auth.FirebaseAuth;
 
 import org.json.JSONObject;
+import org.signal.libsignal.protocol.IdentityKeyPair;
+import org.signal.libsignal.protocol.ecc.Curve;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -25,12 +27,28 @@ import java.nio.charset.StandardCharsets;
  * <p>All network I/O is performed on the calling thread.  The callback is
  * always delivered on the <strong>main thread</strong>.
  *
- * <h3>Security</h3>
- * The server verifies {@code identityPubKeyHex} against the stored
- * {@code identityPubKeyHash} before minting a token.  For brand-new accounts
- * (no Firestore identity record yet) the token is minted unconditionally
- * because the userId is derived from a 128-bit-entropy seed that only the
- * legitimate user knows.
+ * <h3>Security — proof of possession (audit finding S07-C1)</h3>
+ * Minting is a two-step challenge/response:
+ * <ol>
+ *   <li>{@code POST /mintChallenge} with the userId returns a single-use,
+ *       TTL'd 32-byte nonce.</li>
+ *   <li>{@code POST /mintToken} sends that nonce plus an XEdDSA signature over
+ *       {@link #buildMintTokenChallenge} made with the identity <em>private</em>
+ *       key.  The server verifies it against the identity public key on file.</li>
+ * </ol>
+ *
+ * <p>This replaced a broken scheme in which the server accepted
+ * {@code sha256(identityPubKeyHex)} as proof of ownership.  That value is
+ * derived purely from the identity <em>public</em> key, which is world-readable
+ * by design (X3DH needs it), so anyone who could read a victim's public key
+ * could mint a token for the victim's account without the seed phrase.  The
+ * private-key signature is what actually proves ownership now — which is why
+ * this class needs the whole {@link IdentityKeyPair}, not just the public half.
+ *
+ * <p><strong>The challenge byte layout must stay byte-identical to the
+ * server's</strong> ({@code server/lib/identityVerify.js},
+ * {@code buildMintTokenChallenge}).  Changing either side alone breaks sign-in;
+ * bump the version tag in both together.
  */
 public final class AuthTokenHelper {
 
@@ -48,6 +66,16 @@ public final class AuthTokenHelper {
      */
     private static final int READ_TIMEOUT_MS = 30_000;
 
+    /**
+     * Domain-separation tag for the /mintToken proof-of-possession signature.
+     * Must equal CHALLENGE_CONTEXT in server/lib/identityVerify.js. Bumping this
+     * is a breaking protocol change — change both sides in the same commit.
+     */
+    private static final String MINT_CHALLENGE_CONTEXT = "DuoShield-mintToken-v1";
+
+    /** Expected challenge-nonce length, matching the server's NONCE_BYTES. */
+    private static final int NONCE_BYTES = 32;
+
     public interface Callback {
         void onSuccess(String firebaseUid);
         void onFailure(Exception e);
@@ -57,34 +85,55 @@ public final class AuthTokenHelper {
      * Derives a Firebase custom token for the given userId and signs in.
      * Must NOT be called on the main thread.
      *
-     * @param userId               deterministic account ID (e.g. "ABCDE-FGHIJ-KLM")
-     * @param identityPubKeyBytes  raw bytes of the Signal identity public key
-     * @param cb                   result callback, always invoked on the main thread
+     * @param userId          deterministic account ID (e.g. "ABCDE-FGHIJ-KLM")
+     * @param identityKeyPair seed-derived Signal identity key pair. The private
+     *                        half signs the server's challenge nonce and never
+     *                        leaves the device; only the public half is sent.
+     * @param cb              result callback, always invoked on the main thread
      */
     public static void signInWithSeed(String userId,
-                                      byte[] identityPubKeyBytes,
+                                      IdentityKeyPair identityKeyPair,
                                       Callback cb) {
-        signInWithSeed(userId, identityPubKeyBytes, null, cb);
+        signInWithSeed(userId, identityKeyPair, null, cb);
     }
 
     /**
-     * Same as {@link #signInWithSeed(String, byte[], Callback)}, but also passes
-     * a waitlist request id. Only meaningful for brand-new accounts — the server
-     * ignores it entirely for accounts that already have an identity record, so
-     * restoring an existing account should pass {@code null}.
+     * Same as {@link #signInWithSeed(String, IdentityKeyPair, Callback)}, but also
+     * passes a waitlist request id. Only meaningful for brand-new accounts — the
+     * server ignores it entirely for accounts that already have an identity
+     * record, so restoring an existing account should pass {@code null}.
      *
      * @param waitlistRequestId approved access-request token from
      *                          {@code RequestAccessActivity}, or null
      */
     public static void signInWithSeed(String userId,
-                                      byte[] identityPubKeyBytes,
+                                      IdentityKeyPair identityKeyPair,
                                       String waitlistRequestId,
                                       Callback cb) {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             try {
+                if (identityKeyPair == null) {
+                    throw new Exception("Identity key pair unavailable — cannot prove account ownership.");
+                }
+                // Step 1: obtain a single-use challenge nonce (S07-C1).
+                Log.i(TAG, "signInWithSeed: requesting challenge nonce…");
+                String nonceHex = fetchChallengeNonce(userId);
+
+                // Step 2: prove possession of the identity PRIVATE key by signing
+                // the challenge. The byte layout must match the server's
+                // buildMintTokenChallenge() exactly.
+                byte[] challenge = buildMintTokenChallenge(userId, nonceHex);
+                String signatureHex = toHex(
+                        Curve.calculateSignature(identityKeyPair.getPrivateKey(), challenge));
+
                 Log.i(TAG, "signInWithSeed: fetching custom token…");
-                String customToken = fetchCustomToken(userId, toHex(identityPubKeyBytes), waitlistRequestId);
+                String customToken = fetchCustomToken(
+                        userId,
+                        toHex(identityKeyPair.getPublicKey().serialize()),
+                        nonceHex,
+                        signatureHex,
+                        waitlistRequestId);
                 Log.i(TAG, "signInWithSeed: token received, signing in with Firebase…");
                 String uid = doSignIn(customToken);
                 Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS");
@@ -96,23 +145,108 @@ public final class AuthTokenHelper {
         }, "auth-token").start();
     }
 
+    /**
+     * Byte string the client signs and the server verifies. Must stay
+     * byte-identical to {@code buildMintTokenChallenge} in
+     * {@code server/lib/identityVerify.js}:
+     *
+     * <pre>"DuoShield-mintToken-v1" || 0x00 || utf8(userId) || 0x00 || nonceBytes</pre>
+     *
+     * <p>The context prefix domain-separates this signature from the other
+     * signatures the same identity key makes (e.g. signed-prekey signatures in
+     * {@code SignalKeyManager}), and the userId binds it to one account.
+     */
+    static byte[] buildMintTokenChallenge(String userId, String nonceHex) throws Exception {
+        byte[] ctx    = MINT_CHALLENGE_CONTEXT.getBytes(StandardCharsets.UTF_8);
+        byte[] uid    = userId.getBytes(StandardCharsets.UTF_8);
+        byte[] nonce  = fromHex(nonceHex);
+        if (nonce.length != NONCE_BYTES) {
+            throw new Exception("Server returned a malformed challenge nonce.");
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream(
+                ctx.length + 1 + uid.length + 1 + nonce.length);
+        out.write(ctx);
+        out.write(0x00);
+        out.write(uid);
+        out.write(0x00);
+        out.write(nonce);
+        return out.toByteArray();
+    }
+
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private static String fetchCustomToken(String userId, String pubKeyHex, String waitlistRequestId) throws Exception {
+    /** Resolves {@code path} against the configured push-server base URL. */
+    private static String endpointFor(String path) throws Exception {
         String serverUrl = BuildConfig.PUSH_SERVER_URL;
         if (serverUrl == null || serverUrl.isEmpty()) {
             throw new Exception("PUSH_SERVER_URL is not configured. "
                     + "Set push.server.url in local.properties or the PUSH_SERVER_URL env var.");
         }
-        String endpoint = serverUrl.endsWith("/")
-                ? serverUrl + "mintToken"
-                : serverUrl + "/mintToken";
+        return serverUrl.endsWith("/") ? serverUrl + path : serverUrl + "/" + path;
+    }
+
+    /**
+     * Step 1 of the S07-C1 challenge/response: fetch a single-use nonce from
+     * {@code POST /mintChallenge}. The nonce is short-lived and is spent by the
+     * very next {@code /mintToken} attempt, successful or not, so it must be
+     * fetched fresh for every sign-in attempt (never cached or reused).
+     */
+    private static String fetchChallengeNonce(String userId) throws Exception {
+        String endpoint = endpointFor("mintChallenge");
+        Log.d(TAG, "fetchChallengeNonce: POST " + endpoint);
+
+        JSONObject body = new JSONObject();
+        body.put("userId", userId);
+        byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
+
+        URL url = new URL(endpoint);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(bodyBytes);
+            }
+
+            int code = conn.getResponseCode();
+            Log.d(TAG, "fetchChallengeNonce: HTTP " + code);
+            if (code == 429) throw new Exception(
+                    "Too many sign-in attempts. Please wait a moment and try again.");
+            if (code != 200) throw new Exception("Auth server returned HTTP " + code
+                    + " while requesting a sign-in challenge.");
+
+            try (InputStream is = conn.getInputStream()) {
+                JSONObject resp = new JSONObject(readFully(is));
+                String nonce = resp.optString("nonce", null);
+                if (nonce == null || nonce.length() != NONCE_BYTES * 2) {
+                    throw new Exception("Server returned a malformed challenge nonce.");
+                }
+                return nonce;
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static String fetchCustomToken(String userId,
+                                           String pubKeyHex,
+                                           String nonceHex,
+                                           String signatureHex,
+                                           String waitlistRequestId) throws Exception {
+        String endpoint = endpointFor("mintToken");
 
         Log.d(TAG, "fetchCustomToken: POST " + endpoint);
 
         JSONObject body = new JSONObject();
         body.put("userId",            userId);
         body.put("identityPubKeyHex", pubKeyHex);
+        body.put("nonce",             nonceHex);
+        body.put("signatureHex",      signatureHex);
         if (waitlistRequestId != null && !waitlistRequestId.isEmpty()) {
             body.put("waitlistRequestId", waitlistRequestId);
         }
@@ -226,6 +360,28 @@ public final class AuthTokenHelper {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) sb.append(String.format("%02x", b & 0xFF));
         return sb.toString();
+    }
+
+    /**
+     * Decodes an even-length hex string. Strict: rejects odd lengths and any
+     * non-hex character rather than silently decoding a prefix, so a corrupted
+     * or hostile challenge value fails sign-in instead of producing a signature
+     * over attacker-chosen bytes.
+     */
+    private static byte[] fromHex(String hex) throws Exception {
+        if (hex == null || hex.length() % 2 != 0) {
+            throw new Exception("Malformed hex value from server.");
+        }
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int hi = Character.digit(hex.charAt(i * 2), 16);
+            int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) {
+                throw new Exception("Malformed hex value from server.");
+            }
+            out[i] = (byte) ((hi << 4) | lo);
+        }
+        return out;
     }
 
     private AuthTokenHelper() {}

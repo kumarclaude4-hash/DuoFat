@@ -125,7 +125,10 @@ public class DisplayNameActivity extends AppCompatActivity {
                 // callback on the main thread — so we wait on the lock here.
                 AuthTokenHelper.signInWithSeed(
                         userId,
-                        identityKeyPair.getPublicKey().serialize(),
+                        // Full key pair, not just the public half: the private key
+                        // signs the server's challenge nonce to prove ownership
+                        // (S07-C1). It never leaves the device.
+                        identityKeyPair,
                         waitlistRequestId,
                         new AuthTokenHelper.Callback() {
                             @Override public void onSuccess(String firebaseUid) {

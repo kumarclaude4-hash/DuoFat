@@ -220,7 +220,10 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         final String[]  uidHolder = {null};
         final Exception[] authErr = {null};
 
-        AuthTokenHelper.signInWithSeed(derivedUserId, pubKeyBytes, new AuthTokenHelper.Callback() {
+        // Passes the whole key pair, not just pubKeyBytes: the server now demands a
+        // signature over a challenge nonce made with the identity private key
+        // (S07-C1 proof of possession). The private key never leaves the device.
+        AuthTokenHelper.signInWithSeed(derivedUserId, identityKeyPair, new AuthTokenHelper.Callback() {
             @Override public void onSuccess(String uid) {
                 synchronized (authLock) { uidHolder[0] = uid; authLock.notifyAll(); }
             }
