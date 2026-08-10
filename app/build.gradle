@@ -134,9 +134,21 @@ android {
     // armeabi-v7a  →  ~35% smaller for 32-bit devices
     // arm64-v8a    →  ~40% smaller for 64-bit devices (most modern phones)
     // universalApk false — no fat fallback; Play Store / manual install uses the per-ABI APK.
+    //
+    // CI instrumented tests boot an x86_64 emulator (GitHub-hosted Ubuntu
+    // runners have no arm64 hardware acceleration), but this split list only
+    // ever produced arm64-v8a/armeabi-v7a APKs. connectedDebugAndroidTest built
+    // a test APK with no x86_64 binary at all, so Gradle correctly reported the
+    // one connected device as "0 of which were compatible" — the ABI split
+    // filtered the emulator's own architecture out of existence. Passing
+    // -PdisableAbiSplits (done only by the instrumented-tests CI job) falls
+    // back to Gradle's default single "universal" APK containing every ABI, so
+    // the test APK matches whatever emulator/device it's installed on. Normal
+    // debug builds and the signed release build are unaffected.
+    def abiSplitsEnabled = !project.hasProperty('disableAbiSplits')
     splits {
         abi {
-            enable true
+            enable abiSplitsEnabled
             reset()
             include 'arm64-v8a', 'armeabi-v7a'
             universalApk false
