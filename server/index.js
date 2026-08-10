@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const pure = require("./lib/pure");
 const { createChallengeStore } = require("./lib/challengeStore");
 const { verifyMintTokenSignature } = require("./lib/identityVerify");
+const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
 
 let serviceAccount;
 try {
@@ -581,8 +582,15 @@ function signMediaToken({ op, key, uid, expiresAt }) {
  * True if {@code uid} participates in the chat or group named by {@code scopeId}.
  *
  * The object-key middle segment is either a chats/{id} or a groups/{id}, so both
- * collections are checked. Membership fields mirror firestore.rules:
+ * collections are fetched. Membership fields mirror firestore.rules:
  * chats use `participants`, groups use `members`.
+ *
+ * S03-H1: this used to accept *either* document as proof, which a client-created
+ * shadow `groups/{chatId}` could satisfy for a conversation the caller had
+ * nothing to do with. The decision now lives in `lib/mediaScope.js`, which
+ * requires the scope to resolve unambiguously — see that file for the full
+ * attack description and `lib/mediaScope.test.js` for the regression tests.
+ * This function is now only responsible for the I/O and for failing closed.
  */
 async function callerMayAccessScope(uid, scopeId) {
   if (!uid || !scopeId) return false;
@@ -591,20 +599,22 @@ async function callerMayAccessScope(uid, scopeId) {
       db.collection("chats").doc(scopeId).get(),
       db.collection("groups").doc(scopeId).get(),
     ]);
-    if (chatDoc.exists) {
-      const participants = chatDoc.data().participants;
-      if (Array.isArray(participants) && participants.includes(uid)) return true;
+    const { allowed, reason } = decideScopeAccess({ uid, chatDoc, groupDoc });
+    if (!allowed) {
+      // Logged at warn for the ambiguous case specifically: a scopeId naming
+      // both a chat and a group is not a state any legitimate client flow
+      // produces, so it is an active-attack signal worth surfacing, not noise.
+      const level = reason === SCOPE_DENY.AMBIGUOUS ? "warn" : "debug";
+      console[level](
+        `callerMayAccessScope denied uid=${uidTag(uid)} scope=${scopeId} reason=${reason}`
+      );
     }
-    if (groupDoc.exists) {
-      const members = groupDoc.data().members;
-      if (Array.isArray(members) && members.includes(uid)) return true;
-    }
+    return allowed;
   } catch (e) {
     // Fail closed on lookup errors — never mint a token we could not authorize.
     console.error("callerMayAccessScope lookup failed:", e.message);
     return false;
   }
-  return false;
 }
 
 // ── Admin panel auth ──────────────────────────────────────────────────────────

@@ -125,8 +125,30 @@ service cloud.firestore {
     // Groups: only members can read or write; creator can create the document.
     // Members list is stored as an array of Firebase UIDs in groups/{groupId}.members.
     match /groups/{groupId} {
+      // S03-H1 fix: the old rule was `auth != null && auth.uid in members`, with no
+      // constraint whatsoever on the document ID. Because 1:1 chat IDs are
+      // deterministic (SHA-256 of the two sorted UIDs — see the `calls` rule below),
+      // any authenticated user could create a *shadow* groups/{someChatId} listing
+      // only themselves. The server's /mediaToken scope check accepted either a
+      // chats/{id} or a groups/{id} as proof of membership, so that shadow document
+      // bought a read/delete capability token for someone else's conversation media.
+      //
+      // Three constraints, each closing a different half of the hole:
+      //   1. The ID must not collide with an existing chat — kills the shadow
+      //      document at the source. (The server also fails closed if both ever
+      //      exist; see server/lib/mediaScope.js. This rule prevents the collision,
+      //      that check contains it if a collision is somehow reached — e.g. a group
+      //      created before the colliding chat existed.)
+      //   2. createdBy must be the caller, so the field the update/delete and
+      //      keys/{memberUid} rules below trust is truthful from the start rather
+      //      than merely immutable-after-the-fact.
+      //   3. createdBy must itself be in members, matching what mediaScope.js
+      //      requires of a well-formed group.
       allow create: if request.auth != null
-                    && request.auth.uid in request.resource.data.members;
+                    && request.auth.uid in request.resource.data.members
+                    && !exists(/databases/$(database)/documents/chats/$(groupId))
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.createdBy in request.resource.data.members;
       allow read:   if request.auth != null
                     && request.auth.uid in resource.data.members;
       // createdBy is immutable after creation. Without this, any member could
