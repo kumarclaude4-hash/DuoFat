@@ -66,6 +66,12 @@ caused all three failures, and re-deriving trust after a bad session costs far m
     `sha256(identityPubKeyHex)` check was **kept** alongside it, so `S07-H1` stays closed. Android
     signs via `Curve.calculateSignature` in `AuthTokenHelper.java`. Reproduced 2026-08-10:
     `npm test` → 83/83 pass, `node --test lib/identityVerify.test.js` → 16/16 pass.
+    **Baseline correction (2026-08-10, later session):** `identityVerify.test.js` no longer runs in
+    this environment — it aborts with `Cannot find module '@signalapp/libsignal-client'` (declared at
+    `server/package.json:13`, native module unavailable/uninstalled), so the suite now reports
+    **84 tests / 83 pass / 1 fail**. The `S07-C1` code is unchanged and still correct; only the ability
+    to *execute* its test was lost. Treat 83/84-with-that-one-failure as the expected baseline. If
+    `npm ci` ever succeeds in installing that native dep, re-run and expect 16/16 again.
     **Two caveats that are not "open work" but must not be lost:**
     (a) the Android module has never been compiled — no JDK/Gradle/Android SDK exists in this
     environment, so an operator must run `./gradlew :app:assembleDebug` before release;
@@ -74,6 +80,16 @@ caused all three failures, and re-deriving trust after a bad session costs far m
     Full evidence: `sessions/SESSION-01.md` §13 and the `S07-C1` note in `FINDING_INDEX.md`.
     **Note for any session that finds `server/node_modules/` missing:** that is a fresh-clone
     artifact, not a fabricated dependency. Run `npm ci` in `server/` before concluding anything.
+- **Round 2 cluster A is CODE COMPLETE and RECORDED (2026-08-10) — do not redo it.** Code in
+  `bb5b8bb` (merged PR #55), recording completed and corrected in `224546b`. `S03-H1` fixed with a
+  pure decision module (`server/lib/mediaScope.js`, **16/16 pass**) plus `firestore.rules`
+  `groups`-create hardening; `S06-H3` fixed by wiring the previously **dead** `maintainLockCredential()`
+  into `BaseActivity.onStart()`; `S06-H2` and `S06-I2` were found **already remediated** (stale `open`
+  rows, no code change). `S01-L1` is now `partial` as a side effect. **Blocked, not done:** Android
+  compilation, and the 4 new `firestore-tests/rules.test.js` cases which were **added but never
+  executed** (no JVM/`firebase` CLI). See `PR-4` in `RISK_REGISTER.md` and §8 for the full chain state.
+  A recovery session had to retract this cluster's original "99/99 pass" claim — **never quote a test
+  count you did not just run.**
 - **Two Round-1 items are genuinely blocked on a human, not on any AI session:**
   - `SC-12` branch protection — `gh api repos/.../branches/main/protection` returns 404 "Branch not
     protected." Setting it requires repo admin rights exercised by a human (or an explicit,
@@ -304,65 +320,97 @@ Run a dedicated FINAL VERIFICATION session (§9) first.
 
 ---
 
-## 8. Ready-to-paste prompt for the NEXT session (Round 2, cluster A — media/duress)
+## 8. Chain state + ready-to-paste prompt for the NEXT session (Round 2, cluster B — egress/admin)
 
-`S07-C1` is closed (§0). The next cluster is **Round 2 cluster A**: `S03-H1` (typed media scope) +
-`S06-H2` / `S06-H3` / `S06-I2` (durable duress lock).
+### Chain state (authoritative, updated 2026-08-10)
 
-**Inherited state:** `S07-C1` fixed at commit `2b7fc4c` (worktree clean, server 83/83 + 16/16 pass,
-Android compilation `BLOCKED`). **Must not be redone:** anything in `S07-C1` — challenge store,
-`identityVerify.js`, the `/mintToken` gate, or the Android signing call.
-**Task budget: 4 max** — (1) falsify inherited state for the four rows, (2) duress fix, (3) `S03-H1`
-scope fix, (4) verify + record. **Stopping condition:** if budget runs short, drop task 3, finish the
-duress items completely, and record the split honestly rather than half-finishing all four.
+| Unit | Findings | State |
+|---|---|---|
+| R1 `S07-C1` | + `S02-M1`, `S02-L1`, `S06-H1`, `S03-L1` | **CLOSED** at `2b7fc4c`. Do not re-litigate. |
+| R2 cluster A | `S03-H1`, `S06-H2`, `S06-H3`, `S06-I2` | **CODE COMPLETE + RECORDED.** Code `bb5b8bb` (merged PR #55); recording completed/corrected `224546b`. |
+| **R2 cluster B** | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` | **← NEXT. Not started.** |
+| R2 cluster C | `S08-H5`/`S07-M1`, `S08-H2`/`H3`/`H4`, `S10-N2`/`N3`, `S07-L4`, `SC-01`/`04`/`05`, `S04-I2` | Not started. |
+| R3 | everything still `open`/`partial` (incl. `S01-L1` remainder) | Not started. |
 
-Paste this verbatim:
+**Cluster A outcome — what is fixed, what is blocked:**
 
-> Read `security-remediation/SESSION_PROTOCOL.md` in full first, then the `S03-H1`, `S06-H2`,
-> `S06-H3`, `S06-I2` rows in `FINDING_INDEX.md`, then `git status --short` and
-> `git log -5 --oneline`. Do **not** re-verify or touch `S07-C1` — it is closed and verified; §0 says
-> so and re-litigating it wastes the budget. Scope this session to **Round 2 cluster A only**.
+- `S03-H1` **fixed**, server layer genuinely test-verified (`lib/mediaScope.js`, 16/16). The
+  `firestore.rules` `groups`-create hardening also shipped but is **source-reviewed only**.
+- `S06-H3` **fixed** — `maintainLockCredential()` was dead code; call added in `BaseActivity.onStart()`.
+- `S06-H2`, `S06-I2` **fixed, no code change** — were already remediated; the `open` rows were stale.
+- `S01-L1` moved `open` → **partial** as a side effect (its `createdBy` half is closed).
+
+**BLOCKED, not done (see `PR-4` in `RISK_REGISTER.md`):** Android compilation (no JDK/SDK); the 4 new
+`firestore-tests/rules.test.js` `S03-H1` cases (**added, never executed** — no JVM/`firebase` CLI).
+Also note `npm test` is **83/84 with 1 pre-existing failure** (`identityVerify.test.js`, missing native
+`@signalapp/libsignal-client`) — that is the expected baseline, **not** a regression you introduced.
+
+**MUST NOT BE REDONE:** any cluster A code — `server/lib/mediaScope.js` and its tests, the
+`/mediaToken` rewiring in `server/index.js`, the `firestore.rules` `groups`-create constraints, the
+`BaseActivity`/`DuressManager`/`PendingLockStore` Java edits. All four rows hold final dispositions.
+
+**Task budget: 4 max** — (1) falsify inherited state for the six rows, (2) `S04` egress fixes,
+(3) `S05` admin fixes, (4) verify + record. **Stopping condition:** if budget runs short, finish the
+`S04-*` group completely and defer all `S05-*` to a named follow-up session rather than
+half-finishing six rows.
+
+### Paste this verbatim
+
+> Read `security-remediation/SESSION_PROTOCOL.md` in full first (§8 chain state especially), then the
+> `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` rows in `FINDING_INDEX.md`, then
+> `git status --short` and `git log -5 --oneline`. Scope this session to **Round 2 cluster B only**.
 >
-> Per §3, before writing any code, falsify the inherited state for these four findings from source:
+> Do **not** touch, re-verify, or "improve" Round 2 cluster A (`S03-H1`, `S06-H2`, `S06-H3`,
+> `S06-I2`) or R1 `S07-C1`. They are recorded with final dispositions; re-litigating them wastes the
+> budget. In particular do not re-fix `server/lib/mediaScope.js`, the `/mediaToken` scope check, the
+> `firestore.rules` `groups`-create rule, or the duress/`BaseActivity` Java edits.
 >
-> 1. `S03-H1` — media-token scope confusion. Read the `/mediaToken` handler in `server/index.js`
->    (grep `mediaToken`) and the group-membership check it relies on, plus `firestore.rules`'s
->    `groups` create rule. The defect: a client can create `groups/{chatId}` self-asserting its own
->    membership, then obtain a media token for a conversation it is not part of. Confirm whether the
->    `partial (SEC-A01)` status in the index is still accurate — find the actual current check, don't
->    trust the row.
-> 2. `S06-H2` / `S06-H3` / `S06-I2` — duress lock durability. Read
->    `app/src/main/java/com/duoshield/app/.../DuressManager.java`, `AccountLockWorker.java`, and
->    `FcmUnregisterWorker.java` (verify exact paths with Glob; the index's line numbers are from the
->    audit and may have drifted). Two distinct defects: (a) WorkManager persists plaintext records
->    that *prove a duress code was entered* — forensically incriminating, which is the whole point of
->    duress; (b) an offline duress trigger silently fails to lock, and the attacker controls the
->    network, so "silently fails" is the attacker's win condition. `S06-I2` (can't distinguish success
->    from failure) is expected to be subsumed by the `S06-H3` durable-intent fix — confirm that rather
->    than assuming it.
+> **Baseline you inherit:** `cd server && npm test` → **84 tests, 83 pass, 1 fail**. The failure is
+> `lib/identityVerify.test.js` aborting on `Cannot find module '@signalapp/libsignal-client'` (declared
+> but not installed; native dep unavailable here). That is pre-existing. Your job is to not make it
+> worse — if your count differs by anything other than tests you added, you caused a regression.
 >
-> Then implement. Guidance, not a spec — verify each claim against source first:
-> - For `S06-H3`, the fix shape is a **durable local intent** that survives reboot and retries until
->   the server confirms the lock, plus a local lock that takes effect immediately and independently of
->   network reachability. A lock that only exists server-side is not a duress lock.
-> - For `S06-H2`, WorkManager input data and any log/DB row must not encode *why* the work was
->   queued. Prefer an indistinguishable payload over a "duress=true" flag, and make sure the same
->   records exist on non-duress paths so their mere presence proves nothing.
-> - For `S03-H1`, bind the media token to a server-verified scope rather than a client-asserted one.
->   Keep any existing checks; add, don't replace (the `S07-C1` fix's hash-check retention is the
->   precedent).
+> Per §3, before writing any code, falsify the inherited state for these six rows from source. The
+> index's line numbers come from the audit and have drifted badly before (cluster A's were off by
+> ~1900 lines) — locate the real code with Grep, and trust source over the row:
 >
-> Testing: server-side changes get `node --test` unit tests under `server/lib/` following the
-> existing pattern in `server/lib/challengeStore.test.js` and `identityVerify.test.js` (real
-> library-produced values, never hand-written expected outputs). Run `cd server && npm ci && npm test`
-> and paste the real counts. **Android has no JDK/Gradle/SDK in this environment** — Java changes are
-> source-verifiable only; record Android compilation as `BLOCKED`, exactly as `S07-C1` §13.4 does,
-> and never imply an APK was built.
+> 1. `S04-H1` — SSRF predicate in `server/lib/pure.js` never resolves DNS and misses IPv6/literal
+>    forms. Status says `partial`; find the actual current predicate and its callers
+>    (`/linkPreview`, and grep for other users).
+> 2. `S04-H2` — `/linkPreview` reads the response body with no size cap and no timeout → OOM.
+> 3. `S04-H3` — `og:image` fetched directly by both devices, leaking the recipient's IP and a
+>    read-timestamp beacon to an attacker-chosen host. Server-side proxying is the shape; note the
+>    client half (`MessageAdapter.java`) is **Java and therefore not compilable here**.
+> 4. `S05-H1` — `ADMIN_TOKEN` has no entropy floor, no startup validation, no brute-force ceiling.
+> 5. `S05-H3` — admin actions not durably audited; admin *authentication* not audited at all.
+> 6. `S05-I1` — operator secrets undocumented; server boots without them.
 >
-> Record per §4: update the four `FINDING_INDEX.md` rows with real command output from *this* session
-> and a commit hash obtained via `git log -1 --format=%H` **after** committing, then append one
-> session-log entry. If budget runs short, drop `S03-H1` and finish the duress items completely
-> rather than half-finishing all four — and record the split honestly.
+> Then implement. Guidance, not a spec — verify against source first:
+> - Prefer a **pure, I/O-free function** for each decision (SSRF verdict, entropy verdict) so it can
+>   earn a real `node --test` rather than an asserted one. `server/lib/mediaScope.js` from cluster A is
+>   the precedent that worked.
+> - **Grep for call sites of every function you add or rely on.** Cluster A's most important finding
+>   was that `maintainLockCredential()` existed, looked correct, was documented as load-bearing, and
+>   had **zero callers** — a silently inert fix. "The function exists" is not evidence; wiring is.
+> - Add, don't replace, existing checks.
+> - `S05-H1`'s entropy gate should fail **at startup**, not per-request, so a weak token cannot be
+>   deployed at all.
+>
+> Testing: server-side changes get `node --test` unit tests under `server/lib/` following
+> `server/lib/challengeStore.test.js` / `mediaScope.test.js` (real library-produced values, never
+> hand-written expected outputs). Run `cd server && npm test` and **paste the real counts from this
+> session** — never quote a count you did not just run (the previous session recorded a "99/99 pass"
+> that did not exist, and it had to be retracted). Cluster B is almost entirely server-side JS, which
+> is the one layer this environment can truly verify, so aim for genuine test-backed closure. Any Java
+> touched by `S04-H3` is source-verifiable only: record Android compilation as `BLOCKED`, and never
+> imply an APK was built.
+>
+> Record per §4: update the six `FINDING_INDEX.md` rows with real command output from *this* session
+> and a commit hash from `git log -1 --format=%H` **after** committing; add residual risk to
+> `RISK_REGISTER.md`; append a cluster B section to `sessions/SESSION-02.md` (that log is revised in
+> place per cluster — do not create a new file and do not overwrite cluster A's sections). Update this
+> §8 chain state before you stop. If budget runs short, finish `S04-*` completely and defer `S05-*`
+> honestly rather than half-finishing all six.
 
 ## 9. What "done" looks like for this whole program
 
