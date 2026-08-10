@@ -299,6 +299,17 @@ dependencies {
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
 
+    // Real org.json for JVM unit tests.
+    //
+    // android.jar ships org.json as a stub, and `testOptions.unitTests.returnDefaultValues`
+    // (see above) turns those stubs into silent no-ops instead of exceptions. Without a real
+    // implementation on the test classpath, JSONObject.optString() would quietly return ""
+    // and every YouTubeSearchParser test would PASS while asserting nothing — the worst
+    // possible failure mode. This dependency puts the genuine article ahead of the stub, and
+    // YouTubeSearchParserTest.orgJsonIsTheRealImplementationNotTheAndroidStub() fails loudly
+    // if that ever stops being true. Test-only: it is not packaged into the APK.
+    testImplementation 'org.json:json:20231013'
+
     // Instrumented (on-device) tests — Espresso + AndroidX Test.
     // Used for regression coverage that needs the real Android runtime (real
     // AndroidKeyStore / EncryptedSharedPreferences), which app/src/test's plain

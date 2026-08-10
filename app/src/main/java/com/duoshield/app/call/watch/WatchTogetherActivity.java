@@ -1,24 +1,34 @@
 package com.duoshield.app.call.watch;
 
+import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.duoshield.app.R;
+import com.duoshield.app.util.YouTubeSearchClient;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
+
+import java.util.List;
 
 /**
  * Ephemeral in-call <strong>Watch Together</strong> screen.
@@ -76,6 +86,32 @@ public class WatchTogetherActivity extends AppCompatActivity
     private Button    btnPlaybackRate;
     private View      controlsRow;
     private EditText  etUrl;
+
+    // ── YouTube search (picker) views ──
+    private View         searchPanel;
+    private RecyclerView rvResults;
+    private ProgressBar  searchProgress;
+    private View         searchMessageBox;
+    private TextView     tvSearchMessage;
+    private Button       btnSearchRetry;
+    private YouTubeSearchAdapter searchAdapter;
+
+    /**
+     * Search UI state. Pure logic, unit tested; the Activity only renders it.
+     *
+     * <p>Search adds no Firestore reads or writes of its own — it talks to the push server
+     * over HTTPS and, on selection, reuses the one existing
+     * {@link #performLocalWrite(String, WatchTogetherState)} path. So the single-listener rule
+     * (#3) and the {@code FirebaseCostGuard} gating (#2) are untouched by this feature.
+     */
+    private final YouTubeSearchState searchState = new YouTubeSearchState();
+
+    /** Debounce timer for search-as-you-type. Cancelled on every keystroke and in onDestroy. */
+    private final Handler searchHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingSearch;
+
+    /** Set while the Activity is editing {@link #etUrl} itself, to mute the TextWatcher. */
+    private boolean suppressTextWatcher;
 
     /** The most recently applied state and the local monotonic time it was applied. */
     private WatchTogetherState appliedState;

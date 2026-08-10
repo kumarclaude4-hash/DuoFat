@@ -99,9 +99,78 @@
             android:layout_height="match_parent"
             android:gravity="center"
             android:padding="24dp"
-            android:text="Paste a YouTube link below to start watching together."
+            android:text="Search YouTube or paste a link below to start watching together."
             android:textColor="#CCCCCC"
             android:textSize="15sp" />
+
+        <!--
+          Search results overlay.
+
+          It sits inside playerContainer, above the player, so results cover the video area
+          while browsing and reveal it again on dismiss. That keeps the picker on one screen
+          (no second Activity, no change to the session/sync architecture) and means an
+          already-playing session is never torn down just because someone searched.
+
+          Opaque background: a translucent panel over a playing video is unreadable.
+        -->
+        <FrameLayout
+            android:id="@+id/searchPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/ds_background"
+            android:visibility="gone">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvSearchResults"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingTop="4dp"
+                android:paddingBottom="8dp"
+                android:scrollbars="vertical"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/searchProgress"
+                style="?android:attr/progressBarStyle"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="center"
+                android:visibility="gone" />
+
+            <!-- Covers TOO_SHORT, EMPTY and ERROR; the Activity supplies the copy. -->
+            <LinearLayout
+                android:id="@+id/searchMessageBox"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvSearchMessage"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:textColor="#CCCCCC"
+                    android:textSize="14sp"
+                    android:lineSpacingMultiplier="1.3" />
+
+                <Button
+                    android:id="@+id/btnSearchRetry"
+                    style="?android:attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="8dp"
+                    android:minWidth="96dp"
+                    android:text="Retry"
+                    android:textAllCaps="false"
+                    android:textColor="#9A81FF"
+                    android:textSize="14sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </FrameLayout>
     </FrameLayout>
 
     <!-- ── Who is watching ── -->
@@ -189,6 +258,15 @@
         android:paddingTop="8dp"
         android:paddingBottom="20dp">
 
+        <!--
+          One field, two jobs: a YouTube URL/ID starts a session immediately (the original
+          behaviour, unchanged), anything else is treated as a search query.
+
+          inputType is plain text rather than textUri because the field is now primarily a
+          search box — textUri suppresses the keyboard's word suggestions and spellcheck,
+          which is wrong for typing "lofi beats" and right for almost nothing here. Pasting a
+          link still works identically. imeOptions=actionSearch matches what the key now does.
+        -->
         <EditText
             android:id="@+id/etWatchUrl"
             android:layout_width="0dp"
@@ -198,14 +276,13 @@
             android:background="@drawable/bg_incall_input"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
-            android:hint="Paste a YouTube link..."
+            android:hint="Search YouTube or paste a link..."
             android:textColorHint="@color/ds_text_tertiary"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
-            android:inputType="textUri"
+            android:inputType="text"
             android:maxLines="1"
-            android:imeOptions="actionGo"
-            android:autofillHints="url"
+            android:imeOptions="actionSearch"
             android:gravity="center_vertical" />
 
         <Button
@@ -214,10 +291,11 @@
             android:layout_height="48dp"
             android:minWidth="88dp"
             android:background="@drawable/bg_fab"
-            android:text="Watch"
+            android:text="Go"
             android:textColor="#FFFFFF"
             android:textAllCaps="false"
-            android:textSize="14sp" />
+            android:textSize="14sp"
+            android:contentDescription="Search YouTube or open the pasted link" />
     </LinearLayout>
 
 </LinearLayout>
