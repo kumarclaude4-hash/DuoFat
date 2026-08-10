@@ -5,9 +5,16 @@ closed remediation program built on it._
 
 Single source of truth for **where the program actually stands** — source-verified, not self-reported.
 
-**Last reconciled:** 2026-08-07 (Round 1 execution session)
-**Program phase:** Round 1 executed — 9 of 11 findings `fixed`, 2 `open`. Round 1 **not closed**.
-**Rounds executed:** 1 of 3 (R1 executed, not closed — see §1)
+**Last reconciled:** 2026-08-10 (planning session — corrected against `SESSION_INDEX.md`'s stale
+`DONE` claims and against a fabricated commit-hash/file-path citation found in `SESSION-01.md`; see
+[`SESSION_PROTOCOL.md`](./SESSION_PROTOCOL.md) §0)
+**Program phase:** Round 1 code-level work substantially present in source; 2 items blocked on
+operator/console access (`SC-12`, credential rotation) — not closeable by an AI session. Rounds 2
+and 3 **not started** (their session logs do not exist on disk, despite `SESSION_INDEX.md` having
+briefly claimed otherwise).
+**Rounds executed:** 1 of 3, in progress (R1 not closed — see §1). **This file's own "6 of 11" count
+below predates the correction and should be re-derived from source per `SESSION_PROTOCOL.md` §3
+before the next working session trusts a number here.**
 
 > ### Correction notice (2026-08-07)
 >
