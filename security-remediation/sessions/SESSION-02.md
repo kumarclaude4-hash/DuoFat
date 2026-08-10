@@ -223,3 +223,53 @@ so unlike Cluster A it should reach genuine test-backed closure.
 3. **Never quote a test count you did not just run.** Re-run, then cite.
 4. **`PR-4` is the program's real verification bottleneck.** Two of three toolchains cannot run here;
    the queue of unexecuted Java/rules assertions grows every round and only CI clears it.
+
+---
+
+## §7 end-of-session records
+
+The implementing session was interrupted before it could write its own record, so the recovery session
+reconstructed it from the commit and re-run evidence, then filed its own.
+
+```
+SESSION: 02 (R2 cluster A, implementation)  MODEL: Opus 5  BUDGET: $5 (EXHAUSTED mid-recording)
+CLUSTER: R2-A (S03-H1, S06-H2, S06-H3, S06-I2)   STATUS: fixed (code) / incomplete (recording)
+CHANGES:      - server/lib/mediaScope.js + mediaScope.test.js (new, pure scope decision + 16 tests)
+              - server/index.js (rewired /mediaToken scope check to decideScopeAccess)
+              - firestore.rules (groups create: !exists(chats/$(id)), createdBy==uid, createdBy in members)
+              - firestore-tests/rules.test.js (+4 S03-H1 regression cases)
+              - BaseActivity.java (call maintainLockCredential() — was dead code)
+              - DuressManager.java / PendingLockStore.java (corrected false comments/javadoc)
+VERIFICATION: PASS: mediaScope 16/16
+              FAIL: none attributable to this cluster
+              BLOCKED: Android compilation (no JDK/SDK); Firestore emulator (no JVM/firebase CLI)
+              NOT RUN: the 4 new firestore rules tests
+              RETRACTED: "npm test 99/99" — unreproducible; real baseline 83/84 (1 pre-existing)
+COMMIT: bb5b8bbbdcb8aacf58436ea8f0355751d9c8e574   WORKTREE: clean (merged as PR #55)
+NEXT SESSION: see the record below
+```
+
+```
+SESSION: 02b (R2 cluster A, recording recovery)  MODEL: Opus 5  BUDGET: $5 max
+CLUSTER: R2-A recording only    STATUS: fixed (cluster A recorded; no code re-implemented)
+CHANGES:      - FINDING_INDEX.md: S03-H1 evidence corrected (true counts + rules-tests-not-run);
+                noted the rules hardening that actually shipped; S01-L1 open -> partial
+              - RISK_REGISTER.md: S03-H1 residual risk rewritten (old premise was false);
+                added program risk PR-4 (two of three verification toolchains unavailable)
+              - sessions/SESSION-02.md: retracted 99/99; corrected the "rules untouched" claim;
+                cluster status, recovery section, carry-forward, these records
+              - SESSION_PROTOCOL.md: §0 cluster A ground truth + npm test baseline correction;
+                §8 replaced with chain state + ready-to-paste cluster B prompt
+VERIFICATION: PASS: node --test lib/mediaScope.test.js -> 16/16 (re-run this session)
+              FAIL: npm test -> 84 tests / 83 pass / 1 fail — lib/identityVerify.test.js,
+                    Cannot find module '@signalapp/libsignal-client'; PRE-EXISTING, proven
+                    unrelated via `git show --stat bb5b8bb` (touched neither that test nor package.json)
+              BLOCKED: Android compilation (no java/javac); Firestore emulator (no firebase CLI/JVM)
+              NOT RUN: the 4 S03-H1 rules tests — still unexecuted, carried forward to CI (PR-4)
+              git diff --check: clean
+COMMIT: 224546bcd6e1f3bc6735214995b250b21e38b89a (+ this record)   WORKTREE: clean
+NEXT SESSION: Round 2 cluster B — S04-H1/H2/H3 (SSRF predicate, /linkPreview cap, og:image beacon)
+              + S05-H1/H3/I1 (admin token entropy, durable admin audit, operator-secret docs).
+              Ready-to-paste prompt persisted in SESSION_PROTOCOL.md §8.
+              MUST NOT REDO: any cluster A code — all four rows hold final dispositions.
+```
