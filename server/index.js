@@ -411,7 +411,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ── Per-UID authenticated-endpoint rate limiter ───────────��───────────────────
+// ── Per-UID authenticated-endpoint rate limiter ───────────���───────────────────
 // Prevents an authenticated user from flooding B2 presign/delete or other
 // server-mediated endpoints.  Each endpoint has its own per-minute bucket.
 const AUTH_RATE_WINDOW_MS = 60_000;
@@ -623,6 +623,39 @@ async function callerMayAccessScope(uid, scopeId) {
 // static /admin page itself carries no data — only the API calls it makes
 // need the token — so serving the HTML shell without auth leaks nothing.
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+
+// S05-H1: the line above used to be the ENTIRE validation of the credential
+// guarding waitlist approval and account unfreeze — any non-empty string was
+// accepted, so `ADMIN_TOKEN=admin` shipped a five-character admin password.
+//
+// Checked at startup rather than per request, because startup is the only moment
+// a weak secret is still a fixable deployment error instead of an invisible
+// standing exposure. Failing CLOSED (refusing to boot) is deliberate: booting
+// with a guessable admin token is strictly worse than not booting, since the
+// operator would have no signal until the panel was already abused.
+//
+// Note the asymmetry with "unset", which does NOT abort — an unset token leaves
+// the panel returning 503 (see requireAdminAuth), which is already safe, and
+// hard-failing there would break deployments that legitimately never enable the
+// admin panel. A *weak* token is the dangerous case, because it is open.
+const adminSecret = require("./lib/adminSecret");
+if (ADMIN_TOKEN) {
+  const verdict = adminSecret.evaluateSecretStrength("ADMIN_TOKEN", ADMIN_TOKEN);
+  if (!verdict.ok) {
+    console.error("FATAL: refusing to start with a weak ADMIN_TOKEN.");
+    console.error(`  ${verdict.reason}`);
+    console.error(`  ${verdict.remedy}`);
+    // Abort rather than continue: see reasoning above.
+    process.exit(1);
+  }
+  console.log(`admin auth: ADMIN_TOKEN accepted (~${verdict.bits} bits of entropy)`);
+} else {
+  console.warn(
+    "admin auth: ADMIN_TOKEN is not set — the admin panel will refuse every " +
+    "request with 503. Set it to enable operator actions (see server/README.md)."
+  );
+}
+
 const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_IP_MAX_FAILS = 10;
 const adminIpFails = new Map(); // ip → { count, windowStart }
@@ -658,6 +691,33 @@ function recordAdminAuthFailure(ip) {
   } else {
     rec.count++;
   }
+}
+
+// S05-H3: admin ACTIONS were already written to adminAuditLog (waitlist approve,
+// unfreeze, duress enroll/revoke), so that half of the finding row is stale. What
+// was genuinely missing is admin AUTHENTICATION: login success, login failure,
+// lockout and logout left no durable trace at all. Only `console.warn` recorded
+// them, and Render's logs roll, so the single most important forensic question —
+// "did anyone other than us get into the admin panel, and when?" — was
+// unanswerable after a few days.
+//
+// Writes are deliberately fire-and-forget: an audit sink that can block or fail
+// a login would become an availability problem, and a failed write is itself
+// logged. adminAuditLog is server-only (`allow read, write: if false` in
+// firestore.rules), so entries cannot be read or tampered with by any client.
+function auditAdminEvent(action, req, extra = {}) {
+  db.collection("adminAuditLog")
+    .add({
+      action,
+      adminIp: getClientIp(req),
+      // Retained because a rotating IP with a constant user-agent (or vice
+      // versa) is the signal that distinguishes one operator on mobile data
+      // from a distributed guessing attempt.
+      userAgent: String(req.headers["user-agent"] || "").slice(0, 200),
+      at: FieldValue.serverTimestamp(),
+      ...extra,
+    })
+    .catch((err) => console.warn(`[admin] audit write failed (${action}):`, err.message));
 }
 
 // Constant-time comparison so token-guessing can't be timed byte-by-byte.
@@ -704,6 +764,7 @@ function hasValidAdminSession(req) {
 function requireAdminAuth(req, res) {
   const ip = getClientIp(req);
   if (adminIpLocked(ip)) {
+    auditAdminEvent("admin_api_blocked_locked_out", req, { path: String(req.url).slice(0, 200) });
     res.writeHead(429, { "Content-Type": "text/plain" });
     res.end("Too many failed attempts — wait 15 min and retry");
     return false;
@@ -722,6 +783,13 @@ function requireAdminAuth(req, res) {
     // wiped by a restart between login and this call) is visible in Render
     // logs instead of silently bouncing the browser back to the login gate.
     console.warn(`admin api: 401 ip=${ip} path=${req.url} hasCookie=${Boolean(getCookie(req, "duoshield_admin_session"))}`);
+    auditAdminEvent("admin_api_unauthorized", req, {
+      path: String(req.url).slice(0, 200),
+      // Distinguishes "expired/wiped session" from "someone is guessing the
+      // token", which look identical in a bare 401 count.
+      hadSessionCookie: Boolean(getCookie(req, "duoshield_admin_session")),
+      suppliedToken: Boolean(supplied),
+    });
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Invalid admin token");
     return false;
@@ -873,14 +941,32 @@ function publicOriginFor(req) {
   return `${proto}://${host}`;
 }
 
-const LINK_PREVIEW_PROXY_SECRET = process.env.LINK_PREVIEW_PROXY_SECRET || "";
-if (!LINK_PREVIEW_PROXY_SECRET) {
-  console.warn(
-    "LINK_PREVIEW_PROXY_SECRET is not set — link previews will omit images " +
-    "rather than leaking recipient IPs to the linked host (S04-H3). Set it to a " +
-    "random 32-byte hex value to re-enable preview images."
-  );
-}
+// A weak value here is treated as UNSET rather than fatal. The asymmetry with
+// ADMIN_TOKEN is intentional: a forgeable proxy signature must not be trusted,
+// but link previews are a cosmetic feature, and aborting the whole messaging
+// server over one would trade a small exposure for a total outage. Degrading to
+// "no preview images" fails closed without that cost.
+const LINK_PREVIEW_PROXY_SECRET = (() => {
+  const raw = process.env.LINK_PREVIEW_PROXY_SECRET || "";
+  if (!raw) {
+    console.warn(
+      "LINK_PREVIEW_PROXY_SECRET is not set — link previews will omit images " +
+      "rather than leaking recipient IPs to the linked host (S04-H3). Set it to a " +
+      "random 32-byte hex value to enable preview images."
+    );
+    return "";
+  }
+  const verdict = adminSecret.evaluateSecretStrength("LINK_PREVIEW_PROXY_SECRET", raw);
+  if (!verdict.ok) {
+    console.error(
+      `LINK_PREVIEW_PROXY_SECRET rejected (${verdict.reason}). Preview images are ` +
+      `DISABLED until this is fixed — a guessable signing key would turn ` +
+      `/linkPreviewImage into an open proxy. ${verdict.remedy}`
+    );
+    return "";
+  }
+  return raw;
+})();
 
 // Fetches targetUrl, manually validating and following redirects (instead of
 // `redirect: "follow"`) so each hop is re-checked before it is fetched. Throws
@@ -2925,7 +3011,14 @@ http.createServer((req, res) => {
                   // A null signature means no secret is configured. Omit the
                   // image in that case — never fall back to the raw URL, which
                   // would silently restore the leak.
-                  if (signedPath) preview.imageUrl = signedPath;
+                  //
+                  // Must be ABSOLUTE: Glide receives this string verbatim and
+                  // cannot resolve a root-relative path, so returning
+                  // signedPath as-is would render no image at all. If the
+                  // origin can't be determined we omit the image rather than
+                  // emit a URL the client can't load.
+                  const origin = publicOriginFor(req);
+                  if (signedPath && origin) preview.imageUrl = `${origin}${signedPath}`;
                 }
               } catch {
                 // Malformed image URL — silently omit it.
