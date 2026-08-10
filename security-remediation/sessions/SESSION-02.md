@@ -13,10 +13,10 @@ media-scope isolation, duress lock durability, egress containment, and admin acc
 | Cluster | Findings | Status |
 |---|---|---|
 | A | `S03-H1`, `S06-H2`, `S06-H3`, `S06-I2` | **CODE COMPLETE + RECORDED** (2026-08-10; recording finished by recovery session S02b). Server layer test-verified. **Java and Firestore-rules layers source-reviewed only — compilation and emulator BLOCKED (`PR-4`).** Do not re-implement. |
-| B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` | not started in this log |
-| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, `S08-H4`, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | not started in this log |
+| B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` (+ `S08-H4`) | **COMPLETE + RECORDED** (2026-08-10). Code `48a3f7e`/`f636d8b` (PR #57); half-fix completion + recording `7653515`. **All seven rows server-side and test-verified — 153/153.** `S05-H1` is `fixed+runbook` (rotation is an operator action). `S08-H4` closed with no Java change. |
+| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, ~~`S08-H4`~~, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | not started in this log. `S08-H4` was pulled forward into cluster B — it is the client half of `S04-H3` and closed with the same server-side fix. |
 
-Round 2 is **NOT closed.** Only cluster A is complete.
+Round 2 is **NOT closed.** Clusters A and B are complete; **cluster C has not started.**
 
 ---
 
