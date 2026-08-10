@@ -501,16 +501,17 @@ public class WatchTogetherActivity extends AppCompatActivity
     }
 
     /**
-     * A result was tapped. Only the {@code videoId} crosses into the session — titles,
-     * thumbnails and channel names are display-only and are deliberately never written to
-     * Firestore, so the search feature adds nothing to the synced document's shape.
+     * A result row was tapped. The adapter reports the tapped position, so the selection is
+     * resolved against the live search state. videoIdAt() enforces the results phase, bounds,
+     * and video-id validity before the existing session flow receives the id.
      */
-    private void onResultChosen(YouTubeSearchResult result) {
-        if (result == null || !result.isUsable()) {
+    private void onResultChosen(int position) {
+        String videoId = searchState.videoIdAt(position);
+        if (videoId == null) {
             Toast.makeText(this, "That result can't be played", Toast.LENGTH_SHORT).show();
             return;
         }
-        startSessionWithVideoId(result.videoId, 0L);
+        startSessionWithVideoId(videoId, 0L);
     }
 
     /** The single entry point into the existing session/sync flow. */
