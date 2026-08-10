@@ -232,7 +232,12 @@ jobs:
             adb devices
             adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
             adb shell getprop ro.build.version.sdk
-            ./gradlew :app:connectedDebugAndroidTest --no-daemon
+            # -PdisableAbiSplits: the app's ABI splits only build arm64-v8a/
+            # armeabi-v7a APKs, which excludes the x86_64 CI emulator entirely
+            # and is exactly why Gradle reported "0 of which were compatible."
+            # This flag falls back to a universal APK containing every ABI so
+            # the test build actually installs on the emulator.
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon -PdisableAbiSplits
 
       # Fail the job if the test task "succeeded" without actually executing any
       # test. connectedDebugAndroidTest can exit 0 on an empty run, which would
