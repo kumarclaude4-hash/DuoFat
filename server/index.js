@@ -2,6 +2,7 @@ const admin = require("firebase-admin");
 const http = require("http");
 const crypto = require("crypto");
 const pure = require("./lib/pure");
+const { createChallengeStore } = require("./lib/challengeStore");
 
 let serviceAccount;
 try {
@@ -341,6 +342,12 @@ db.collection("calls").onSnapshot(
 // ── Per-userId mint cooldown (in-memory rate limit) ───────────────────────────
 // Allows at most one token mint per userId per 60 seconds.
 const mintCooldown = new Map();
+
+// S07-C1 remediation, part 1 of 2: single-use nonce issuance for /mintChallenge.
+// NOT YET enforced by /mintToken — see that handler's comment. This store only
+// issues and consumes nonces; signature verification is a separate, not-yet-done
+// piece of work (see SESSION_PROTOCOL.md's "Next session" prompt).
+const mintChallengeStore = createChallengeStore();
 
 // ── Waitlist request-access rate limit (separate from mintToken's IP bucket) ──
 // /requestAccess creation bucket: strict — only 5 submissions per IP per 15 min.
@@ -1678,6 +1685,47 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── POST /mintChallenge ─────────────────────────────────────────────────────
+  //
+  // Body (JSON): { userId }
+  //
+  // S07-C1 remediation, part 1 of 2 (see lib/challengeStore.js). Issues a fresh,
+  // single-use nonce for userId that a future /mintToken call must prove
+  // possession of the identity PRIVATE key by signing.
+  //
+  // NOT YET wired to /mintToken — issuing this nonce currently has no security
+  // effect on its own. Do not treat its existence as evidence that S07-C1 is
+  // fixed; the fix is only real once /mintToken *requires and verifies* a
+  // signature over a nonce from this endpoint. See that handler's comment below
+  // and SESSION_PROTOCOL.md's "Next session" prompt for the remaining work.
+  //
+  if (req.method === "POST" && req.url === "/mintChallenge") {
+    collectBody(req, res, async (body) => {
+      try {
+        const clientIp = getClientIp(req);
+        if (!checkIpRateLimit(clientIp)) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Too many requests from this IP — wait 15 min and retry");
+          return;
+        }
+        const { userId } = JSON.parse(body);
+        if (!userId || typeof userId !== "string") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid userId");
+          return;
+        }
+        const nonce = mintChallengeStore.issue(userId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ nonce, ttlMs: require("./lib/challengeStore").NONCE_TTL_MS }));
+      } catch (e) {
+        console.error("mintChallenge error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal server error");
+      }
+    });
+    return;
+  }
+
   // ── POST /mintToken ─────────────────────────────────────────────────────────
   //
   // Body (JSON): { userId, identityPubKeyHex }
@@ -1689,6 +1737,17 @@ http.createServer((req, res) => {
   //   • Existing accounts: sha256(identityPubKeyHex) is re-verified inside the same
   //     transaction.  Mismatch → 403.
   //   • Rate limit: one successful mint per userId per 60 s (in-memory).
+  //
+  // ⚠️ S07-C1 — STILL OPEN, STILL EXPLOITABLE (verified 2026-08-10, see
+  // ../security-remediation/sessions/SESSION-01.md's correction notice). The
+  // "F2 fix" above only closes a *different* bug (fail-open on a missing/malformed
+  // stored hash — S07-H1). It does NOT make this ownership check real: identityPubKeyHex
+  // is a value any authenticated user can read from Firestore (`public_keys/{doc}`,
+  // rules line ~17), so hashing it and comparing proves nothing about who is asking.
+  // A prior revision of SESSION-01.md falsely claimed this was fixed with a signature
+  // challenge in a file (`server/lib/xed25519.js`) that does not exist — do not trust
+  // that claim if you see it resurface anywhere. /mintChallenge above is the first half
+  // of the real fix; this handler does not yet require or verify a signature.
   //
   if (req.method === "POST" && req.url === "/mintToken") {
     collectBody(req, res, async (body) => {

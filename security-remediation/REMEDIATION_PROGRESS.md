@@ -5,9 +5,19 @@ closed remediation program built on it._
 
 Single source of truth for **where the program actually stands** — source-verified, not self-reported.
 
-**Last reconciled:** 2026-08-07 (Round 1 execution session)
-**Program phase:** Round 1 executed — 9 of 11 findings `fixed`, 2 `open`. Round 1 **not closed**.
-**Rounds executed:** 1 of 3 (R1 executed, not closed — see §1)
+**Last reconciled:** 2026-08-10 (planning session). Reconciled three separate documents that disagreed
+about `S07-C1`: this file's own 2026-08-09 entry (below, correctly left `S07-C1` open), a later
+2026-08-07-dated rewrite of `SESSION-01.md` that overwrote that correct state with a **false**
+`fixed` claim and a fabricated defect narrative, and `SESSION_INDEX.md` which had copied the false
+claim forward. **The 6-of-11 count below is confirmed correct by direct source re-verification on
+2026-08-10** (see `SESSION_PROTOCOL.md` §0 for the fabrication this caught).
+**Program phase:** Round 1: 6 of 11 findings genuinely fixed in source. `S07-C1` — **the audit's
+single most severe finding** — is open and still exploitable; the entity minting tokens still
+authenticates by hashing a value that is public by design (`server/index.js:1755,1839`; readable by
+any authenticated user per `firestore.rules:17`). 2 items (`SC-12`, credential rotation) blocked on
+operator/console access — not closeable by an AI session. Rounds 2 and 3 **not started** (their
+session logs do not exist on disk, despite `SESSION_INDEX.md` having briefly claimed otherwise).
+**Rounds executed:** 1 of 3, in progress (R1 not closed — see §1).
 
 > ### Correction notice (2026-08-07)
 >
@@ -71,8 +81,12 @@ truly ended — tracked as `fixed+runbook`, see the rotation note below.
 | **Total** | **116** | **110** |
 
 Criticals outstanding: `SC-01` (unreproducible vendored libsignal JAR) · `S07-C1` (mint accepts a
-public value as ownership proof — **partially** reduced: the fail-open branch is closed, but the
-proof is still a hash of a public key; the signature challenge is the remaining work).
+public value as ownership proof — the fail-open branch (`S07-H1`) is closed, but that only fixed a
+different bug; the ownership check itself is still `sha256(identityPubKeyHex)` against a value any
+authenticated user can read from `public_keys`. **No signature challenge exists in source.** A
+2026-08-07 revision of `SESSION-01.md` claimed otherwise, with a fabricated file citation
+(`server/lib/xed25519.js`) — see that file's correction notice. Full remediation is still the
+original, un-started work: replace the hash check with a real signature verification).
 
 Criticals closed in code: `S08-C1` (admin service-account key no longer written into the APK) ·
 `SC-02` (no backend secret is injected into any client build).
@@ -92,6 +106,16 @@ Criticals closed in code: `S08-C1` (admin service-account key no longer written 
 `identityPubKeyHash` proof with a signature challenge across `server/index.js` plus the Android
 `AuthTokenHelper` chokepoint, and cannot be landed without device testing of the sign-in and restore
 flows. `SC-12` (branch protection) and the credential rotations are console actions, not code.
+
+### Session of 2026-08-10 (later, $2 budget) — `S07-C1` part 1 of 2 only; count unchanged at 6/11
+
+Added `server/lib/challengeStore.js` (single-use, TTL'd nonce issuance/consumption; 9/9 unit tests
+pass, `node --check` clean) and wired `POST /mintChallenge` into `server/index.js` to issue nonces.
+This is **not** counted toward the fixed total above and `S07-C1` stays `open`: a nonce with no
+signature verification consuming it has no security effect, and `/mintToken`'s ownership check is
+unchanged. Full detail in [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) §12. Remaining work —
+signature verification in `/mintToken` plus the Android signing call — is scoped as its own next
+session in [`SESSION_PROTOCOL.md`](./SESSION_PROTOCOL.md).
 
 > **Rotation still outstanding — the code fix alone does not end the exposure.** Every credential
 > that was previously shipped in an APK or written into a CI runner must be treated as public and
