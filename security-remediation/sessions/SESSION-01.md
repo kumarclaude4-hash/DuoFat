@@ -407,3 +407,52 @@ the server, which is the boundary that mattered.
 and `signatureHex`, so server and APK must ship together. An updated server in front of an old APK
 returns 400 on every sign-in. Do not "fix" that by making the fields optional — that reintroduces
 the takeover.
+
+### 13.6 Session record (format mandated by `SESSION_PROTOCOL.md` §7)
+
+```
+SESSION: S07-C1 part 2 — recovery + verification + recording
+MODEL:   Opus 5
+BUDGET:  $5 maximum
+CLUSTER: Round 1 cluster 1 (S07-C1)
+STATUS:  fixed (qualified — server test-verified; Android source-verified, NOT compiled)
+
+CHANGES:
+- No source file modified. The interrupted session's code had fully survived in d833df4;
+  per the chain rules, committed work was not redone.
+- FINDING_INDEX.md: S07-C1 row open/pending -> fixed, with file/line evidence, this
+  session's test counts, and an explicit Android-BLOCKED caveat.
+- FINDING_INDEX.md: added the "S07-C1 evidence and the one thing that is not verified"
+  note (what was proven, what was not, the required operator Gradle build, and the
+  deploy-ordering warning).
+- sessions/SESSION-01.md: added §13 (this entry); corrected the stale file header and the
+  stale S07-C1 outcome-table row, both of which still read `open`.
+- SESSION_PROTOCOL.md: §0 now records S07-C1 as fixed so no future session redoes it (plus
+  a note that a missing server/node_modules is a fresh-clone artifact, not a fabricated
+  dependency); §5 item 1 struck through and folded into a historical <details> block;
+  added §7 (chain + $5 budget protocol), §8 (next-session prompt), §9 (FINAL VERIFICATION
+  required before the chain may be called COMPLETE).
+
+VERIFICATION:
+- PASS:    cd server && npm test                   -> tests 83 | pass 83 | fail 0
+- PASS:    node --test lib/identityVerify.test.js   -> tests 16 | pass 16 | fail 0
+           Covers all 8 required attack cases plus 8 more. Signatures are produced by the
+           same vetted libsignal build that verifies them, never hand-written.
+- PASS:    node --check index.js ; node --check lib/identityVerify.js
+- PASS:    npm ci from the committed lockfile -> 182 packages, which is what proves the
+           libsignal dependency was genuinely committed rather than assumed.
+- PASS:    Java<->JS challenge bytes proven byte-identical on a fixed 71-byte vector,
+           matching the vector the test suite prints.
+- PASS:    Source read confirms consume()-before-verify ordering and RETENTION of the
+           sha256(identityPubKeyHex) check, so S07-H1's fail-closed branch stays intact.
+- BLOCKED: Android compilation — no JDK, no Gradle on PATH, ANDROID_HOME unset, no SDK.
+           `./gradlew :app:assembleDebug` is a required pre-release operator step.
+- NOT RUN: anything outside S07-C1's scope, per the no-token-waste rule.
+- FAIL:    none
+
+COMMIT:   2b7fc4c9e9b63b574b5ca8143490057e38eb6421  (pushed; local == origin)
+WORKTREE: clean
+
+NEXT SESSION: Round 2 cluster A (S03-H1 + S06-H2/H3/I2). The ready-to-paste prompt is
+              persisted in SESSION_PROTOCOL.md §8 — in the repository, not only in chat.
+```

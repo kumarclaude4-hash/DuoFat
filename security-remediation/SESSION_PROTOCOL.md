@@ -241,10 +241,82 @@ reports a result risks generating another false claim. Instead:
 
 ---
 
-## 7. Ready-to-paste prompt for the NEXT session (Round 2, cluster A — media/duress)
+## 7. Chain execution + per-session budget protocol (binding)
+
+This remediation runs as a **continuous chain of bounded sessions**. Model: Claude Opus 5. Each
+session has a **hard $5 ceiling — a ceiling, not a target.** Optimize for *verified security work per
+token*.
+
+**Mandatory session start (in this order):** this file → `FINDING_INDEX.md` → the previous session's
+recorded evidence → `git status --short` → `git log -3 --oneline --stat`. Then identify the exact next
+*unfinished* cluster. Never redo a finding recorded `fixed` unless current source falsifies it.
+
+**Hard limit: 4 tasks per session; prefer 2–3.** Always in this order:
+1. Recover/verify inherited state
+2. Implement the smallest necessary fix
+3. Focused verification
+4. Record + checkpoint
+
+**Four budget stages:**
+- **Recovery** — minimum context to establish current commit, finding status, the cluster's files, and
+  what the last session finished. No whole-repo reads, no general re-audit, no unrelated directories.
+- **Implementation** — assigned cluster only. Identify the smallest code path, the existing project
+  convention, and the *security invariant* being enforced, then patch minimally. Do not redesign
+  architecture unless it makes the required property impossible.
+- **Verification** — the smallest tests that actually prove the change, in priority order: focused
+  security tests → affected module tests → relevant integration tests → broader suites only if cheap.
+  If a toolchain is missing, mark it `BLOCKED` and fall back to source-level verification; **do not**
+  provision large toolchains for low-value checks. **Never fabricate a PASS.**
+- **Record + checkpoint** — evidence, `FINDING_INDEX.md`, session log, commit, clean `git status`,
+  next-session prompt. **Documentation is mandatory before stopping.**
+
+**Stop implementation immediately when** the finding is fixed and verified · tests pass and only docs
+remain · a required toolchain is unavailable · the next change needs substantial investigation outside
+the cluster · the budget limit is near. **Do not start another cluster merely because credits remain.**
+Do not spend the last of the budget polishing prose.
+
+**Interruption / credit exhaustion:** never restart a cluster from scratch. Read the recorded state,
+inspect the actual commit, determine what survived, reproduce only the missing verification, continue
+from the last safe checkpoint. Never assume an interrupted session lost its work; never redo committed
+work without evidence it is wrong. (The `S07-C1` part-2 recovery in `SESSION-01.md` §13 is the worked
+example: everything had survived, and only the recording was missing.)
+
+**Prohibited unless the assigned finding requires it:** broad re-audits, repeating finished
+exploration, reading large unrelated files, cosmetic refactoring, renaming unrelated symbols,
+rewriting working tests, verbose narration during implementation, speculative fixes, unnecessary
+dependency changes, unrelated full-suite reruns.
+
+**Every session ends with this record** appended to the session log:
+
+```
+SESSION:  MODEL: Opus 5  BUDGET: $5 max  CLUSTER:  STATUS: fixed|partial|blocked|open
+CHANGES:      - ...
+VERIFICATION: PASS: … / FAIL: … / BLOCKED: … / NOT RUN: …
+COMMIT: <exact hash>          WORKTREE: clean|dirty
+NEXT SESSION: <ready-to-paste prompt>
+```
+
+A session may only end with **(A)** a clean checkpoint + next-session prompt, or **(B)** an explicitly
+documented safe *partial* checkpoint + a continuation prompt for the **same** finding.
+
+**Chain termination:** when all findings are dispositioned, do **not** declare the project secure.
+Run a dedicated FINAL VERIFICATION session (§9) first.
+
+---
+
+## 8. Ready-to-paste prompt for the NEXT session (Round 2, cluster A — media/duress)
 
 `S07-C1` is closed (§0). The next cluster is **Round 2 cluster A**: `S03-H1` (typed media scope) +
-`S06-H2` / `S06-H3` / `S06-I2` (durable duress lock). Paste this verbatim:
+`S06-H2` / `S06-H3` / `S06-I2` (durable duress lock).
+
+**Inherited state:** `S07-C1` fixed at commit `2b7fc4c` (worktree clean, server 83/83 + 16/16 pass,
+Android compilation `BLOCKED`). **Must not be redone:** anything in `S07-C1` — challenge store,
+`identityVerify.js`, the `/mintToken` gate, or the Android signing call.
+**Task budget: 4 max** — (1) falsify inherited state for the four rows, (2) duress fix, (3) `S03-H1`
+scope fix, (4) verify + record. **Stopping condition:** if budget runs short, drop task 3, finish the
+duress items completely, and record the split honestly rather than half-finishing all four.
+
+Paste this verbatim:
 
 > Read `security-remediation/SESSION_PROTOCOL.md` in full first, then the `S03-H1`, `S06-H2`,
 > `S06-H3`, `S06-I2` rows in `FINDING_INDEX.md`, then `git status --short` and
@@ -292,7 +364,14 @@ reports a result risks generating another false claim. Instead:
 > session-log entry. If budget runs short, drop `S03-H1` and finish the duress items completely
 > rather than half-finishing all four — and record the split honestly.
 
-## 8. What "done" looks like for this whole program
+## 9. What "done" looks like for this whole program
+
+**Chain termination requires a dedicated FINAL VERIFICATION session** that: reads the complete finding
+index; verifies *every* disposition against current source; hunts for contradictory evidence; runs the
+highest-value regression/security tests available; confirms no required finding was skipped; and only
+then produces the final report. Marking the chain COMPLETE in the same session that fixes the last
+finding is forbidden — that is the exact shape of the earlier false closures in §0.
+
 
 Unchanged from `REMEDIATION_PLAN.md`'s Round 3 hard stop: every one of the 116 findings has exactly
 one disposition in `FINDING_INDEX.md`, no Critical/High remains open, `FINAL_SECURITY_REPORT.md` and
