@@ -322,7 +322,7 @@ VERIFICATION: PASS: cd server && npm test -> 153/153 (this session, after npm ci
               BLOCKED: no worker test harness exists in this environment (see PR-7) - S10-N3's fix is
                 verified by reading, not by executing the scheduled() handler
               NOT RUN / NOT APPLICABLE: Android compilation (untouched this session, no Java edited)
-COMMIT: f9770da81209a4b72038d9470d487980005ec97c   WORKTREE: clean (after this amend)
+COMMIT: e7c61755856e5db0835040352145028f9f2724e (+ this record)   WORKTREE: clean
 NEXT SESSION: see SESSION_PROTOCOL.md §8 - a single item (SC-05: release workflow deletes all prior
               releases/tags on every push), not a multi-item cluster, chosen deliberately small.
 ```
