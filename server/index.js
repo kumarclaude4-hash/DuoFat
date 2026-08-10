@@ -3,6 +3,7 @@ const http = require("http");
 const crypto = require("crypto");
 const pure = require("./lib/pure");
 const { createChallengeStore } = require("./lib/challengeStore");
+const { verifyMintTokenSignature } = require("./lib/identityVerify");
 
 let serviceAccount;
 try {
@@ -1690,14 +1691,17 @@ http.createServer((req, res) => {
   // Body (JSON): { userId }
   //
   // S07-C1 remediation, part 1 of 2 (see lib/challengeStore.js). Issues a fresh,
-  // single-use nonce for userId that a future /mintToken call must prove
-  // possession of the identity PRIVATE key by signing.
+  // single-use nonce for userId that /mintToken requires the caller to sign with
+  // the identity PRIVATE key.
   //
-  // NOT YET wired to /mintToken — issuing this nonce currently has no security
-  // effect on its own. Do not treat its existence as evidence that S07-C1 is
-  // fixed; the fix is only real once /mintToken *requires and verifies* a
-  // signature over a nonce from this endpoint. See that handler's comment below
-  // and SESSION_PROTOCOL.md's "Next session" prompt for the remaining work.
+  // Now wired: /mintToken consumes this nonce via mintChallengeStore.consume()
+  // and verifies an XEdDSA signature over it (lib/identityVerify.js) before it
+  // will mint anything. The nonce is single-use and TTL'd, so a signature
+  // captured off the wire cannot be replayed for a second token.
+  //
+  // Note this endpoint is intentionally unauthenticated and leaks nothing: it
+  // returns a random 32-byte value for ANY userId string, existing or not, so it
+  // cannot be used to enumerate which accounts exist.
   //
   if (req.method === "POST" && req.url === "/mintChallenge") {
     collectBody(req, res, async (body) => {
@@ -1728,26 +1732,34 @@ http.createServer((req, res) => {
 
   // ── POST /mintToken ─────────────────────────────────────────────────────────
   //
-  // Body (JSON): { userId, identityPubKeyHex }
+  // Body (JSON): { userId, identityPubKeyHex, nonce, signatureHex, waitlistRequestId? }
   //
-  // Security model (F2 fix applied):
+  // Security model:
+  //   • Proof of possession (S07-C1): the caller must present a nonce previously
+  //     issued by POST /mintChallenge plus an XEdDSA signature over
+  //     "DuoShield-mintToken-v1"||0||userId||0||nonce made with the identity
+  //     PRIVATE key. The nonce is consumed single-use before the signature is
+  //     checked, and verification is done by @signalapp/libsignal-client (same
+  //     library/version as the Android client). See lib/identityVerify.js.
   //   • New accounts: identity slot claimed atomically inside a Firestore transaction
   //     before the token is minted.  First caller wins; concurrent first-claim attempts
   //     for the same userId are serialized by the transaction.
   //   • Existing accounts: sha256(identityPubKeyHex) is re-verified inside the same
-  //     transaction.  Mismatch → 403.
+  //     transaction.  Mismatch → 403. (Kept as cheap defence-in-depth behind the
+  //     signature gate — it binds the *presented* key to the one on file; the
+  //     signature is what proves the caller actually holds it.)
   //   • Rate limit: one successful mint per userId per 60 s (in-memory).
   //
-  // ⚠️ S07-C1 — STILL OPEN, STILL EXPLOITABLE (verified 2026-08-10, see
-  // ../security-remediation/sessions/SESSION-01.md's correction notice). The
-  // "F2 fix" above only closes a *different* bug (fail-open on a missing/malformed
-  // stored hash — S07-H1). It does NOT make this ownership check real: identityPubKeyHex
-  // is a value any authenticated user can read from Firestore (`public_keys/{doc}`,
-  // rules line ~17), so hashing it and comparing proves nothing about who is asking.
-  // A prior revision of SESSION-01.md falsely claimed this was fixed with a signature
-  // challenge in a file (`server/lib/xed25519.js`) that does not exist — do not trust
-  // that claim if you see it resurface anywhere. /mintChallenge above is the first half
-  // of the real fix; this handler does not yet require or verify a signature.
+  // History — why the signature gate exists (do not remove it):
+  //   This handler used to accept sha256(identityPubKeyHex) as its only proof of
+  //   ownership. identityPubKeyHex is world-readable by design (public_keys/* in
+  //   firestore.rules, required for X3DH), so that hash proved nothing and any
+  //   authenticated user could mint a Firebase token for any other account —
+  //   full takeover without the seed phrase (audit finding S07-C1, Critical).
+  //   Note also that a prior revision of SESSION-01.md claimed this was fixed by
+  //   a file `server/lib/xed25519.js` that never existed; the real fix is
+  //   lib/challengeStore.js (nonce) + lib/identityVerify.js (verification), both
+  //   of which do exist and have passing tests you can run.
   //
   if (req.method === "POST" && req.url === "/mintToken") {
     collectBody(req, res, async (body) => {
@@ -1765,11 +1777,26 @@ http.createServer((req, res) => {
           return;
         }
 
-        const { userId, identityPubKeyHex, waitlistRequestId } = JSON.parse(body);
+        const { userId, identityPubKeyHex, nonce, signatureHex, waitlistRequestId } =
+          JSON.parse(body);
         if (!userId || typeof userId !== "string" ||
             !identityPubKeyHex || typeof identityPubKeyHex !== "string") {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid userId / identityPubKeyHex");
+          return;
+        }
+
+        // ── S07-C1: proof-of-possession is MANDATORY ─────────────────────────
+        // Shape-checked here, before the cooldown slot below is touched, so a
+        // malformed or legacy request cannot perturb rate-limit state for the
+        // account. A client build that predates the challenge protocol lands
+        // here and gets a clear 400 rather than a silent auth bypass — that is
+        // the intended fail-closed behaviour, NOT a bug to "fix" by making
+        // these fields optional. Making them optional restores the takeover.
+        if (!nonce || typeof nonce !== "string" ||
+            !signatureHex || typeof signatureHex !== "string") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid nonce / signatureHex — call POST /mintChallenge first");
           return;
         }
 
@@ -1810,6 +1837,43 @@ http.createServer((req, res) => {
           if (last === 0) mintCooldown.delete(userId);
           else            mintCooldown.set(userId, last);
         };
+
+        // ── S07-C1 gate: consume the nonce, then verify the signature ────────
+        //
+        // Ordering rationale:
+        //   • After the cooldown check, so a 429 does not burn a nonce the
+        //     legitimate client would need for its retry.
+        //   • consume() BEFORE verify(), and unconditionally: the nonce is spent
+        //     by the attempt itself, so a captured signature cannot be replayed
+        //     and an attacker cannot grind many signature guesses against one
+        //     outstanding challenge. A legitimate client that fails here simply
+        //     fetches a fresh challenge.
+        //   • Both BEFORE the Firestore transaction, so unauthenticated callers
+        //     never reach the (billable, lock-reading) transaction at all.
+        if (!mintChallengeStore.consume(userId, nonce)) {
+          releaseCooldown();
+          console.warn(
+            `mintToken: no valid outstanding challenge for uid=${uidTag(userId)} ` +
+            `(unknown, expired, or already-used nonce) — refusing to mint (S07-C1)`
+          );
+          // Same 403 string as a key mismatch on purpose: the response must not
+          // distinguish "your nonce was stale" from "wrong key" from "locked
+          // account", or it becomes an oracle for probing account state.
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Key mismatch");
+          return;
+        }
+
+        if (!verifyMintTokenSignature({ userId, identityPubKeyHex, nonceHex: nonce, signatureHex })) {
+          releaseCooldown();
+          console.warn(
+            `mintToken: identity signature verification FAILED for uid=${uidTag(userId)} ` +
+            `— refusing to mint (S07-C1)`
+          );
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Key mismatch");
+          return;
+        }
 
         const incomingHash = sha256hex(identityPubKeyHex);
 
