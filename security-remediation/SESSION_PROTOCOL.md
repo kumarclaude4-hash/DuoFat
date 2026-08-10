@@ -320,100 +320,81 @@ Run a dedicated FINAL VERIFICATION session (§9) first.
 
 ---
 
-## 8. Chain state + ready-to-paste prompt for the NEXT session (single item: `SC-05`)
+## 8. Chain state + ready-to-paste prompt for the NEXT session (single item: `SC-06`)
 
-### Chain state (authoritative, updated 2026-08-10, session `02c`)
+### Chain state (authoritative, updated 2026-08-10, session `02d`)
 
 | Unit | Findings | State |
 |---|---|---|
 | R1 `S07-C1` | + `S02-M1`, `S02-L1`, `S06-H1`, `S03-L1` | **CLOSED** at `2b7fc4c`. Do not re-litigate. |
 | R2 cluster A | `S03-H1`, `S06-H2`, `S06-H3`, `S06-I2` | **CODE COMPLETE + RECORDED.** Code `bb5b8bb` (merged PR #55); recording completed/corrected `224546b`. |
-| R2 cluster B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` | **CODE COMPLETE + RE-VERIFIED, RECORDING COMPLETED.** Code `48a3f7e`/`f636d8b`/`7653515` (merged PRs #57–#59). Session `02c` (2026-08-10) re-derived every claim from source instead of trusting the tracker (per §3) — all wiring confirmed live (not dead code), `cd server && npm test` → **153/153 pass** reproduced fresh (after `npm ci`; a stale clone briefly showed 138/137/1-fail, resolved by the fresh-clone note in §0/PR-6, not by editing any disposition). **Do not redo.** The missing `§7` session-log record for this cluster (it was implemented+tracked but never logged) was filled in retroactively in `sessions/SESSION-02.md` §8. |
-| R2/R3 misc | `S10-N3` | **FIXED this session** (`worker/src/index.js`, one-line, source-reviewed only — see `PR-7`, no worker test harness exists here). Everything else originally grouped in "cluster C" is still open — see below, deliberately **not** batched into one prompt anymore. |
-| Remaining cluster-C-shaped work | `S08-H5`/`S07-M1` (SecurePrefs, Java), `S08-H2`/`H3` (Java), `S10-N2`/`S07-L4` (Java), `SC-01`/`SC-04` (supply chain, YAML/script) | Not started. **Deliberately not assigned as one 6-8-finding cluster** — see note below. |
-| **`SC-05`** | Release workflow deletes all prior releases/tags on every push to `main` | **← NEXT. Single item, ~20 lines of YAML, fully described in `audit/SESSION-09-SUPPLY-CHAIN-CI.md` line 269+. No Java, no toolchain gap.** |
+| R2 cluster B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` | **CODE COMPLETE + RE-VERIFIED, RECORDING COMPLETED.** Code `48a3f7e`/`f636d8b`/`7653515` (merged PRs #57–#59). Re-verified from source session `02c`, `npm test` → 153/153. **Do not redo.** |
+| `S10-N3` | worker cold-tier orphan | **FIXED** (`worker/src/index.js`, one line, source-reviewed only — `PR-7`, no worker test harness here). |
+| `SC-04` + `SC-05` | Release APKs unverifiable (no checksums/fingerprint) + workflow destroyed all release/tag history on every push | **FIXED this session (`02d`)**, both in one diff to `.github/workflows/release.yml` since the audit ties them together (line 197) — see below. Source-reviewed only (`PR-8`: no GitHub Actions runner or Android SDK here to execute the new steps for real). **Do not redo.** `actions/attest-build-provenance` (SC-04's second, optional recommendation) was deliberately deferred — see `PR-8`. |
+| Remaining supply-chain work | `SC-01` (dependency pinning, likely mixed Gradle/npm), `SC-08` (actions pinned to mutable tags), `SC-09` (no scanning) | Not started. Larger/multi-file; leave for a dedicated session, do not fold into the next single-item prompt. |
+| **`SC-06`** | JitPack repo in `build.gradle:16` resolves an unmaintained, retaggable dependency (`PhotoView`) with no verification | **← NEXT. Single item, pure Gradle config, `audit/SESSION-09-SUPPLY-CHAIN-CI.md` line ~306. No workflow YAML, no CI-runner gap — this is a source file, so it can be read and diffed with full confidence even though it still can't be *compiled* here (`PR-4`).** |
+| Remaining Java-only findings | `S08-H5`/`S07-M1`, `S08-H2`/`H3`, `S10-N2`/`S07-L4`, `SC-07` (gradle-wrapper validation) | Not started. Each should become its own single-item prompt in turn, same reasoning as `SC-06`. |
 | R3 | everything still `open`/`partial` (incl. `S01-L1` remainder) | Not started. |
 
-**Why the next prompt is one finding, not a cluster:** every session so far that batched 4-6 findings
-ended up spending real budget on verification/correction of *inherited* claims before it could start
-new work (cluster A's dead-code catch, cluster B's `npm ci` false alarm this session). Shrinking the
-unit of work to one finding removes that overhead almost entirely — there is nothing upstream to
-falsify for `SC-05` beyond reading the one workflow file — and it directly answers the standing
-instruction to keep each session's assigned scope smaller than the one before it, since credits are
-limited. The remaining Java-only findings (`S08-*`, `S10-N2`, `S07-*`, `SC-01`) should each become
-their own single-item prompt too, in whatever order is convenient, once `SC-05` is closed.
+**Why `SC-06` and not something else:** it is the smallest remaining item that touches no file this
+program has already fixed, requires no new toolchain, and — like `SC-05` before it — the audit already
+states the exact remedy (drop the dependency, or scope the JitPack repo to one group and pin its hash).
+Every prior multi-finding session spent real budget re-verifying inherited claims before starting new
+work; one-finding sessions keep removing that overhead. **Task budget for the next session: 1** — do
+not add a second finding even if budget remains (§5's standing warning against a session quietly
+growing past its assigned scope).
 
-**Cluster A outcome — what is fixed, what is blocked:**
+**`SC-04`/`SC-05` outcome (this session, `02d`):** deleted the "Delete all previous releases and tags"
+step outright (no `gh api --method DELETE` remains — confirmed via `grep -c DELETE release.yml` → 0);
+changed automatic-push tags from rolling `v{versionName}` to `v{versionName}+{shortSHA}` so a tag
+always identifies one commit; added a step generating `SHA256SUMS` + the signing certificate's SHA-256
+fingerprint, both surfaced on the release. Verified by YAML-parsing the file (throwaway `js-yaml`
+install, nothing added to the repo's own deps) and `bash -n` on the new step's shell — **not** by an
+actual CI run, which does not exist in this sandbox. First real verification happens on the next live
+push to `main`; see `PR-8`.
 
-- `S03-H1` **fixed**, server layer genuinely test-verified (`lib/mediaScope.js`, 16/16). The
-  `firestore.rules` `groups`-create hardening also shipped but is **source-reviewed only**.
-- `S06-H3` **fixed** — `maintainLockCredential()` was dead code; call added in `BaseActivity.onStart()`.
-- `S06-H2`, `S06-I2` **fixed, no code change** — were already remediated; the `open` rows were stale.
-- `S01-L1` moved `open` → **partial** as a side effect (its `createdBy` half is closed).
-
-**BLOCKED, not done (see `PR-4` in `RISK_REGISTER.md`):** Android compilation (no JDK/SDK); the 4 new
-`firestore-tests/rules.test.js` `S03-H1` cases (**added, never executed** — no JVM/`firebase` CLI).
-
-**Cluster B outcome (re-verified 2026-08-10, session `02c`):** all six rows genuinely fixed and
-test-backed. `cd server && npm test` → **153 tests / 153 pass / 0 fail**, reproduced fresh this
-session (a stale clone briefly showed 138/137/1-fail before `npm ci`; see `PR-6`). Every claimed call
-site (`egressGuard.resolveAndCheckHost`, `adminSecret.evaluateSecretStrength`, `auditAdminEvent`'s 7
-sites) was grepped and confirmed live, not dead code. The `§7` session-log record for this cluster had
-never been appended anywhere — filled in retroactively in `sessions/SESSION-02.md` §8 this session.
-
-**MUST NOT BE REDONE:** any cluster A or cluster B code — `server/lib/mediaScope.js`, `egressGuard.js`,
-`imageProxy.js`, `adminSecret.js`, the `firestore.rules` `groups`-create constraints, the
-`BaseActivity`/`DuressManager`/`PendingLockStore` Java edits, `auditAdminEvent()` and its 7 call sites.
-All ten rows across both clusters hold final dispositions.
-
-**Also fixed this session, outside any cluster:** `S10-N3` (`worker/src/index.js`, one line — undoes
-the nightly R2→B2 migration's own write when it detects a concurrent client delete, so deleted media
-cannot survive forever in B2 cold tier). Source-reviewed only; `worker/` has no test framework in this
-environment (`PR-7`).
-
-**Task budget for the next session: 1.** Deliberately shrunk from "cluster" to "single finding" — see
-the chain-state table's rationale note above. Do not add a second finding to this prompt even if
-budget remains; that is exactly the "grew past its cluster because there's budget left" mistake §5
-already warns against, just at a smaller scale.
+**MUST NOT BE REDONE:** any cluster A/B code, `S10-N3`, or the `SC-04`/`SC-05` release-workflow changes
+just described. All fourteen rows across R1/cluster A/cluster B/`S10-N3`/`SC-04`/`SC-05` hold final
+dispositions.
 
 ### Paste this verbatim
 
 > Read `security-remediation/SESSION_PROTOCOL.md` in full first (§8 chain state especially), then the
-> `SC-05` row in `FINDING_INDEX.md`, then `git status --short` and `git log -3 --oneline`. Scope this
-> session to **`SC-05` only** — one finding, not a cluster.
+> `SC-06` row in `FINDING_INDEX.md`, then `git status --short` and `git log -3 --oneline`. Scope this
+> session to **`SC-06` only** — one finding.
 >
-> Do **not** touch, re-verify, or "improve" R1 `S07-C1`, R2 cluster A, R2 cluster B, or `S10-N3`. All
-> are recorded with final dispositions (cluster B was re-verified and `S10-N3` fixed in the immediately
-> prior session — read that session's record in `sessions/SESSION-02.md` §8 rather than redoing the
-> falsification work). Re-litigating any of them wastes this session's budget on zero new security
-> value.
+> Do **not** touch, re-verify, or "improve" R1 `S07-C1`, R2 cluster A, R2 cluster B, `S10-N3`, or
+> `SC-04`/`SC-05`. All are recorded with final dispositions — read `sessions/SESSION-02.md` §9 for what
+> the immediately prior session did rather than redoing its falsification work. Re-litigating any of
+> them wastes this session's budget on zero new security value.
 >
-> **The finding:** `SC-05` — the release workflow (`.github/workflows/release.yml`, roughly lines
-> 126-162 per the audit, **but verify the real current line numbers with Grep first**, they drift) does
-> something on every push to `main` that deletes *every prior GitHub Release and every prior git tag*,
-> not just the one it's about to replace. Read the full writeup at
-> `audit/SESSION-09-SUPPLY-CHAIN-CI.md` line 269 onward before writing any YAML — it explains exactly
-> which step does the deletion and why, and names the interaction with `SC-04` (no checksums) that you
-> should be aware of but **not fix in this session** (that is a separate, already-deferred finding).
+> **The finding:** `SC-06` — `build.gradle:16` adds `maven { url 'https://jitpack.io' }` to resolve
+> `com.github.chrisbanes:PhotoView:2.3.0`. JitPack builds from mutable git tags the upstream owner
+> controls, PhotoView is effectively unmaintained, and there is no dependency-hash verification, so a
+> retagged release would be consumed silently inside the process that decrypts and displays user media.
+> Read the full writeup in `audit/SESSION-09-SUPPLY-CHAIN-CI.md` (search for `SC-06`) before editing —
+> it gives two remedy shapes.
 >
-> **Implement:** change the release step so it only ever touches the release/tag for *this* version —
-> stop deleting the full history of releases and tags. The audit file states the intended remedy
-> shape; follow it, verifying against the actual current workflow syntax rather than assuming GitHub
-> Actions YAML you remember from training.
+> **Implement one of:** (a) drop the `PhotoView` dependency and its JitPack repo entirely, replacing
+> pinch-zoom with a small amount of code against an `androidx` view (the audit's preferred fix) — only
+> do this if you can find every call site with Grep and are confident the replacement is a drop-in
+> behavioral match; or (b) if removal is too large for this session's budget, keep the dependency but
+> scope the JitPack `maven` block to `content { includeGroup 'com.github.chrisbanes' }` so it cannot
+> resolve anything else, exactly as the audit shows. Prefer (a) if it fits in budget; (b) is the
+> acceptable fallback, not a shortcut to prefer by default.
 >
-> **Verify:** this is YAML with no runtime in this sandbox (no way to actually trigger a workflow run
-> here), so verification per §4 means: re-read the changed file, confirm the deletion step now scopes
-> to the current tag/version only, and — if `actionlint` or a YAML linter is available in this
-> environment — run it. If nothing can execute the workflow, record verification as
-> **source-reviewed only**, exactly like `S10-N3` in the prior session; do not claim a test that cannot
-> run here.
+> **Verify:** this is Gradle config with no Android SDK/JDK in this sandbox (`PR-4`), so nothing here
+> can actually be compiled. Verification per §4 means: re-read the diff, confirm the change is
+> syntactically valid Gradle (matching the file's existing style), and if you chose (a), grep the whole
+> Java source tree for every remaining reference to the removed class/import to confirm nothing still
+> depends on it. Record verification as **source-reviewed only** — do not claim a build that didn't run.
 >
-> **Record per §4:** update the `SC-05` row in `FINDING_INDEX.md` with what you actually changed and
-> how you verified it; append a short session record to `sessions/SESSION-02.md` (or start
-> `sessions/SESSION-03.md` if you judge the file has grown unwieldy — your call, not mandatory); update
-> this §8 chain state to name the next single finding (suggest `SC-04` or `SC-01`, both supply-chain,
-> both no Java) with the same one-item scoping. Get a commit hash from `git log -1 --format=%H` **after**
-> committing — never invent one.
+> **Record per §4:** update the `SC-06` row in `FINDING_INDEX.md`; append a short session record
+> (`sessions/SESSION-02.md` §10, or a new `SESSION-03.md` if you judge the file unwieldy — your call);
+> add a `RISK_REGISTER.md` entry only if genuine residual risk remains (e.g. option (b) still trusts
+> JitPack's build process for that one group); update this §8 chain state to name the next single
+> finding (suggest `SC-07`, gradle-wrapper validation, or one of the remaining Java findings) with the
+> same one-item scoping. Get a commit hash from `git log -1 --format=%H` **after** committing.
 
 ## 9. What "done" looks like for this whole program
 

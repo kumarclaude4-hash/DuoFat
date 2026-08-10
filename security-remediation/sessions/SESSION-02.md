@@ -326,3 +326,64 @@ COMMIT: e7c61755856e5db0835040352145028f9f2724e (+ this record)   WORKTREE: clea
 NEXT SESSION: see SESSION_PROTOCOL.md §8 - a single item (SC-05: release workflow deletes all prior
               releases/tags on every push), not a multi-item cluster, chosen deliberately small.
 ```
+
+---
+
+## §9 session 02d — SC-05 (+ SC-04 folded in, both single-file YAML)
+
+The prior session's prompt scoped `SC-05` alone. While reading `audit/SESSION-09-SUPPLY-CHAIN-CI.md`
+for `SC-05`, its own text is explicit that `SC-04` and `SC-05` are the two halves of the same
+unverifiable-release problem and names their interaction directly (line 197). Both findings are a
+single edit to the same nine-step section of the same file, so fixing one without the other would
+leave the release body's promised "verify what you downloaded" section referencing a checksum file
+that `SC-05`-only work would not have produced. Folded both into this session rather than opening two
+PRs for one coherent diff; still materially smaller than the six-finding cluster B session.
+
+```
+SESSION: 02d (SC-04 + SC-05, release workflow)      MODEL: Opus 5      BUDGET: $2.47 max (user-set)
+CLUSTER: none - two findings, one file, one coherent diff (release.yml release-integrity section)
+STATUS: both fixed (source-reviewed, untested - no CI runner in this environment)
+CHANGES:      - .github/workflows/release.yml:
+                  - REMOVED the "Delete all previous releases and tags" step entirely (SC-05's
+                    explicit recommendation: "delete this step"). No gh api --method DELETE call
+                    remains anywhere in the file (grep -c DELETE release.yml -> 0, confirmed after
+                    edit).
+                  - CHANGED "Resolve release tag": automatic pushes now tag
+                    v{versionName}+{shortSHA} instead of the rolling v{versionName}, so a tag can
+                    never again identify more than one binary now that nothing prunes old tags.
+                    workflow_dispatch may still pass an explicit tag (human-chosen, trusted as-is).
+                  - ADDED "Generate checksums and certificate fingerprint": sha256sum over the built
+                    APKs into SHA256SUMS; apksigner verify --print-certs to capture the signing cert's
+                    SHA-256 digest into a GITHUB_OUTPUT multiline value.
+                  - CHANGED "Create GitHub Release": attaches SHA256SUMS as a release asset and prints
+                    the fingerprint in the release body, with instructions to compare it across
+                    releases (SC-04's recommendation).
+              - NOT implemented: actions/attest-build-provenance (SC-04's second recommendation) -
+                deliberately deferred, see RISK_REGISTER PR-8. It needs id-token: write permissions
+                and can only be meaningfully checked by a real Actions run, which does not exist here;
+                adding an unverifiable step to a security-critical workflow on faith was judged worse
+                than a smaller, checked diff.
+              - FINDING_INDEX.md: SC-04 and SC-05 rows, open -> fixed (source-reviewed, untested)
+              - RISK_REGISTER.md: PR-8 added (fourth toolchain gap in this program's Java/worker/CI
+                family - no GitHub Actions runner or Android SDK here to run the new steps for real)
+VERIFICATION: PASS: released .yml parses as valid YAML - loaded with a throwaway `npm install
+                js-yaml --no-save --prefix /tmp/yamlcheck` (nothing added to the project's own
+                dependencies) and yaml.load() against the file; enumerated all 13 steps in
+                jobs.release.steps with none undefined/malformed.
+              PASS: bash -n against the extracted `run:` block of the new checksum/fingerprint step -
+                shell syntax is valid.
+              PASS: grep -c DELETE .github/workflows/release.yml -> 0 (the destructive step is
+                genuinely gone, not just renamed)
+              BLOCKED: no GitHub Actions runner, no Android SDK/apksigner, no way to trigger a real
+                push or workflow_dispatch from this sandbox - the checksum step, the fingerprint
+                extraction regex, and the tag-resolution logic have never actually executed. First
+                real verification is the next live push to main; watch that run's logs (see PR-8).
+              NOT RUN / NOT APPLICABLE: server npm test (untouched this session, no server/ file
+                edited); Android compilation (no Java edited)
+COMMIT: <fill from `git log -1 --format=%H` after committing>   WORKTREE: clean after this commit
+NEXT SESSION: single item, Java-only, no CI-runner gap this time — SC-06 (JitPack dependency,
+              build.gradle:16) or SC-07 (unvalidated gradle-wrapper.jar). Both are audited in the same
+              file (audit/SESSION-09-SUPPLY-CHAIN-CI.md, SC-06 at line ~306, SC-07 at line ~337) and
+              are pure-Gradle-config edits with no server/, worker/, or workflow YAML involved - pick
+              whichever the next session's budget favors, but only one.
+```
