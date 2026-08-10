@@ -1,19 +1,42 @@
 # YouTube Search Implementation
 
 > **Persistent cross-session handoff document.**
-> Part 1 (backend) is COMPLETE. Part 2 (Android UI) is NOT STARTED.
+> Part 1 (backend) is COMPLETE. Part 2 (Android UI) is **IMPLEMENTED** — see the
+> correction immediately below.
 > This file describes the ACTUAL state of the code. If it ever disagrees with the
 > repository, **the repository wins** — verify, then correct this file.
 
-- **Last updated:** Session 1 of 2 (2026-08-10) — backend/search foundation only.
+> ### ⚠ CORRECTION (Session 3, 2026-08-10) — read before the sections below
+>
+> This document previously stated "**Part 2 (Android UI) is NOT STARTED**" and
+> "No Android file was created or modified". **Both statements are now stale and
+> wrong.** The Android search layer landed after that text was written, in commits
+> `e22af87`, `166bf0d`, and `17d9287`. These files exist in the repository today:
+>
+> - `app/src/main/java/com/duoshield/app/call/watch/YouTubeSearchAdapter.java`
+> - `app/src/main/java/com/duoshield/app/call/watch/YouTubeSearchParser.java`
+> - `app/src/main/java/com/duoshield/app/call/watch/YouTubeSearchResult.java`
+> - `app/src/main/java/com/duoshield/app/call/watch/YouTubeSearchState.java`
+> - `app/src/main/java/com/duoshield/app/util/YouTubeSearchClient.java`
+> - `app/src/main/res/layout/item_youtube_search_result.xml`
+> - JVM tests: `YouTubeSearchParserTest.java`, `YouTubeSearchStateTest.java`
+>
+> **§18 ("Remaining Android Work") and §19 ("EXACT NEXT SESSION INSTRUCTIONS") are
+> therefore historical.** Treat them as the original plan, not as outstanding work.
+> The authoritative current status is the **Session 3 Status** section at the end of
+> this file.
+
+- **Last updated:** Session 3 (2026-08-10) — CI emulator fix + static audit.
+  (Original text below dates from Session 1 of 2 and is preserved for context.)
 - **Branch:** `v0/pelawo5952-2703-7fb87f56` (off `main`)
 - **Reconciled against commit:** `c82ccee` — merge of PR #44
   ("Enable YouTube Watch Together with playback speed controls"). Working tree
   was clean at session start (`git status --short` empty).
+  **Session 3 re-reconciled against `a89a450`** (merge of PR #49); tree clean.
 - **Part 1 status:** **COMPLETE AND TEST-VERIFIED** (58/58 server unit tests pass,
-  executed — see §15/§16).
-- **Part 2 status:** **NOT STARTED.** No Android file was created or modified in
-  this session. See §18 and §19.
+  executed — see §15/§16). **Not re-executed in Session 3 (no runtime available).**
+- **Part 2 status:** **IMPLEMENTED, statically validated, NOT runtime-verified.**
+  See the Session 3 Status section at the end of this file.
 
 ---
 
@@ -657,3 +680,176 @@ represents the FINAL combined state of Watch Together + YouTube Search. Never
 put a secret **value** in either file. Do not call the feature
 production-ready unless the evidence you actually gathered supports it —
 in particular, runtime verification being BLOCKED means **not** production-ready.
+
+---
+
+## Session 3 Status — AUTHORITATIVE CURRENT STATE (2026-08-10)
+
+Supersedes §18 and §19 above, which describe the original plan rather than
+outstanding work. Reconciled against commit `a89a450`; working tree clean at start.
+
+### Sandbox capability — governs every status in this section
+
+This session ran in a **web-oriented Linux sandbox with no JVM, no Android SDK, no
+emulator, no `adb`, no Firebase CLI, and no GitHub Actions runner.** `./gradlew` fails
+immediately with `java: not found`. Consequently **all Gradle, emulator, device, and
+live-network checks are `BLOCKED` — not `PASS`, not `FAIL`.** Only Node-based and
+static/textual verification actually ran. No runtime result is claimed or fabricated.
+
+### Final architecture (as built)
+
+```
+Watch Together (OPTIONAL in-call add-on, user-launched only)
+  └─ search field + RecyclerView  ← exists ONLY on this screen
+       │  YouTubeSearchClient (util/) — authenticated POST, off main thread
+       │  Authorization: Bearer <Firebase ID token>
+       ▼
+     POST /youtubeSearch  →  Render server/  ← YOUTUBE_API_KEY lives ONLY here
+       ▼
+     YouTube Data API v3 (search.list, 100 units)
+       ▼
+     allow-list projection { videoId, title, channel, thumbnail }
+       ▼
+     YouTubeSearchParser → YouTubeSearchState → YouTubeSearchAdapter
+       ▼
+     tap a row → YouTubeSearchState.videoIdAt(position)
+       ▼
+     EXISTING performLocalWrite(ACTION_START, state)   ← no second player,
+       ▼                                                 no second write path
+     calls/{callId}/watch/state  →  both participants' existing players
+```
+
+The video bytes never traverse DuoShield: each device streams from YouTube directly.
+Only search text transits the server. `CallManager`, the WebRTC path, the Firestore
+sync protocol, and in-call chat are all unchanged.
+
+### Optional in-call add-on behavior — verified statically
+
+Search is **not** part of the default videochat experience. Evidence:
+
+- The only `startActivity(WatchTogetherActivity)` in the repo is in
+  `CallActivity.openWatchTogether()` (`:1011-1015`), called **only** from the
+  `btnWatch` click listener (`:547`).
+- `btnWatchLayout` is `android:visibility="gone"` by default
+  (`activity_call.xml:348`), revealed only inside `if (isVideo)`
+  (`CallActivity.java:492`).
+- `WatchTogetherActivity.onCreate` reads extras, builds the repository, and calls
+  `bindViews()`. **It starts no session.** The single `ACTION_START` write (`:539`)
+  requires explicit user submit/selection.
+- All four `YouTubeSearch*` classes are referenced only from `call/watch/**`,
+  `util/YouTubeSearchClient.java`, and JVM tests. `activity_call.xml` contains no
+  search view.
+- `endSessionAndFinish()` (`:692-696`) writes `active:false` then `finish()`.
+  A grep for `CallManager|hangup|deleteCallDoc|writeStatus|CallForegroundService`
+  in `WatchTogetherActivity.java` matches **only a comment** — closing the add-on
+  cannot end the call.
+
+### Backend status
+
+`POST /youtubeSearch` in `server/index.js` is implemented as documented in §4–§11:
+Firebase ID-token auth, `youtubeSearch: 6`/min per verified UID, 10-minute/300-entry
+cache checked **before** the rate limiter, allow-list projection, `redactApiKey` on all
+YouTube log lines, 8 s `AbortController` timeout, fails closed with 503 when
+unconfigured. Prior sessions recorded 58/58 server unit tests passing;
+**Session 3 did not re-execute them (`BLOCKED` — no runtime).**
+
+### YouTube API deployment/configuration status — `BLOCKED`
+
+`YOUTUBE_API_KEY` could **not** be verified as deployed, and no credential was
+available. **None was invented, hardcoded, or written anywhere.** Confirmed absent
+from the client: static check "No YouTube API key or direct Data API reference exists
+under `app/`" **passes**.
+
+Exact remaining deployment step:
+
+1. Google Cloud console → enable **YouTube Data API v3**.
+2. Credentials → create an **API key** → restrict it to that single API (optionally
+   also to the Render egress IP).
+3. Render dashboard → the `server/` service → Environment → add `YOUTUBE_API_KEY`
+   (and optionally `YOUTUBE_REGION_CODE`, e.g. `US` — not a secret).
+4. Redeploy. The startup warning disappears once the key is present.
+
+**Only the variable NAME may ever appear in this repository. Never the value —
+not in source, resources, `BuildConfig`, docs, logs, or client responses.**
+
+### Live endpoint verification — `BLOCKED` (not run)
+
+Untested against the real deployment: valid search, query < 2 chars, no results,
+rate limiting (7th request inside 60 s), cache (`cached:true` on repeat), upstream
+failure mapping, exact response shape, and credential-absent-from-response. Run this
+matrix once step 3 above is complete.
+
+### Android status
+
+Implemented and statically validated; **not runtime-verified**. The 21-step
+two-participant matrix (normal call first, then the optional add-on, then teardown and
+a fresh call) is **BLOCKED** — no device or emulator was reachable. `adb` does not
+exist in this sandbox, so it was not run.
+
+### Espresso / instrumentation CI status — fixed in config, `NOT RUN`
+
+`.github/workflows/ci.yml` (`instrumented-tests`) was failing to provision an
+emulator. Root cause: the job installed only a JDK — **`android-actions/setup-android`
+was missing**, so `avdmanager`/`sdkmanager`/`emulator` were absent from `PATH`; this
+was compounded by `force-avd-creation: false` paired with an over-coarse AVD cache key
+(`avd-api30`, encoding neither `target` nor `arch`), and by having no snapshot step and
+no boot-readiness gate. `Failed to start Emulator console for 5554`,
+`0 of which were compatible`, and `Emulator client has not yet been configured` were
+all downstream echoes of that single failure.
+
+Emulator configuration now in place: `android-actions/setup-android@v3`;
+`api-level: 30`, `target: aosp_atd`, `arch: x86_64`, `profile: pixel_2` (identical
+across both emulator steps); cache key `avd-api30-aosp_atd-x86_64-v2`; a dedicated
+cache-miss-only AVD snapshot step; and an `adb wait-for-device` +
+`sys.boot_completed` gate before Gradle runs.
+
+**Espresso was NOT removed. No instrumentation test was deleted, skipped, or
+weakened. `connectedDebugAndroidTest` still runs. No application code was modified
+for CI.** A new **"Verify Espresso tests actually executed"** step sums `tests="N"`
+across `app/build/outputs/androidTest-results/connected/*.xml` and **fails the job on
+0**, so reaching the Gradle task can no longer be mistaken for executing tests.
+
+**Status `NOT RUN`:** this sandbox cannot execute GitHub Actions. Next session must
+open the `instrumented-tests` run and confirm `Espresso tests executed: <N>` shows a
+**non-zero** N.
+
+### Tests actually executed this session
+
+| Check | Status | Detail |
+|---|---|---|
+| `node scripts/check-watch-together.js` | **PASS** | 30/30, incl. search + secret-absence invariants |
+| Optional-add-on code audit (10 items) | **PASS** | All 10 verified against real source |
+| CI workflow YAML structure/step order | **PASS** | Parsed; step sequence confirmed |
+| Doc/repo reconciliation | **PASS — corrected** | Stale "Part 2 NOT STARTED" fixed |
+| Backend unit tests | **BLOCKED** | No runtime |
+| `:app:compileReleaseJavaWithJavac` / `assembleRelease` / `lintDebug` | **BLOCKED** | No JDK/SDK |
+| Watch Together + search JVM tests | **BLOCKED** | No JDK |
+| `:app:connectedDebugAndroidTest` | **BLOCKED** | No emulator/`adb`/KVM |
+| Firestore rules tests | **BLOCKED** | No Firebase emulator; untouched |
+| Live `/youtubeSearch` | **BLOCKED** | No deployment access/credential |
+| Android runtime matrix | **BLOCKED** | No device |
+| `BackupRoundTripTest` | **NOT RUN** | Pre-existing, unrelated, untouched |
+
+### Bugs found / fixed this session
+
+- **Fixed:** three CI emulator-provisioning defects (missing Android SDK setup,
+  unsafe cache-key/`force-avd-creation` pairing, no snapshot or boot gate).
+- **Fixed:** a CI observability gap — a zero-test instrumentation run could previously
+  report success.
+- **Fixed (documentation):** the stale "Part 2 NOT STARTED / no Android file touched"
+  claim, which contradicted the repository.
+- **No application defect was found.** No Watch Together, search, call, WebRTC, or
+  chat code was modified.
+
+### Remaining blockers
+
+1. **CI fix unproven** — needs one real Actions run reporting a non-zero executed-test
+   count.
+2. **`YOUTUBE_API_KEY` not verified as deployed** — 4 steps above.
+3. **Live endpoint matrix not run** — depends on 2.
+4. **Two-participant Android runtime matrix not run** — needs two real devices.
+
+**Verdict: `NOT FULLY VERIFIED`.** Architecture, credential containment, optional
+add-on behavior, and static validation are solid and independently re-audited against
+real code. Runtime, live-API, and CI-execution evidence do not yet exist. **A
+compiling release APK is not grounds to call this production-ready.**

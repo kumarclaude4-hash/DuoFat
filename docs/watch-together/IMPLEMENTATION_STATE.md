@@ -954,3 +954,158 @@ The historical Android compile failure is **FIXED**. The adapter callback emitte
 | Live YouTube API verification | **NOT RUN** | Requires deployed Render credentials/upstream access. |
 
 **Final checkpoint:** code/build/static validation is complete, but the feature is **NOT production-ready** until live backend and two-participant Android runtime verification are performed. Next session: check `git status --short`, rerun the static checker and release compile, then execute the device verification matrix from the search implementation document.
+
+---
+
+## Session 3 Checkpoint — CI emulator fix + optional-add-on audit (2026-08-10)
+
+- **Reconciled against commit:** `a89a450` (merge of PR #49). Working tree was
+  **clean** at session start (`git status --short` empty).
+- **Sandbox capability — read this before trusting any status below.** This session ran
+  in a **web-oriented Linux sandbox with no JVM, no Android SDK, no emulator, no
+  `adb`, and no GitHub Actions runner.** `./gradlew` fails immediately with
+  `java: not found`. Therefore **every Gradle task, every emulator action, and every
+  live-network check in this session is `BLOCKED`, not `PASS` and not `FAIL`.**
+  Only Node-based and static/textual verification actually executed.
+- **Scope was deliberately limited to static work:** read state, diagnose the CI
+  emulator failure, apply the smallest workflow fix, and audit the optional-add-on
+  architecture. No application code was modified.
+
+### Documentation correction (important)
+
+`YOUTUBE_SEARCH_IMPLEMENTATION.md` still opened with "**Part 2 (Android UI) is NOT
+STARTED**" and "no Android file was created or modified". **That is stale and wrong.**
+The repository shows the Android search layer landed in commits `e22af87`
+(search picker + org.json test), `166bf0d` (search + back-press handling), and
+`17d9287` (position-based selection). The files exist today:
+`YouTubeSearchAdapter.java`, `YouTubeSearchParser.java`, `YouTubeSearchResult.java`,
+`YouTubeSearchState.java` (all in `call/watch/`), `util/YouTubeSearchClient.java`,
+plus `item_youtube_search_result.xml`. Per this document's own rule — the repository
+wins — both files have been corrected.
+
+### CI diagnosis — `connectedDebugAndroidTest` (root cause)
+
+The reported CI symptoms were all **one** provisioning failure with three
+downstream echoes, not three separate bugs:
+
+| CI symptom | Actual meaning |
+|---|---|
+| `Failed to start Emulator console for 5554` | No emulator process ever came up on the console port. |
+| `Found 1 connected device(s), 0 of which were compatible` | The one "device" was an unbooted/AVD-less stub, so Gradle's device filter rejected it. |
+| `No compatible devices connected` | Consequence of the above — Gradle had nothing to install onto. |
+| `Emulator client has not yet been configured. Call configure me first!` | The runner action tried to talk to an emulator it never successfully created. |
+
+Three concrete configuration defects in `.github/workflows/ci.yml`
+(`instrumented-tests` job) explain it:
+
+1. **`android-actions/setup-android` was missing.** The job installed only a JDK.
+   `reactivecircus/android-emulator-runner` needs `sdkmanager`/`avdmanager`/`emulator`
+   on `PATH` to provision the AVD. Without the SDK command-line tools, AVD creation
+   silently does not produce a usable device and the action then waits on a console
+   port nothing is listening to — exactly the `5554` error.
+2. **`force-avd-creation: false` combined with a coarse cache key (`avd-api30`).**
+   The key encoded only the API level, not `target`/`arch`/`profile`. A cache entry
+   written under different AVD properties restores a snapshot that does not match the
+   requested device, while `force-avd-creation: false` instructs the action to *skip*
+   creating one because it believes an AVD already exists. Net effect: no valid AVD,
+   no booted emulator.
+3. **No AVD snapshot step and no boot-readiness gate.** Creation and test execution
+   were fused into a single step, so a provisioning failure surfaced as an opaque
+   Gradle test-task error, and Gradle was invoked with no proof a device had finished
+   booting.
+
+### Workflow fix applied (smallest safe change)
+
+Only `.github/workflows/ci.yml` was edited. **Espresso was not removed, no
+instrumentation test was deleted or skipped, `connectedDebugAndroidTest` still runs,
+no assertion was weakened, and no application code was touched.**
+
+1. Added `android-actions/setup-android@v3` so the SDK command-line tools exist.
+2. Switched to `target: aosp_atd` + `profile: pixel_2` and made the cache key
+   property-specific: `avd-api30-aosp_atd-x86_64-v2`. (`aosp_atd` is the
+   automated-test-device image — headless CI is its purpose, and it boots
+   substantially faster than a full `default` image.)
+3. Added a separate **"Create AVD and generate snapshot for caching"** step, gated on
+   `cache-hit != 'true'`, whose `script` is a no-op `echo`. Provisioning failures now
+   fail as provisioning failures, and the boot cost is paid once and cached.
+4. Made the two emulator steps' `api-level`/`target`/`arch`/`profile` identical, so
+   the cached snapshot actually applies to the test run.
+5. The test step's `script` now runs `adb devices`, then
+   `adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'`,
+   then `getprop ro.build.version.sdk`, **before** `./gradlew
+   :app:connectedDebugAndroidTest`. Gradle is no longer handed a half-booted device.
+6. Added a **"Verify Espresso tests actually executed"** step that sums `tests="N"`
+   across `app/build/outputs/androidTest-results/connected/*.xml` and **fails the job
+   if the total is 0** or the results directory is absent. This directly enforces the
+   requirement that reaching the Gradle task is not the same as executing tests — a
+   silent zero-test run can no longer report green.
+7. Extended the artifact upload to include `androidTest-results/connected/**`, so the
+   machine-readable result XML is retained alongside the HTML report.
+
+**Status of this fix: `NOT RUN` (cannot be executed from this sandbox).** It is a
+reasoned configuration correction, validated only by YAML structure and step-order
+inspection. **It is unproven until a real GitHub Actions run executes it.** The next
+session must open the Actions run for the `instrumented-tests` job and confirm the
+`Espresso tests executed: <N>` line reports a **non-zero** N.
+
+### Optional-add-on architecture audit — all 10 requirements PASS (static)
+
+Verified by reading the actual code, not the prior documentation.
+
+| # | Requirement | Result | Code evidence |
+|---|---|---|---|
+| 1 | Normal video calls work without Watch Together | **PASS** | `CallActivity` call setup, WebRTC, renderers, and lifecycle contain no Watch Together dependency. The only coupling is a button binding plus `openWatchTogether()`. |
+| 2 | Watch Together does not auto-open | **PASS** | The **only** `startActivity(WatchTogetherActivity)` in the repo is inside `openWatchTogether()` (`CallActivity.java:1011-1015`), whose sole caller is the `btnWatch` click listener (`:547`). No auto-launch from `onCreate`/`onStart`/state callbacks. |
+| 3 | Watch Together does not auto-start a session | **PASS** | `WatchTogetherActivity.onCreate` only reads extras, constructs the repository, and calls `bindViews()`. The single `ACTION_START` write (`:539`) is reached only from user submit/selection. |
+| 4 | Search absent from default videochat | **PASS** | `YouTubeSearchAdapter/Parser/Result/State` are referenced only from `call/watch/**`, `util/YouTubeSearchClient.java`, and their JVM tests. `activity_call.xml` contains no search view; the search UI lives in `activity_watch_together.xml` + `item_youtube_search_result.xml`. |
+| 5 | User explicitly opens it from in-call UI | **PASS** | `btnWatchLayout` is `android:visibility="gone"` in `activity_call.xml:348`, revealed only inside `if (isVideo)` (`CallActivity.java:492`), and `openWatchTogether()` early-returns with a toast unless `callId` and `myUid` are both non-null. |
+| 6 | Search exists only inside Watch Together | **PASS** | Same containment as #4; enforced by static check "YouTube Search remains reachable only through the optional Watch Together add-on". |
+| 7 | Ending Watch Together does not end the call | **PASS** | `endSessionAndFinish()` (`:692-696`) writes `active:false` then calls `finish()` only. `grep` for `CallManager`/`hangup`/`deleteCallDoc`/`writeStatus`/`CallForegroundService` in `WatchTogetherActivity.java` returns **only a comment match** — zero code references. Closing returns to the live `CallActivity`. |
+| 8 | Video/audio behavior unchanged | **PASS** | No file under `call/` other than `CallActivity.java` participates, and its changes are additive (field declarations, `findViewById`, one visibility line, one listener, two helper methods). `CallManager.java` untouched. |
+| 9 | In-call chat unchanged | **PASS** | `btnChat` → `openInCallChat()` is intact (`:541-543`); `InCallChatActivity` and the `calls/{callId}/chat` subcollection are untouched. |
+| 10 | Fresh call has no stale state | **PASS** | State lives at `calls/{callId}/watch/state`, keyed by `callId`; a new call is a new `callId`. `CallSignalRepository.deleteCallDoc` sweeps the `watch` subcollection (static check confirms). No Room persistence, no `SharedPreferences`, no static/singleton cache of session or search state. |
+
+**No architectural violation was found, so no application code was changed.**
+
+### Validation results — Session 3
+
+| Check | Status | Detail |
+|---|---|---|
+| `node scripts/check-watch-together.js` | **PASS** | **30/30** static checks pass, including the three search/secret invariants. Node is the one available toolchain. |
+| `git status --short` | **PASS** | Clean at session start; only `.github/workflows/ci.yml` modified by this session. |
+| Optional-add-on code audit (10 items) | **PASS** | Table above; static reading of real source. |
+| Stale-documentation reconciliation | **PASS — corrected** | Part 2 "NOT STARTED" claim fixed in both docs. |
+| CI workflow YAML structure/step order | **PASS** | Parsed and step sequence confirmed. |
+| `:app:compileReleaseJavaWithJavac` | **BLOCKED** | No JDK/`java` in this sandbox. |
+| `:app:assembleRelease` | **BLOCKED** | Same. |
+| `:app:lintDebug` | **BLOCKED** | Same. |
+| Watch Together / search JVM tests | **BLOCKED** | Same. |
+| `server/` backend tests | **BLOCKED** | Not executed this session (no run attempted; prior sessions recorded 58/58). |
+| `:app:connectedDebugAndroidTest` | **BLOCKED** | No emulator, no `adb`, no `/dev/kvm` in this sandbox. |
+| Firestore rules tests | **BLOCKED** | No Firebase CLI/emulator. Not touched this session. |
+| Espresso actually executing in CI | **NOT RUN** | Requires a real GitHub Actions run of the fixed workflow. |
+| Live `/youtubeSearch` + YouTube API | **BLOCKED** | No deployment access and no credential. None was invented or hardcoded. |
+| Two-participant Android runtime matrix | **BLOCKED** | No device/emulator. **No runtime result is claimed.** |
+| `BackupRoundTripTest` | **NOT RUN** | Pre-existing, unrelated, untouched by this session. |
+
+### Remaining blockers (unchanged by this session, except CI)
+
+1. **CI emulator fix is unproven** — needs one real Actions run showing a non-zero
+   `Espresso tests executed:` count.
+2. **`YOUTUBE_API_KEY` is not verified as deployed.** Provision per §12 of the search
+   doc (Google Cloud → enable YouTube Data API v3 → restricted API key → set as
+   `YOUTUBE_API_KEY` on the Render `server/` service). **The value must never be
+   committed, logged, or placed in any Android artifact.**
+3. **Live `/youtubeSearch` verification** — valid search, short query, no results,
+   rate limit, cache, upstream failure, response shape, credential-never-client-side.
+4. **Two-participant runtime verification** — the full 21-step matrix, including the
+   normal-call-first sequence.
+
+**Feature verdict: `NOT FULLY VERIFIED`.** Architecture, containment, and static
+validation are strong and now independently re-audited against real code. Runtime,
+live-API, and CI-execution evidence do **not** exist yet. The release APK compiling in
+an earlier session is **not** grounds to call this production-ready.
+
+**Repository state: clean checkpoint.** One file changed
+(`.github/workflows/ci.yml`), no application code touched, no test removed or
+weakened, both documentation files reconciled with the repository.
