@@ -933,3 +933,24 @@ deployed, not yet exercised against the live YouTube API.**
 **Part 2 (Android UI + player integration): NOT STARTED.**
 The sub-feature as a whole is **NOT usable by an end user yet** — there is no UI.
 Not production-ready.
+
+## Session 2 Final Checkpoint — 2026-08-10
+
+The historical Android compile failure is **FIXED**. The adapter callback emitted an `int` position while `WatchTogetherActivity` accepted `YouTubeSearchResult` and called a nonexistent `isUsable()` method. The corrected implementation resolves the position through `YouTubeSearchState.videoIdAt(int)`, validates the actual model/state, and passes only `videoId` into the existing Watch Together player/session flow.
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Backend `/youtubeSearch` foundation | **PASS** | Existing authenticated Render route, Firebase ID-token auth, UID rate limiting, server-side credential, cache, projection, and 58/58 backend tests. |
+| Optional Android search integration | **PASS** | Activity, adapter, model, parser, state, client, layout, debounce/submit, result selection, and existing session handoff are wired. |
+| Default video calls / chat / sync | **PASS** | No CallManager/WebRTC, in-call chat, or Firestore synchronization redesign. Search remains behind optional Watch Together. |
+| API-key exposure | **PASS** | Static scan found no key/direct YouTube Data API reference under `app/src/main`. |
+| CI compile defect | **PASS — fixed** | `:app:compileReleaseJavaWithJavac` succeeds. |
+| Release assembly | **PASS** | `:app:assembleRelease` succeeds locally with an ignored throwaway signing keystore; CI signing is external. |
+| Android lint | **PASS** | `:app:lintDebug` succeeds. |
+| Watch Together/search JVM tests | **PASS** | Isolated Watch Together/search tests pass. |
+| Full JVM suite | **FAIL — unrelated** | Only pre-existing `BackupRoundTripTest` crypto-provider failures remain. |
+| Static checker | **PASS** | Focused search invariants now cover files/resources, callback/state/player contracts, optional entry point, and secret absence. |
+| Runtime device verification | **BLOCKED** | No emulator or physical device was available; no runtime behavior is fabricated. |
+| Live YouTube API verification | **NOT RUN** | Requires deployed Render credentials/upstream access. |
+
+**Final checkpoint:** code/build/static validation is complete, but the feature is **NOT production-ready** until live backend and two-participant Android runtime verification are performed. Next session: check `git status --short`, rerun the static checker and release compile, then execute the device verification matrix from the search implementation document.

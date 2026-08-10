@@ -577,6 +577,27 @@ Read, in order:
 2. `docs/watch-together/IMPLEMENTATION_STATE.md` — Watch Together state (§ "Part 2" at the end covers this feature).
 3. This file, `docs/watch-together/YOUTUBE_SEARCH_IMPLEMENTATION.md`.
 
+## Session 2 Completion Checkpoint — 2026-08-10
+
+- **CI compile failure:** **FAIL (historical, fixed)** — `WatchTogetherActivity.java:380` passed an `int` callback to `onResultChosen(YouTubeSearchResult)`, and line 509 called missing `YouTubeSearchResult.isUsable()`.
+- **Root cause:** `YouTubeSearchAdapter.OnResultClick` actually emits a row position; `YouTubeSearchState.videoIdAt(int)` is the real selection/validation API.
+- **Exact fix:** changed `onResultChosen` to accept `int position`, resolve `String videoId = searchState.videoIdAt(position)`, reject `null`, and pass only that id to `startSessionWithVideoId(videoId, 0L)`.
+- **Backend foundation:** **PASS** — authenticated Render `/youtubeSearch`, Firebase ID-token auth, UID rate limiting, server-side credential, caching, minimal projection, and backend tests remain intact. No backend rebuild was required.
+- **Android integration:** **PASS (static/build verified)** — optional Watch Together search UI, debounced/explicit search, loading/results/empty/error states, adapter selection, and existing player/session handoff are wired. Normal video calls, in-call chat, and Firestore synchronization were not redesigned.
+- **Security/quota:** **PASS** — no YouTube API key or direct Data API reference under `app/src/main`; the client calls the authenticated backend. Backend cache/rate-limit/quota controls are documented above; no secret value is recorded here.
+- **Static checker:** **PASS** — `node scripts/check-watch-together.js`, including focused search contracts, optional-entry-point, selected-id flow, and client-secret invariants.
+- **Release Java compilation:** **PASS** — `./gradlew :app:compileReleaseJavaWithJavac`.
+- **Release assembly:** **PASS** locally with a throwaway ignored signing keystore; CI signing remains external.
+- **Lint:** **PASS** — `./gradlew :app:lintDebug`.
+- **Backend tests:** **PASS** — 58/58 in `server/`.
+- **Watch Together/search JVM tests:** **PASS** when isolated. Full suite has **FAIL (unrelated pre-existing)** backup crypto-provider failures in `BackupRoundTripTest`; no Watch Together/search failures.
+- **Runtime/device verification:** **BLOCKED** — no Android emulator or physical device was available; no runtime results are claimed.
+- **Remaining work:** live YouTube API/deployed Render verification and two-participant device verification.
+
+**Checkpoint status: NOT production-ready** because runtime verification and live upstream verification remain blocked. The next session should start by checking `git status --short`, rerun `node scripts/check-watch-together.js`, then perform device/emulator verification without changing the default video-call flow.
+
+---
+
 **Step 2 — Verify Session 1 against the actual code. Do not trust this doc.**
 ```bash
 cd server && npm test                      # expect 58/58 pass

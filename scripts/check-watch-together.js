@@ -28,6 +28,11 @@ const FILES = [
   `${MAIN}/WatchTogetherRepository.java`,
   `${MAIN}/WatchTogetherPlayerView.java`,
   `${MAIN}/WatchTogetherActivity.java`,
+  `${MAIN}/YouTubeSearchResult.java`,
+  `${MAIN}/YouTubeSearchAdapter.java`,
+  `${MAIN}/YouTubeSearchParser.java`,
+  `${MAIN}/YouTubeSearchState.java`,
+  'app/src/main/java/com/duoshield/app/util/YouTubeSearchClient.java',
   `${TEST}/WatchTogetherStateTest.java`,
   `${TEST}/YouTubeUrlParserTest.java`,
 ];
@@ -133,9 +138,10 @@ for (const rel of FILES) {
   const pkg = (raw.match(/^package ([\w.]+);/m) || [])[1];
 
   const problems = [];
+  const expectedPackage = rel.includes('/util/') ? 'com.duoshield.app.util' : EXPECTED_PACKAGE;
   if (braces !== 0) problems.push(`brace imbalance ${braces}`);
   if (parens !== 0) problems.push(`paren imbalance ${parens}`);
-  if (pkg !== EXPECTED_PACKAGE) problems.push(`package "${pkg}" != "${EXPECTED_PACKAGE}"`);
+  if (pkg !== expectedPackage) problems.push(`package "${pkg}" != "${expectedPackage}"`);
 
   if (problems.length) fail(`${name}: ${problems.join(', ')}`);
   else pass(`${name} structure`);
@@ -375,6 +381,60 @@ if (callActivity) {
     ok = false;
   }
   if (ok) pass('CallActivity awareness is one-shot fetchState (no extra listener, no writes)');
+}
+
+// ── YouTube Search add-on checks ───────────────────────────────────────────────
+// Search is an optional add-on: it must use the authenticated backend client, project
+// only the selected video id into the existing session flow, and never carry a YouTube
+// credential in the Android source tree.
+
+const searchResult = sources['YouTubeSearchResult.java'] || '';
+const searchAdapter = sources['YouTubeSearchAdapter.java'] || '';
+const searchParser = sources['YouTubeSearchParser.java'] || '';
+const searchState = sources['YouTubeSearchState.java'] || '';
+const searchClient = sources['YouTubeSearchClient.java'] || '';
+const watchLayoutContent = readFileOrFail(watchLayout, 'activity_watch_together.xml') || '';
+
+const searchContracts = [
+  ['YouTubeSearchResult model', /class\s+YouTubeSearchResult/.test(searchResult)],
+  ['adapter position callback', /interface\s+OnResultClick[\s\S]*onResultClick\s*\(\s*int\s+position/.test(searchAdapter)],
+  ['parser JSON projection', /extractResults|parse/.test(searchParser)],
+  ['state resolves a selected video id', /videoIdAt\s*\(\s*int\s+position/.test(searchState)],
+  ['client uses the youtubeSearch backend route', /youtubeSearch/.test(searchClient)],
+  ['Activity constructs the adapter with its callback', /new\s+YouTubeSearchAdapter\s*\(this,\s*this::onResultChosen\)/.test(watchActivity)],
+  ['Activity resolves selection through search state', /searchState\.videoIdAt\s*\(position\)/.test(watchActivity)],
+  ['selected id reaches existing player/session flow', /startSessionWithVideoId\s*\(videoId,\s*0L\)/.test(watchActivity)],
+  ['search UI exists in the Watch Together layout', /(?:etSearch|rvResults|btnSearch)/.test(watchLayoutContent)],
+];
+
+let searchOk = true;
+for (const [label, present] of searchContracts) {
+  if (!present) { fail(`YouTube Search is missing ${label}`); searchOk = false; }
+}
+if (searchOk) pass('YouTube Search model, adapter, parser, client, Activity, and player contracts are wired');
+
+const appSourceRoot = path.join(ROOT, 'app/src/main');
+function collectText(dir) {
+  let text = '';
+  if (!fs.existsSync(dir)) return text;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) text += collectText(abs);
+    else if (/\.(java|kt|xml|gradle|properties)$/.test(entry.name)) text += fs.readFileSync(abs, 'utf8');
+  }
+  return text;
+}
+const appSource = collectText(appSourceRoot);
+if (/(?:AIza[0-9A-Za-z_-]{20,}|YOUTUBE_API_KEY|youtube\.googleapis\.com)/.test(appSource)) {
+  fail('YouTube API credential/direct Data API reference found under app/');
+} else {
+  pass('No YouTube API key or direct Data API reference exists under app/');
+}
+
+if (/btnWatchLayout|btnWatch/.test(callLayout || '') && /WatchTogetherActivity/.test(callActivity || '') && /openWatchTogether/.test(callActivity || '')) {
+  pass('YouTube Search remains reachable only through the optional Watch Together add-on');
+} else {
+  fail('Watch Together optional in-call entry point is missing or not wired');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
