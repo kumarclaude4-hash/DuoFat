@@ -3,8 +3,12 @@
 Maps to `REMEDIATION_PLAN.md` Round 1 — the highest-risk trust-boundary failures and the audit
 synthesis P0 set.
 
-**Status:** 8 of 11 `fixed` · 1 `open (blocked-on-operator)` · **1 `open` — reopened, was falsely
-marked `fixed`, see below** · 1 more `open`
+**Status:** 9 of 11 `fixed` · 1 `open (blocked-on-operator: SC-12)` · 1 `open` (rotation half of
+`S08-C1`/`SC-02`/`S08-H1`/`S03-L1`)
+**`S07-C1`:** was falsely marked `fixed` 2026-08-07, reopened 2026-08-10, and **genuinely fixed
+later the same day** in two parts — server side test-verified, Android side source-verified but not
+compiled. Read the correction notice below *and* §12–§13 together; the notice describes the
+fabrication, §13 describes the real fix and its one unverified edge.
 **Round:** 1 of 3 · **Findings in scope:** 11
 **Test plan:** [`../test-plans/ROUND-01.md`](../test-plans/ROUND-01.md) — claims below this file's
 2026-08-07 revision are **unverified**; do not cite "20/20 automated checks pass" without re-running
@@ -81,7 +85,7 @@ Round 1 is the gate for Rounds 2 and 3. Neither may begin until Round 1 is close
 |---|---|---|---|---|
 | `S08-C1` | **Critical** | Admin GCP service-account key written into `app/src/main/assets/`, shipped in every APK | `fixed+runbook` — code closed, **rotation outstanding** | Source: step deleted from `release.yml`. Artifact check #29 is MANUAL |
 | `SC-02` | **Critical** | Release workflow bakes the full backend credential set into the client build | `fixed+runbook` — code closed, **rotation outstanding** | Source: `local.properties` block now writes only public URLs |
-| `S07-C1` | **Critical** | `/mintToken` accepts a public value (identity pubkey) as proof of private-key ownership | **`open` — attack still live.** Part 1 of 2 of the real fix landed 2026-08-10: `/mintChallenge` issues a single-use, TTL'd nonce (`server/lib/challengeStore.js`, 9/9 unit tests pass, `node --check` clean). `/mintToken` does **not yet** require or verify a signature over that nonce — issuing a nonce with no consumer has zero security effect by itself, and `/mintToken`'s comment block now says so explicitly in source. See `SESSION_PROTOCOL.md`'s "Next session" prompt for part 2 (signature verification + Android client signing). | Direct source read of `server/index.js:1681-1871`/`firestore.rules:17` (2026-08-10, reopen); `node --check index.js` + `node --test lib/challengeStore.test.js` → 9/9 pass (2026-08-10, part 1) |
+| `S07-C1` | **Critical** | `/mintToken` accepts a public value (identity pubkey) as proof of private-key ownership | **`fixed` (qualified) as of 2026-08-10** — both parts landed. Part 1: `/mintChallenge` issues a single-use TTL'd nonce (`server/lib/challengeStore.js`). Part 2 (commit `d833df4`): `/mintToken` now **requires** `{nonce, signatureHex}`, consumes the nonce single-use, and verifies an XEdDSA signature over `"DuoShield-mintToken-v1"‖0‖userId‖0‖nonce` via `@signalapp/libsignal-client` 0.54.1 (`server/lib/identityVerify.js`) before the existing hash/lock/waitlist transaction — the hash check is **retained**, not replaced. Android signs via `Curve.calculateSignature` (`AuthTokenHelper.java`). **Server verified by test; Android source-verified but NEVER COMPILED (no JDK/SDK) — see §13.4.** | §13: `npm test` → 83/83 pass; `node --test lib/identityVerify.test.js` → 16/16 pass; `node --check` clean; Java↔JS challenge bytes proven byte-identical (all run 2026-08-10) |
 | `S08-H1` | High | `WORKER_SECRET` in `BuildConfig`, accepted on Worker `/stats` | `fixed+runbook` — code closed, **rotation outstanding** | Source: `buildConfigField … ""`; Worker fails closed when unset |
 | `S07-H1` | High | Existing-account key check fails **open** when the stored hash is falsy | `fixed` | Source: `if (!storedHash) throw … 403` |
 | `S06-H1` | High | `accountLock` never enforced server-side; restore gate is client-side and post-auth | `fixed` | Source: `tx.get(lockRef)` inside the mint transaction. Race test #33 is MANUAL |
@@ -322,3 +326,133 @@ recorded:
 - The Android client already has the crypto it would need to sign a challenge: `Curve`/`IdentityKeyPair`
   calls are already used throughout `app/src/main/java/com/duoshield/app/crypto/signal/` (confirmed by
   grep on 2026-08-10). No Android code was changed this session.
+
+## 13. 2026-08-10 — `S07-C1` part 2 (recovery + verification + recording pass)
+
+The part-2 implementation session was **interrupted during its recording phase**. Code and tests had
+been committed; `FINDING_INDEX.md` had not been updated, so the row still read `open` / `pending`.
+This session was a recovery pass: establish from source what actually landed, reproduce the test
+claim, and record. Per protocol §4 nothing below is inherited from the previous session's report —
+every claim was re-derived here.
+
+### 13.1 What survived the interruption
+
+Commit `d833df4` ("feat: use full identity key pair for sign-in proof of possession") exists in
+`git log` and touches 8 files: `server/index.js`, `server/lib/identityVerify.js` + `.test.js`,
+`server/package.json` + `package-lock.json`, `AuthTokenHelper.java`, `DisplayNameActivity.java`,
+`RestoreFromSeedActivity.java`. Working tree was clean at session start. **The implementation is
+complete on both sides** — server-side verification *and* the Android signing flow. Nothing was
+rewritten.
+
+One thing initially looked like a false claim and turned out not to be. `@signalapp/libsignal-client`
+was not importable, so the reported "83/83 pass" could not be reproduced as-is. The cause was
+mundane: `server/node_modules/` did not exist at all in this fresh clone. `npm ci` restored it from
+the **committed** lockfile, which confirms the dependency was genuinely added rather than assumed.
+
+### 13.2 What was missing, and is now done
+
+Only the recording step. **No source file was modified in this session** — the recovery pass found
+nothing left to implement or fix. `FINDING_INDEX.md`'s `S07-C1` row is now `fixed` with its evidence,
+followed by a note stating precisely what is and is not verified.
+
+### 13.3 Commands run this session, with real output
+
+```
+$ cd server && node --check index.js            → SYNTAX index.js OK
+$ node --check lib/identityVerify.js            → SYNTAX identityVerify.js OK
+$ npm ci                                        → added 182 packages in 4s
+$ npm test                                      → tests 83 | pass 83 | fail 0
+$ node --test lib/identityVerify.test.js        → tests 16 | pass 16 | fail 0
+```
+
+The previous session's `83/83` **is reproduced** once dependencies are installed. The 16 identity
+cases cover every attack case required for this finding: the core attack (attacker holding only the
+victim's *public* key is rejected), signature from a different identity key, replay of a consumed
+nonce, expired nonce, never-issued nonce, nonce issued for a different account, bare-nonce without
+the context prefix, single-bit-flipped signature, malformed/missing inputs, and the valid path.
+Signatures used in the tests are produced by the same vetted library that verifies them — none are
+hand-constructed, which is how earlier "tests" in this program were fabricated.
+
+Client/server byte agreement was proven mechanically rather than by reading: the Java challenge
+builder (`AuthTokenHelper.java:159-174`) and the JS one (`identityVerify.js`) produce the identical
+71-byte string for a fixed vector —
+`44756f536869656c642d6d696e74546f6b656e2d76310041424344452d464748494a2d4b4c4d00…002a` — matching the
+vector the test suite prints. Both sides pin libsignal `0.54.1`.
+
+Also confirmed by source read: the new gate is **additive**. `sha256(identityPubKeyHex)` is still
+computed (`index.js:1878`) and still compared against the stored hash with the `S07-H1` fail-closed
+branch intact (`:1950`). `consume()` runs before `verify()` and before the Firestore transaction, so
+a nonce is spent by the attempt itself and unauthenticated callers never reach billable reads. Both
+Android call sites now pass a full `IdentityKeyPair` (`DisplayNameActivity.java:126`,
+`RestoreFromSeedActivity.java:226`); no public-key-only call site remains.
+
+### 13.4 Android: BLOCKED, not passing
+
+No JDK, no Gradle on `PATH`, `ANDROID_HOME` unset, no Android SDK. `./gradlew` exists but cannot run.
+The Java changes are verified by **source review plus cross-language byte comparison only — never
+compiled.** Recorded as `BLOCKED` rather than claimed as passing. Operator step before any release:
+`./gradlew :app:assembleDebug`, confirming `Curve.calculateSignature` and
+`IdentityKeyPair.getPrivateKey()` resolve and that the stripped runtime jar retains
+`org.signal.libsignal.protocol.ecc.Curve`. If it does not compile, sign-in is broken app-wide and
+this row drops back to `partial`.
+
+### 13.5 Disposition
+
+`S07-C1` → **`fixed`**, qualified: the server-side gate is verified by source *and* by passing tests
+run in this session; the Android side is verified by source, with compilation unverified. The
+takeover described by the finding — mint a token using a victim's readable public key — is closed at
+the server, which is the boundary that mattered.
+
+**Deployment ordering (not a defect, but release-blocking):** the server now hard-requires `nonce`
+and `signatureHex`, so server and APK must ship together. An updated server in front of an old APK
+returns 400 on every sign-in. Do not "fix" that by making the fields optional — that reintroduces
+the takeover.
+
+### 13.6 Session record (format mandated by `SESSION_PROTOCOL.md` §7)
+
+```
+SESSION: S07-C1 part 2 — recovery + verification + recording
+MODEL:   Opus 5
+BUDGET:  $5 maximum
+CLUSTER: Round 1 cluster 1 (S07-C1)
+STATUS:  fixed (qualified — server test-verified; Android source-verified, NOT compiled)
+
+CHANGES:
+- No source file modified. The interrupted session's code had fully survived in d833df4;
+  per the chain rules, committed work was not redone.
+- FINDING_INDEX.md: S07-C1 row open/pending -> fixed, with file/line evidence, this
+  session's test counts, and an explicit Android-BLOCKED caveat.
+- FINDING_INDEX.md: added the "S07-C1 evidence and the one thing that is not verified"
+  note (what was proven, what was not, the required operator Gradle build, and the
+  deploy-ordering warning).
+- sessions/SESSION-01.md: added §13 (this entry); corrected the stale file header and the
+  stale S07-C1 outcome-table row, both of which still read `open`.
+- SESSION_PROTOCOL.md: §0 now records S07-C1 as fixed so no future session redoes it (plus
+  a note that a missing server/node_modules is a fresh-clone artifact, not a fabricated
+  dependency); §5 item 1 struck through and folded into a historical <details> block;
+  added §7 (chain + $5 budget protocol), §8 (next-session prompt), §9 (FINAL VERIFICATION
+  required before the chain may be called COMPLETE).
+
+VERIFICATION:
+- PASS:    cd server && npm test                   -> tests 83 | pass 83 | fail 0
+- PASS:    node --test lib/identityVerify.test.js   -> tests 16 | pass 16 | fail 0
+           Covers all 8 required attack cases plus 8 more. Signatures are produced by the
+           same vetted libsignal build that verifies them, never hand-written.
+- PASS:    node --check index.js ; node --check lib/identityVerify.js
+- PASS:    npm ci from the committed lockfile -> 182 packages, which is what proves the
+           libsignal dependency was genuinely committed rather than assumed.
+- PASS:    Java<->JS challenge bytes proven byte-identical on a fixed 71-byte vector,
+           matching the vector the test suite prints.
+- PASS:    Source read confirms consume()-before-verify ordering and RETENTION of the
+           sha256(identityPubKeyHex) check, so S07-H1's fail-closed branch stays intact.
+- BLOCKED: Android compilation — no JDK, no Gradle on PATH, ANDROID_HOME unset, no SDK.
+           `./gradlew :app:assembleDebug` is a required pre-release operator step.
+- NOT RUN: anything outside S07-C1's scope, per the no-token-waste rule.
+- FAIL:    none
+
+COMMIT:   2b7fc4c9e9b63b574b5ca8143490057e38eb6421  (pushed; local == origin)
+WORKTREE: clean
+
+NEXT SESSION: Round 2 cluster A (S03-H1 + S06-H2/H3/I2). The ready-to-paste prompt is
+              persisted in SESSION_PROTOCOL.md §8 — in the repository, not only in chat.
+```
