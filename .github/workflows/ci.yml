@@ -12,9 +12,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # SC-01: gate the vendored libsignal JAR before anything builds with it.
+  #
+  # app/build.gradle ships `libs/libsignal-client-0.54.1-stripped.jar` as an
+  # `implementation files(...)` dependency (the Maven artifact is only
+  # `compileOnly`), so the Signal Protocol classes users actually execute — the
+  # app's entire confidentiality guarantee — come from that committed 38 MB blob.
+  # Gradle applies no integrity checking to `files(...)` dependencies, the JAR is
+  # not built in CI, and nobody reviews a 38 MB binary diff in a pull request. A
+  # commit swapping it for a build with a modified SessionCipher or a
+  # key-generation routine that leaks entropy would compromise every message in
+  # the product and look like a routine dependency bump.
+  #
+  # This job asserts the file still hashes to the value recorded in
+  # scripts/strip_signal_records.py and app/libs/*.jar.sha256. Changing the JAR
+  # now requires updating those records in the same commit, which is the
+  # reviewable signal that was missing. It is a separate job that every build job
+  # `needs`, so an unexpected JAR fails the pipeline BEFORE it is compiled,
+  # dexed, packaged, or uploaded as an artifact — not after.
+  verify-libsignal-jar:
+    name: Verify vendored libsignal JAR (SC-01)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hash check only — no network, no Gradle, no Android SDK. Keeping this
+      # dependency-free is deliberate: the integrity gate for the crypto core
+      # should not itself depend on a toolchain that could fail open.
+      - name: Assert vendored libsignal JAR matches recorded hash
+        run: python3 scripts/strip_signal_records.py --check
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: verify-libsignal-jar
     steps:
       - uses: actions/checkout@v4
 

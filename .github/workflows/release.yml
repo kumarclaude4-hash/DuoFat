@@ -16,7 +16,13 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write   # create/delete releases and tags
+  contents: write      # create/update releases and tags
+  # SC-04: required by actions/attest-build-provenance. `id-token` mints the
+  # OIDC token that identifies this workflow run to the attestation service;
+  # `attestations` stores the resulting signed provenance. Both are the minimum
+  # for that action — no other scope is added.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -41,6 +47,15 @@ jobs:
           restore-keys: ${{ runner.os }}-gradle-
 
       - run: chmod +x gradlew
+
+      # SC-01: the release build ships the vendored libsignal JAR to users, so the
+      # integrity gate must run here too — not only in ci.yml. A release is
+      # exactly the moment a swapped crypto core would do the most damage: it is
+      # signed with the real keystore and published for sideload. Fail before the
+      # keystore is ever decoded. See the job comment in ci.yml for the full
+      # rationale and scripts/strip_signal_records.py for the recorded hash.
+      - name: Assert vendored libsignal JAR matches recorded hash (SC-01)
+        run: python3 scripts/strip_signal_records.py --check
 
       - name: Write google-services.json
         env:
@@ -142,6 +157,110 @@ jobs:
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease --no-daemon
 
+      # ── SC-04: make the published APKs verifiable ────────────────────────────
+      # DuoShield is sideloaded from a URL, so a user installing it has no store
+      # to vouch for the bytes they received. Previously the release attached raw
+      # APKs and nothing else: no checksums, no signing-certificate fingerprint,
+      # no provenance. A user could not tell the maintainer's build from a
+      # substituted one, and after an incident there was no record tying a
+      # shipped APK to the commit that produced it.
+      #
+      # Android's signature check only protects *upgrades* (it refuses an update
+      # signed by a different key). A first install has nothing to compare
+      # against — which is the case that matters for a security app people are
+      # told to sideload. Publishing the certificate digest gives that first
+      # install something to verify against.
+      #
+      # This runs BEFORE the keystore is erased below, because apksigner needs
+      # only the APK (not the keystore) — the cert is embedded in the signed
+      # artifact. Order still matters for the step *after* it, so keep the erase
+      # step last among the post-build steps.
+      - name: Generate SHA256SUMS and record signing certificate
+        id: verify
+        run: |
+          set -uo pipefail
+          APK_DIR=app/build/outputs/apk/release
+          if [ ! -d "$APK_DIR" ]; then
+            echo "::error::$APK_DIR does not exist — the build produced no APKs to publish."
+            exit 1
+          fi
+          shopt -s nullglob
+          APKS=("$APK_DIR"/*.apk)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "::error::No APKs found in $APK_DIR — refusing to publish an empty release."
+            exit 1
+          fi
+
+          # Checksums, with bare filenames so `sha256sum -c SHA256SUMS` works in
+          # whatever directory a user downloads into.
+          #
+          # Failure here must fail the release. Publishing an empty or partial
+          # SHA256SUMS would be worse than publishing none: it looks like
+          # verification is available while actually verifying nothing.
+          if ! ( cd "$APK_DIR" && sha256sum *.apk > SHA256SUMS ); then
+            echo "::error::sha256sum failed — refusing to publish a release without valid checksums."
+            exit 1
+          fi
+          if [ ! -s "$APK_DIR/SHA256SUMS" ]; then
+            echo "::error::SHA256SUMS is empty — refusing to publish unverifiable APKs."
+            exit 1
+          fi
+          echo "SHA256SUMS:"
+          cat "$APK_DIR/SHA256SUMS"
+
+          # Signing certificate digest, pinned publicly in the release body so a
+          # fresh install can be checked with:
+          #   apksigner verify --print-certs app-arm64-v8a-release.apk
+          # Newest build-tools copy of apksigner. ANDROID_SDK_ROOT may be unset on
+          # a runner image change, so guard the lookup rather than letting `find`
+          # error out and take the step with it.
+          APKSIGNER=""
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "${ANDROID_SDK_ROOT}/build-tools" ]; then
+            APKSIGNER=$(find "$ANDROID_SDK_ROOT/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          fi
+          {
+            echo "### SHA-256 checksums"
+            echo '```'
+            cat "$APK_DIR/SHA256SUMS"
+            echo '```'
+          } > release-verify.md
+
+          if [ -n "$APKSIGNER" ]; then
+            CERT_SHA=$("$APKSIGNER" verify --print-certs "${APKS[0]}" 2>/dev/null \
+              | grep -i 'certificate SHA-256 digest' | head -1 | awk -F': ' '{print $2}')
+          else
+            echo "::warning::apksigner not found under ANDROID_SDK_ROOT — cannot read the signing certificate digest."
+            CERT_SHA=""
+          fi
+
+          if [ -n "${CERT_SHA:-}" ]; then
+            echo "Signing certificate SHA-256: ${CERT_SHA}"
+            {
+              echo ""
+              echo "### Signing certificate"
+              echo "All APKs in this release are signed with the certificate:"
+              echo '```'
+              echo "SHA-256: ${CERT_SHA}"
+              echo '```'
+              echo "Verify a download with \`apksigner verify --print-certs <file>.apk\` and confirm this digest matches."
+            } >> release-verify.md
+          else
+            # Never claim a fingerprint that was not actually read from the APK.
+            echo "::warning::Could not extract the signing certificate digest; release body will omit it."
+          fi
+
+          echo "apk_dir=${APK_DIR}" >> $GITHUB_OUTPUT
+
+      # Signed, tamper-evident provenance tying each APK to this exact workflow
+      # run, commit, and repository. Verifiable with:
+      #   gh attestation verify <file>.apk --repo ${{ github.repository }}
+      # This is what lets someone confirm an APK came from this pipeline rather
+      # than from anyone who can upload to a release page.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: app/build/outputs/apk/release/*.apk
+
       - name: Erase keystore from runner disk
         if: always()
         run: rm -f app/duoshield-release.keystore
@@ -209,6 +328,55 @@ jobs:
             echo "No existing release for '${TAG}' — nothing to clear."
           fi
 
+      # ── Compose the release body (install + SC-04 verification data) ─────────
+      # Built as a file rather than an inline `body:` string so the checksums and
+      # certificate digest produced above can be interpolated verbatim, without
+      # passing untrusted-looking multi-line content through YAML quoting.
+      - name: Compose release body
+        run: |
+          set -u
+          cat > release-verify-body.md <<'EOF'
+          ## Installation
+
+          Pick the APK for your device architecture:
+
+          | File | Architecture | Devices |
+          |---|---|---|
+          | `app-arm64-v8a-release.apk` | 64-bit | Most phones from 2017 onwards |
+          | `app-armeabi-v7a-release.apk` | 32-bit | Older / budget devices |
+
+          Enable **Install from unknown sources** in Settings → Security, then tap the APK to install.
+
+          ## Verifying this download
+
+          DuoShield is sideloaded, so nothing checks these bytes for you on a first
+          install. Verify before installing:
+
+          1. **Checksum** — download `SHA256SUMS` next to the APKs and run
+             `sha256sum -c SHA256SUMS` (or compare `sha256sum <file>.apk` to the list below).
+          2. **Provenance** — confirm the APK was built by this repository's release
+             workflow:
+             `gh attestation verify <file>.apk --repo ${{ github.repository }}`
+          3. **Signature** — check the signing certificate digest published below with
+             `apksigner verify --print-certs <file>.apk`.
+
+          EOF
+
+          if [ -f release-verify.md ]; then
+            cat release-verify.md >> release-verify-body.md
+          else
+            echo "::warning::release-verify.md missing — release body will omit checksums."
+          fi
+
+          {
+            echo ""
+            echo "---"
+            echo "Built from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\` by workflow run [\`${{ github.run_id }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          } >> release-verify-body.md
+
+          echo "----- release body -----"
+          cat release-verify-body.md
+
       # ── Publish the new release ──────────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -216,20 +384,12 @@ jobs:
           tag_name:             ${{ steps.tag.outputs.name }}
           name:                 "DuoShield ${{ steps.tag.outputs.name }}"
           generate_release_notes: true
-          body: |
-            ## Installation
-
-            Pick the APK for your device architecture:
-
-            | File | Architecture | Devices |
-            |---|---|---|
-            | `app-arm64-v8a-release.apk` | 64-bit | Most phones from 2017 onwards |
-            | `app-armeabi-v7a-release.apk` | 32-bit | Older / budget devices |
-
-            Enable **Install from unknown sources** in Settings → Security, then tap the APK to install.
-
-            ---
-            Built from commit `${{ github.sha }}` on `${{ github.ref_name }}`.
-          files: app/build/outputs/apk/release/*.apk
+          # SC-04: `body_path` carries the generated checksums + certificate
+          # digest, so the verification data is published on the release page
+          # itself rather than living only in a build log.
+          body_path: release-verify-body.md
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
