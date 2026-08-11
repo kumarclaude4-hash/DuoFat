@@ -102,6 +102,12 @@ describe('/users/{uid}/public_keys/{doc}', () => {
     await seed('users/alice/public_keys/bundle', {
       identityKey: 'ik_alice',
       preKeys: [{ id: 1, key: 'pk1' }],
+      // S01-H1: a realistic pre-key pool so the cross-user size-decrease
+      // (consume-only) invariant can be exercised.
+      oneTimePreKeys: [
+        { id: 1, key: 'otpk1' },
+        { id: 2, key: 'otpk2' },
+      ],
     });
   });
 
@@ -134,9 +140,49 @@ describe('/users/{uid}/public_keys/{doc}', () => {
   });
 
   test('any signed-in user can consume a one-time pre-key (oneTimePreKeys + updatedAt only)', async () => {
+    // Legit consume: arrayRemove one entry → list shrinks from 2 → 1.
     await assertSucceeds(
       asUser('bob').doc('users/alice/public_keys/bundle').update({
-        oneTimePreKeys: [],
+        oneTimePreKeys: [{ id: 2, key: 'otpk2' }],
+        updatedAt: 2000,
+      })
+    );
+  });
+
+  // ── S01-H1: cross-user prekey writes must be consume-only (list may only shrink) ──
+  test('S01-H1: non-owner cannot GROW the pre-key pool (plant attacker prekeys)', async () => {
+    await assertFails(
+      asUser('bob').doc('users/alice/public_keys/bundle').update({
+        oneTimePreKeys: [
+          { id: 1, key: 'otpk1' },
+          { id: 2, key: 'otpk2' },
+          { id: 3, key: 'attacker_otpk' },
+        ],
+        updatedAt: 2000,
+      })
+    );
+  });
+
+  test('S01-H1: non-owner cannot SAME-SIZE swap the pool with attacker prekeys', async () => {
+    await assertFails(
+      asUser('bob').doc('users/alice/public_keys/bundle').update({
+        oneTimePreKeys: [
+          { id: 1, key: 'attacker_a' },
+          { id: 2, key: 'attacker_b' },
+        ],
+        updatedAt: 2000,
+      })
+    );
+  });
+
+  test('S01-H1: owner CAN still grow their own pre-key pool (refresh / arrayUnion)', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('users/alice/public_keys/bundle').update({
+        oneTimePreKeys: [
+          { id: 1, key: 'otpk1' },
+          { id: 2, key: 'otpk2' },
+          { id: 3, key: 'otpk3' },
+        ],
         updatedAt: 2000,
       })
     );
@@ -235,6 +281,29 @@ describe('/chats/{chatId}', () => {
       asUser('eve').doc(`chats/${CHAT_ID}`).update({ lastMessage: 'owned' })
     );
   });
+
+  // ── S01-H3: partner-owned display name / photo cannot be overwritten ──────────
+  // Convention (inverted vs presence keys): a participant writes the key suffixed
+  // with the PARTNER's uid (their own name, for the partner to read) and only
+  // READS the key suffixed with their OWN uid. So writing partnerName_<self> is
+  // never legitimate and is how the partner's shown name would be spoofed.
+  test('S01-H3: participant can set the partner-suffixed name (their own display name)', async () => {
+    await assertSucceeds(
+      asUser('alice').doc(`chats/${CHAT_ID}`).update({ partnerName_bob: 'Alice' })
+    );
+  });
+
+  test('S01-H3: participant CANNOT overwrite the self-suffixed partnerName (partner-owned)', async () => {
+    await assertFails(
+      asUser('alice').doc(`chats/${CHAT_ID}`).update({ partnerName_alice: 'Spoofed' })
+    );
+  });
+
+  test('S01-H3: participant CANNOT overwrite the self-suffixed partnerPhotoUrl (partner-owned)', async () => {
+    await assertFails(
+      asUser('alice').doc(`chats/${CHAT_ID}`).update({ partnerPhotoUrl_alice: 'https://evil/x.png' })
+    );
+  });
 });
 
 describe('/chats/{chatId}/messages/{msgId}', () => {
@@ -245,7 +314,11 @@ describe('/chats/{chatId}/messages/{msgId}', () => {
     await seed(`chats/${CHAT_ID}`, { participants: ['alice', 'bob'] });
     await seed(`chats/${CHAT_ID}/messages/${MSG_ID}`, {
       sender: 'alice',
-      text: 'hello',
+      text: 'ciphertext_alice',
+      sigType: 3,
+      type: 'text',
+      isEncrypted: true,
+      status: 'sent',
       timestamp: 1000,
     });
   });
@@ -279,6 +352,42 @@ describe('/chats/{chatId}/messages/{msgId}', () => {
         sender: 'eve',
         text: 'injection',
         timestamp: 3000,
+      })
+    );
+  });
+
+  // ── S01-H2: message content (ciphertext) is sender-only mutable ───────────────
+  test('S01-H2: recipient CANNOT rewrite the ciphertext of a message they did not send', async () => {
+    await assertFails(
+      asUser('bob').doc(`chats/${CHAT_ID}/messages/${MSG_ID}`).update({
+        text: 'forged_ciphertext',
+      })
+    );
+  });
+
+  test('S01-H2: recipient CANNOT downgrade an encrypted message to plaintext', async () => {
+    await assertFails(
+      asUser('bob').doc(`chats/${CHAT_ID}/messages/${MSG_ID}`).update({
+        isEncrypted: false,
+        text: 'plaintext',
+      })
+    );
+  });
+
+  test('S01-H2: original sender CAN edit their own message content (48h edit window)', async () => {
+    await assertSucceeds(
+      asUser('alice').doc(`chats/${CHAT_ID}/messages/${MSG_ID}`).update({
+        text: 'ciphertext_alice_v2',
+        sigType: 3,
+        edited: true,
+      })
+    );
+  });
+
+  test('S01-H2: recipient CAN still update non-content fields (e.g. delivery status)', async () => {
+    await assertSucceeds(
+      asUser('bob').doc(`chats/${CHAT_ID}/messages/${MSG_ID}`).update({
+        status: 'read',
       })
     );
   });
