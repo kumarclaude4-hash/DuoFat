@@ -558,6 +558,26 @@ export default {
         }, 413);
       }
 
+      // Post-upload quota re-check. The pre-checks above only bound
+      // `declaredBytes` (the client-supplied Content-Length), which — like
+      // the file-size guard immediately above — is untrusted: a missing or
+      // understated header (e.g. chunked transfer with no Content-Length,
+      // safeInt-defaulted to 0) sails through both pre-checks regardless of
+      // how large the body actually is, then lands here already stored with
+      // its true size unaccounted for. Re-checking `actualBytes` against
+      // both caps before crediting anything closes that bypass for the same
+      // reason the file-size guard exists — the client header is never
+      // trusted for anything that gates a limit.
+      const r2AfterUpload = (await getR2Bytes(env)) + actualBytes;
+      const userAfterUpload = (await getUserBytes(env, cap.holder)) + actualBytes;
+      if (r2AfterUpload > MAX_R2_BYTES || userAfterUpload > maxUserBytes(env)) {
+        await env.HOT_BUCKET.delete(key).catch(() => {});
+        return respond({
+          error: 'Upload rejected — actual size exceeds the available storage quota (Content-Length was missing or understated).',
+          bytes: actualBytes,
+        }, 507);
+      }
+
       // Increment R2 counter and the uploader's per-user counter with the
       // actual stored size, not the declared size.
       ctx.waitUntil(adjustR2(env, actualBytes));

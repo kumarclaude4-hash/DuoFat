@@ -8,7 +8,27 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 import worker from './index.js';
+
+// `crypto.subtle.timingSafeEqual` is a Cloudflare Workers-runtime extension to
+// the Web Crypto API — it exists in the real Workers runtime that src/index.js
+// actually deploys to, but plain Node's `crypto.subtle` does not implement it
+// (confirmed on Node 24). This is a test-environment gap, not a bug in the
+// implementation, and not a security weakness to paper over: the shim below
+// delegates to Node's own constant-time `crypto.timingSafeEqual` (the same
+// primitive the server side of this repo already uses for its own
+// timing-safe comparisons — see server/lib/pure.js) so the comparison under
+// test is still genuinely constant-time, just running under Node instead of
+// workerd.
+if (typeof globalThis.crypto?.subtle?.timingSafeEqual !== 'function') {
+  globalThis.crypto.subtle.timingSafeEqual = async (a, b) => {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return nodeTimingSafeEqual(bufA, bufB);
+  };
+}
 
 const MEDIA_TOKEN_SECRET = 'test-media-token-secret';
 
@@ -76,6 +96,19 @@ function makeEnv(overrides = {}) {
     RATE_KV: makeKv(),
     HOT_BUCKET: makeHotBucket(),
     MAX_FILE_SIZE: '524288000',
+    // getB2Client() constructs an AwsClient unconditionally on every DELETE
+    // that finds the object still in R2 (the migration race-guard fires a
+    // best-effort alongside B2 delete — see index.js). aws4fetch's AwsClient
+    // constructor throws synchronously if accessKeyId/secretAccessKey are
+    // missing, so these dummy values are required for R2-path DELETE tests
+    // to even reach the fetch() call, whose network failure is already
+    // swallowed by the `.catch(() => {})` in the implementation. Real
+    // deployments always set these via `wrangler secret put` (see README).
+    B2_ACCESS_KEY_ID: 'test-b2-key-id',
+    B2_SECRET_ACCESS_KEY: 'test-b2-secret',
+    B2_REGION: 'eu-central-003',
+    B2_ENDPOINT: 'https://b2.invalid.example',
+    B2_BUCKET: 'test-bucket',
     ...overrides,
   };
 }
@@ -228,4 +261,61 @@ test('S03-H3: deleting an object credits the per-user quota back to the uploader
     body: new Uint8Array(900),
   }), env, ctx);
   assert.equal(put2.status, 200, 'quota freed by the DELETE must let the same holder upload again');
+});
+
+test('S03-H3: a missing/unknowable Content-Length cannot be used to smuggle bytes past the per-user quota', async () => {
+  const env = makeEnv({ MAX_USER_BYTES: '1000' });
+  const holder = 'user-liar';
+
+  // Spend most of the quota honestly first: 900 of the 1000-byte budget.
+  const key1 = `media/${CHAT_ID}/honest.jpg`;
+  const token1 = await mintToken('write', key1, holder);
+  const put1 = await worker.fetch(new Request(`https://worker.example/${key1}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token1}`, 'Content-Length': '900' },
+    body: new Uint8Array(900),
+  }), env, ctx);
+  assert.equal(put1.status, 200, await put1.clone().text());
+
+  // Now upload another 900-byte body via a stream, whose length cannot be
+  // known up front — Node's fetch neither preserves a caller-supplied
+  // Content-Length alongside a stream body nor computes one itself, so
+  // `declaredBytes` resolves to 0 via safeInt's fallback, exactly like a
+  // client that omits the header entirely. The pre-check only sees
+  // 900 (already used) + 0 (declared) = 900 <= 1000, so it trivially
+  // passes — even though the real total would be 1800, well over quota.
+  // The real 900-byte body is stored by R2 regardless of what was
+  // declared, so only the post-upload re-check against the true HEAD size
+  // can catch this and undo the write.
+  const key2 = `media/${CHAT_ID}/lie.jpg`;
+  const token2 = await mintToken('write', key2, holder);
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(900));
+      controller.close();
+    },
+  });
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key2}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token2}` },
+    body: stream,
+    duplex: 'half',
+  }), env, ctx);
+  assert.equal(put2.status, 507, await put2.clone().text());
+
+  // The object must not be left behind in R2 after the rejection.
+  const headAfterReject = await env.HOT_BUCKET.head(key2);
+  assert.equal(headAfterReject, null, 'a rejected upload must not leave the object stored in R2');
+
+  // Quota must not have been credited for the rejected upload either — the
+  // holder must still be sitting at exactly 900/1000, unaffected by the
+  // rejected write, and unable to fit another 900-byte upload.
+  const key3 = `media/${CHAT_ID}/two.jpg`;
+  const token3 = await mintToken('write', key3, holder);
+  const put3 = await worker.fetch(new Request(`https://worker.example/${key3}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token3}`, 'Content-Length': '900' },
+    body: new Uint8Array(900),
+  }), env, ctx);
+  assert.equal(put3.status, 507, 'the rejected/deleted upload must not have consumed any of the quota — the holder is still at 900/1000, not 1800/1000');
 });
