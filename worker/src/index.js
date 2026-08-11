@@ -620,6 +620,12 @@ export default {
         const r2Size = r2Head.size ?? 0;
         await env.HOT_BUCKET.delete(key).catch(() => {});
         if (r2Size > 0) ctx.waitUntil(adjustR2(env, -r2Size));
+        // S03-H3: credit the per-user quota back to whichever holder
+        // uploaded the object (recorded at PUT time), not the deleter — a
+        // capability token only proves the caller may act on this key (see
+        // SEC-A01), not that they are the original uploader.
+        const uploader = r2Head.customMetadata?.uploader;
+        if (uploader && r2Size > 0) ctx.waitUntil(adjustUserBytes(env, uploader, -r2Size));
         // Race guard: the nightly migration PUTs to B2 and THEN deletes from R2
         // as two separate steps. If a client DELETE lands in that gap, the file
         // briefly exists in both tiers and this branch (R2-present) runs, which
@@ -642,18 +648,18 @@ export default {
           // Surface the failure — returning a false 200 here would tell the
           // Android client the file is gone when it isn't, making it
           // impossible to retry and leaving orphaned cold-tier objects forever.
-          return json({ error: 'B2 delete failed (network error)', key }, 502);
+          return respond({ error: 'B2 delete failed (network error)', key }, 502);
         }
         if (!delResp.ok && delResp.status !== 404) {
           console.warn(`B2 delete non-OK for ${key}: ${delResp.status}`);
-          return json({ error: 'B2 delete failed', status: delResp.status, key }, 502);
+          return respond({ error: 'B2 delete failed', status: delResp.status, key }, 502);
         }
       }
 
-      return json({ status: 'deleted', key });
+      return respond({ status: 'deleted', key });
     }
 
-    return json({ error: 'Method not allowed' }, 405);
+    return respond({ error: 'Method not allowed' }, 405);
   },
 
   // ─── Scheduled: daily R2→B2 tiering + full storage reconciliation ─────────
@@ -740,6 +746,12 @@ export default {
             await env.HOT_BUCKET.delete(obj.key);
             moved++;
             // Object now lives in B2 — do NOT add its size to r2TotalBytes.
+            // S03-H3: the per-user quota is scoped to R2 (hot-tier) usage
+            // only — B2 (cold tier) has no per-user cap (informational-only,
+            // see MAX_B2_BYTES above) — so free the uploader's R2 quota the
+            // same way the global R2 counter is freed on this line.
+            const uploader = current.customMetadata?.uploader;
+            if (uploader) ctx.waitUntil(adjustUserBytes(env, uploader, -(current.size ?? 0)));
           } else if (current) {
             console.warn(`Skipped R2 delete for ${obj.key} — object changed during migration`);
             r2TotalBytes += current.size ?? 0;

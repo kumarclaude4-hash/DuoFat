@@ -37,7 +37,18 @@
 
     // Per-isolate rate limit: max requests per minute per X-Client-ID header.
     // Advisory only on the free tier (not globally consistent across edge PoPs).
-    "RATE_LIMIT_PER_MIN": "120"
+    "RATE_LIMIT_PER_MIN": "120",
+
+    // S03-H3: per-holder storage quota in bytes (1 GB default). Keeps one
+    // uploader from exhausting the shared 9.5 GB R2 free-tier budget for
+    // every other user. Enforced in addition to, not instead of, MAX_R2_BYTES.
+    "MAX_USER_BYTES": "1073741824",
+
+    // S08-I3: comma-separated allow list of browser Origins permitted to
+    // call this Worker cross-origin. Empty by default — the Android app
+    // ignores CORS entirely, so Access-Control-Allow-Origin is omitted
+    // (never `*`) until a specific browser-based client is added here.
+    "CORS_ALLOWED_ORIGINS": ""
   },
 
   // ── Secrets — set with wrangler, never put credentials in this file ─────────
