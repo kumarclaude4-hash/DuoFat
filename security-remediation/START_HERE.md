@@ -21,12 +21,12 @@ way until every session and both catch-up gates (S3-15b, S3-19b) have actually r
 <!-- Update ONLY this block at the end of each session. It is the single source of truth for "next". -->
 
 ```
-NEXT SESSION: S3-03  (Dependency pinning & scanning — SC-03, SC-06, SC-07, SC-08, SC-09, SC-10 — lane CI)
-LAST DONE:    S3-02  COMPLETE (all 3 findings fixed & CI-lane verified): SC-05 scoped tag-clear (commit 8508746); SC-01 reproducible/hash-gated libsignal JAR + verify-libsignal-jar CI gate; SC-04 SHA256SUMS + signing-cert digest + attest-build-provenance on release (commit dcf85c5). Session log + chain state reconciled to committed source.
-              S3-02 partial (SC-05: release workflow no longer wipes all releases/tags on every push; now clears only the rolling tag) — commit 8508746
+NEXT SESSION: S3-04  (Firestore rules: cross-user write protection — S01-H1, S01-H2, S01-H3 — lane RULES; verify BLOCKED here → promoted in S3-15b)
+LAST DONE:    S3-03  COMPLETE (5 fixed + SC-03 partial, CI-lane verified from source): SC-06 JitPack scoped to com.github.* via includeGroupByRegex; SC-07 validate-gradle-wrapper job gating lint; SC-08 all GitHub Actions SHA-pinned (zero @vN refs remain); SC-09 dependabot.yml + security-scan.yml (CodeQL+gitleaks+SBOM); SC-10 npm ci + firebase-tools@15.26.0 in both firestore workflows. SC-03 stays PARTIAL — verification-metadata.xml scaffold committed, component-hash population BLOCKED (needs Gradle+Android SDK+network). Commits a3106df (impl) + 289c102 (tracker + log), merged PR #69 (62b5f5d).
+              S3-02  COMPLETE (all 3 findings fixed & CI-lane verified): SC-05 scoped tag-clear (commit 8508746); SC-01 reproducible/hash-gated libsignal JAR + verify-libsignal-jar CI gate; SC-04 SHA256SUMS + signing-cert digest + attest-build-provenance on release (commit dcf85c5). Session log + chain state reconciled to committed source.
               S3-01  (APK/CI secrets: S08-C1, SC-02, S08-H1, S03-L1 code-fixed & verified; SC-12 re-checked live, still open/operator) — commit 60c8cde
 BLOCKED GATES PENDING: S3-15b (RULES emulator), S3-19b (Android build) — need operator toolchains
-OPERATOR RUNBOOK (S3-01): revoke leaked GCP SA key; rotate WORKER_SECRET + baked B2 creds; enable branch protection on main (SC-12)
+OPERATOR RUNBOOK (S3-01): revoke leaked GCP SA key; rotate WORKER_SECRET + baked B2 creds; enable branch protection on main (SC-12). (S3-03) populate + enforce Gradle dependency-verification hashes (`./gradlew --write-verification-metadata sha256 help`, then flip `<verify-signatures>true`) once Android SDK + network are available.
 ```
 
 If `NEXT SESSION` above is `S3-20 complete`, do **not** start coding — go to the sign-off gate at the
