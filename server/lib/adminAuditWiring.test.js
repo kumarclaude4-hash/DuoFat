@@ -106,6 +106,28 @@ test("the audit log is never written the live admin token", () => {
   );
 });
 
+test("S05-M1: the audit sink pseudonymises the operator IP, never writes it raw", () => {
+  // adminAuditLog has no TTL and no retention policy (unlike Render's rolling
+  // console logs), so a raw IP written here is a permanent, resolvable,
+  // directly-identifying record — worse than the console logging SEC-L01 was
+  // written to fix, in the collection meant to be its more careful cousin.
+  const sinkStart = SERVER_SOURCE.indexOf("function auditAdminEvent");
+  assert.ok(sinkStart > 0, "could not locate auditAdminEvent()");
+  const sinkEnd = SERVER_SOURCE.indexOf("\n}", sinkStart);
+  const sinkBody = SERVER_SOURCE.slice(sinkStart, sinkEnd);
+
+  assert.ok(
+    /adminIp:\s*ipTag\(getClientIp\(req\)\)/.test(sinkBody),
+    "auditAdminEvent must write ipTag(getClientIp(req)), not the raw IP, as adminIp"
+  );
+  // The regression this guards against: `adminIp: getClientIp(req)` with no
+  // ipTag() wrapper anywhere in the sink body.
+  assert.ok(
+    !/adminIp:\s*getClientIp\(req\)/.test(sinkBody),
+    "auditAdminEvent must not write the raw client IP as adminIp"
+  );
+});
+
 test("adminAuditLog is server-only in firestore.rules", () => {
   // The audit trail is worthless if a client can read or rewrite it.
   const rules = fs.readFileSync(path.join(__dirname, "..", "..", "firestore.rules"), "utf8");

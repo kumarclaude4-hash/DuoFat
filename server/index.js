@@ -206,7 +206,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ──────────────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -811,8 +811,26 @@ function auditAdminEvent(action, req, extra = {}) {
   db.collection("adminAuditLog")
     .add({
       action,
-      adminIp: getClientIp(req),
-      // Retained because a rotating IP with a constant user-agent (or vice
+      // S05-M1: this used to be `getClientIp(req)` — the raw IP — written to
+      // a permanent, no-TTL Firestore collection. adminAuditLog is worse than
+      // a console log in exactly the way SEC-L01 (above) was written to
+      // prevent: console output on Render rotates, this collection does not,
+      // and the record is a join (IP + timestamp + action), not an isolated
+      // value. `ipTag()` keeps the "same operator across two rows?"
+      // correlation the finding asked to preserve, while an adversary who
+      // reaches this collection (Firestore access or a legal order) no
+      // longer gets a directly-identifying, resolvable IP for free.
+      //
+      // Caveat, documented rather than hidden: LOG_PEPPER is per-process and
+      // never persisted (see its own comment above), so a server restart
+      // makes pre-restart and post-restart tags uncorrelatable — acceptable
+      // for "was this the same operator in one incident window?", not
+      // sufficient for "was this the same operator six months apart?". That
+      // tradeoff is the durable-audit vs. non-identifying tension the
+      // finding calls out explicitly; this fix takes the non-identifying
+      // side, matching its prescribed resolution.
+      adminIp: ipTag(getClientIp(req)),
+      // Retained because a rotating tag with a constant user-agent (or vice
       // versa) is the signal that distinguishes one operator on mobile data
       // from a distributed guessing attempt.
       userAgent: String(req.headers["user-agent"] || "").slice(0, 200),
@@ -3434,7 +3452,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── /requestLockNonce ─────────────────────────────────────────────────────
+  // ── /requestLockNonce ──────────────────────────────────────────────────────
   //
   // Issues a single-use, uid-bound, 24-hour nonce for AccountLockWorker to
   // consume later via /duress-lock. Called by DuressManager on the background
@@ -3623,8 +3641,7 @@ http.createServer((req, res) => {
             // a permanently broken nonce forever. An unparseable string compared
             // against `Invalid Date` yields `false`, so the nonce was treated as
             // NOT expired: valid indefinitely, fail-open.
-            const exp = expiresAt?.toDate?.() ?? (expiresAt instanceof Date ? expiresAt : null);
-            if (!nonceUid || !exp || Number.isNaN(exp.getTime()) || Date.now() > exp.getTime()) {
+            if (!pure.isNonceUsable(nonceUid, expiresAt, Date.now())) {
               // Expired or malformed — delete to clean up and signal the client
               // not to retry. Deleting on this path is also what stops a broken
               // doc from lingering (S06-M2).
@@ -4109,7 +4126,13 @@ http.createServer((req, res) => {
           eligible:   true,
           enrolledAt: FieldValue.serverTimestamp(),
         }, { merge: true });
-        console.log(`[admin] duress enrollment granted: uid=${uid}`);
+        // S06-M3/S05-M1: uidTag, never the raw uid. A cleartext uid next to
+        // "duress enrollment" is a durable, plaintext, timestamped record of
+        // which account has the duress feature enrolled at all — a precursor
+        // signal for the exact event (S06-M3) this feature exists to make
+        // undetectable, sitting outside Firestore's access controls in
+        // whatever log aggregator the server ships to.
+        console.log(`[admin] duress enrollment granted: uid=${uidTag(uid)}`);
 
         db.collection("adminAuditLog").add({
           action:  "duress_enrolled",
@@ -4156,7 +4179,8 @@ http.createServer((req, res) => {
           return;
         }
         await ref.update({ eligible: false, revokedAt: FieldValue.serverTimestamp() });
-        console.log(`[admin] duress enrollment revoked: uid=${uid}`);
+        // S06-M3/S05-M1: same redaction as the grant path above.
+        console.log(`[admin] duress enrollment revoked: uid=${uidTag(uid)}`);
 
         db.collection("adminAuditLog").add({
           action:  "duress_revoked",
