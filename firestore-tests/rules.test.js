@@ -96,9 +96,11 @@ describe('/users/{uid}', () => {
     );
   });
 
-  // S01-L1 fix regression: `write` had no field/shape validation, so the owner
-  // could publish arbitrary content into this world-readable doc.
-  test('owner can write all allow-listed fields with valid shapes', async () => {
+  // ── S01-L2 regression tests ────────────────────────────────────────────────
+  // `write` (create+update) had no field/shape validation, so the owner could
+  // publish arbitrary content into this world-readable doc (same content-injection
+  // class as S01-M2 on identities/{userId}, but here on users/{uid}).
+  test('S01-L2: owner can write all allow-listed fields with valid shapes', async () => {
     await assertSucceeds(
       asUser('alice').doc('users/alice').set({
         displayName: 'Alice',
@@ -110,7 +112,7 @@ describe('/users/{uid}', () => {
     );
   });
 
-  test('owner cannot write a field outside the allow-list', async () => {
+  test('S01-L2: owner cannot write a field outside the allow-list', async () => {
     await assertFails(
       asUser('alice').doc('users/alice').set({
         displayName: 'Alice',
@@ -119,7 +121,7 @@ describe('/users/{uid}', () => {
     );
   });
 
-  test('owner cannot write an oversized displayName', async () => {
+  test('S01-L2: owner cannot write an oversized displayName', async () => {
     await assertFails(
       asUser('alice').doc('users/alice').set({
         displayName: 'x'.repeat(500),
@@ -127,7 +129,7 @@ describe('/users/{uid}', () => {
     );
   });
 
-  test('owner cannot write a non-string fcmToken', async () => {
+  test('S01-L2: owner cannot write a non-string fcmToken', async () => {
     await assertFails(
       asUser('alice').doc('users/alice').set({
         displayName: 'Alice',
@@ -961,7 +963,7 @@ describe('/calls/{callId}/watch/state', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────�����──────────────────────────────────────────
 // IDENTITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -983,9 +985,33 @@ describe('/identities/{userId}', () => {
     await assertFails(asAnon().doc(`identities/${USER_ID}`).get());
   });
 
-  test('owner can update their identity without changing its public-key hash', async () => {
+  test('owner can re-write their identity with the same uid/hash (no-op merge)', async () => {
     await assertSucceeds(
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({
+        uid: USER_ID,
+        identityPubKeyHash: 'hash_abc',
+      })
+    );
+  });
+
+  // S01-M2 regression test: identities/{userId} is world-readable (see the
+  // "any signed-in user can read" test above), so an unconstrained update let the
+  // owner publish arbitrary content into a globally-readable doc. No client write
+  // path ever sets a field other than uid/identityPubKeyHash, so this previously
+  // succeeding write (formerly `.update({ label: 'legacy' })`) must now be
+  // rejected — 'label' was never a real field the app writes, it's standing in for
+  // any attacker-chosen key.
+  test('S01-M2: owner cannot add a field outside the uid/hash allow-list', async () => {
+    await assertFails(
       asUser(USER_ID).doc(`identities/${USER_ID}`).update({ label: 'legacy' })
+    );
+  });
+
+  test('S01-M2: owner cannot inject arbitrary content via an unexpected field', async () => {
+    await assertFails(
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({
+        bio: '<script>alert(1)</script>',
+      })
     );
   });
 
@@ -1246,12 +1272,27 @@ describe('/backups/{userId}/groups/{groupId}', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('/backup_logs/{logId}', () => {
-  test('owner can create a backup log entry', async () => {
+  // Matches the exact shape BackupManager.logEvent always writes:
+  // {uid, event, ts, count, error?} — see BackupManager.java:1090-1108.
+  test('owner can create a backup log entry with the real logEvent shape', async () => {
     await assertSucceeds(
       asUser('alice').doc('backup_logs/log_1').set({
         uid: 'alice',
         event: 'backup_complete',
         ts: 1000,
+        count: 42,
+      })
+    );
+  });
+
+  test('owner can create a backup log entry that includes the optional error field', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('backup_logs/log_1b').set({
+        uid: 'alice',
+        event: 'backup_failed',
+        ts: 1000,
+        count: 0,
+        error: 'network timeout',
       })
     );
   });
@@ -1262,6 +1303,68 @@ describe('/backup_logs/{logId}', () => {
         uid: 'bob',
         event: 'backup_complete',
         ts: 1000,
+        count: 0,
+      })
+    );
+  });
+
+  // ── S01-M3 regression tests ──────────────────────────────────────────────
+  // Previously only `uid` ownership was checked — no shape/size validation at
+  // all, so an authenticated caller could write arbitrary fields/values into
+  // unbounded backup_logs/* documents (write-amplification / storage-cost DoS
+  // and a stored-content-injection primitive for any downstream log consumer).
+
+  test('S01-M3: cannot create a log entry with a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_3').set({
+        uid: 'alice',
+        event: 'backup_complete',
+        ts: 1000,
+        count: 0,
+        payload: '<script>alert(1)</script>',
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with an event outside the known set', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_4').set({
+        uid: 'alice',
+        event: 'totally_made_up_event',
+        ts: 1000,
+        count: 0,
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry missing required fields', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_5').set({
+        uid: 'alice',
+        event: 'backup_complete',
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with an oversized error message', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_6').set({
+        uid: 'alice',
+        event: 'backup_failed',
+        ts: 1000,
+        count: 0,
+        error: 'x'.repeat(2001),
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with a non-numeric count', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_7').set({
+        uid: 'alice',
+        event: 'backup_complete',
+        ts: 1000,
+        count: 'not-a-number',
       })
     );
   });
