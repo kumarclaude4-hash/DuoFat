@@ -44,23 +44,40 @@ function b2Url(env, key) {
 }
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
-function json(data, status = 200) {
+// S03-L4 fix: json() always merges in whatever CORS headers apply to this
+// request, so quota/rate-limit rejections (429/507/etc.) are just as
+// readable to a browser client as the success paths already were — a future
+// browser client no longer sees every failure as an opaque network error.
+function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 
-function corsHeaders() {
-  // Access-Control-Allow-Origin: * is intentional for Android app usage.
-  // CORS is a browser-only mechanism; the Android HTTP client ignores it.
-  // If you add a browser-based client, restrict this to your known origin.
-  // Authorization is included so preflight passes for authenticated requests.
-  return {
-    'Access-Control-Allow-Origin':  '*',
+// S08-I3 fix: no wildcard Access-Control-Allow-Origin. The Android client
+// never sends an `Origin` header and ignores CORS entirely — dropping the
+// wildcard breaks nothing for it today. `Access-Control-Allow-Origin` is
+// only ever set to a specific, explicitly allow-listed origin (never `*`),
+// removing the "ACAO: * + Authorization" combination that reads as
+// credential-bearing CORS and would otherwise be copied as a template.
+// Configure via CORS_ALLOWED_ORIGINS (comma-separated) if a browser client
+// is added later; until then every field below is present except ACAO.
+function corsHeaders(request, env) {
+  const headers = {
     'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Client-ID',
   };
+  const allowList = (env?.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const origin = request?.headers.get('Origin');
+  if (origin && allowList.includes(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Vary'] = 'Origin';
+  }
+  return headers;
 }
 
 // ─── Operator /stats authentication ─────────────────────────────────────────
@@ -233,7 +250,7 @@ async function kvSet(env, key, value, opts = {}) {
 // KV write cost is amortised via 1-in-10 sampling: each write adds 10 to the
 // counter instead of 1. This keeps accuracy within ±9 while consuming only
 // ~0.1 KV writes per request instead of 1, reducing write pressure ~10×.
-async function checkDailyRequestLimit(env) {
+async function checkDailyRequestLimit(env, cors) {
   if (!env.RATE_KV) return null;
   const key   = dayKey();
   const count = safeInt(await kvGet(env, key));
@@ -242,7 +259,7 @@ async function checkDailyRequestLimit(env) {
       error: 'Daily request limit reached (90K/day). Resets at midnight UTC.',
       count,
       limit: MAX_DAILY_REQUESTS,
-    }, 429);
+    }, 429, cors);
   }
   // Sampled write: fires ~10% of the time, adds 10 to preserve the expected value.
   if (Math.random() < 0.1) {
@@ -280,13 +297,13 @@ async function credentialBucketKey(request) {
     .join('');
 }
 
-async function checkPerUserRateLimit(request, env) {
+async function checkPerUserRateLimit(request, env, cors) {
   const limit     = rateLimit(env);
   const bucketId  = await credentialBucketKey(request);
   const minuteKey = `${bucketId}:${Math.floor(Date.now() / 60_000)}`;
   const count     = perUserCounts.get(minuteKey) ?? 0;
   if (count >= limit) {
-    return json({ error: `Rate limit exceeded (${limit} req/min)` }, 429);
+    return json({ error: `Rate limit exceeded (${limit} req/min)` }, 429, cors);
   }
   perUserCounts.set(minuteKey, count + 1);
   // Prune stale minute buckets to prevent unbounded memory growth within the isolate.
@@ -323,6 +340,33 @@ async function adjustR2(env, deltaBytes) {
   }
 }
 
+// ─── Per-user storage quota (S03-H3) ──────────────────────────────────────────
+// The global MAX_R2_BYTES cap alone lets one uploader (~19 uploads at the
+// default 500 MB file size) fill the entire 9.5 GB free-tier budget and stop
+// uploads for every user for weeks (objects only leave R2 via the 30-day
+// cron). This adds a second, per-holder ceiling — keyed on `cap.holder` from
+// the capability token (SEC-A01), never on a client-supplied header — that
+// is checked in the PUT path *before* `HOT_BUCKET.put`, alongside the
+// existing global check, not instead of it.
+//
+// Same non-atomic, best-effort accounting model as `adjustR2` above (no
+// Durable Objects on this tier — see S03-I2) — concurrent uploads from the
+// same holder can overshoot slightly, but the exhaustion attack this closes
+// needs dozens of sequential uploads, not a tight race.
+function maxUserBytes(env) { return safeInt(env.MAX_USER_BYTES || '1073741824', 1_073_741_824); } // 1 GB default
+
+async function getUserBytes(env, holder) {
+  return safeInt(await kvGet(env, `user:storage:${holder}`));
+}
+
+async function adjustUserBytes(env, holder, deltaBytes) {
+  if (!env.RATE_KV || !holder || deltaBytes === 0) return;
+  const key  = `user:storage:${holder}`;
+  const cur  = safeInt(await kvGet(env, key));
+  const next = Math.max(0, cur + deltaBytes);
+  await kvSet(env, key, next);
+}
+
 // ─── B2 ListObjectsV2 → authoritative byte total ──────────────────────────────
 // Used during the scheduled cron to reconcile the B2 storage counter.
 // Returns null on error so the caller can skip the KV update rather than
@@ -354,16 +398,22 @@ async function getB2TotalBytes(b2, env) {
 // ─── Main fetch handler ───────────────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
+    // Computed once per request: S08-I3 narrows this to a specific
+    // allow-listed origin (never `*`); S03-L4 requires every response below
+    // — success or rejection — to carry it.
+    const cors    = corsHeaders(request, env);
+    const respond = (data, status) => json(data, status, cors);
+
     // CORS preflight — no auth, no quota.
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders() });
+      return new Response(null, { headers: cors });
     }
 
     const url = new URL(request.url);
 
     // ── Health check — unauthenticated, does not count against quota ──────────
     if (url.pathname === '/' || url.pathname === '/health') {
-      return json({ status: 'ok', service: 'duoshield-storage' });
+      return respond({ status: 'ok', service: 'duoshield-storage' });
     }
 
     // ── Stats endpoint (admin view) — gated by the operator-only STATS_SECRET ─
@@ -377,7 +427,7 @@ export default {
       if (!await isStatsAuthorized(request, env)) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status:  401,
-          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+          headers: { 'Content-Type': 'application/json', ...cors },
         });
       }
       const [r2Raw, b2Raw, reqRaw] = await Promise.all([
@@ -388,7 +438,7 @@ export default {
       const r2Bytes  = safeInt(r2Raw);
       const b2Bytes  = safeInt(b2Raw);
       const reqCount = safeInt(reqRaw);
-      return json({
+      return respond({
         r2: {
           used_bytes:      r2Bytes,
           limit_bytes:     MAX_R2_BYTES,
@@ -414,7 +464,7 @@ export default {
     // Object key: everything after the leading slash.
     // DuoShield paths: media/<chatId|groupId>/<uuid>.<ext> | voice/<chatId|groupId>/<uuid>.<ext>
     const key = decodeURIComponent(url.pathname.slice(1));
-    if (!key) return json({ error: 'Missing file key' }, 400);
+    if (!key) return respond({ error: 'Missing file key' }, 400);
 
     // Strict key format allow-list. The Android client only ever generates keys
     // matching this shape (see B2StorageHelper / ChatMediaActivity / GroupChatActivity).
@@ -422,7 +472,7 @@ export default {
     // arbitrary-prefix keys that the shared-secret auth alone does not constrain.
     const KEY_FORMAT = /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
     if (!KEY_FORMAT.test(key)) {
-      return json({ error: 'Invalid file key format' }, 400);
+      return respond({ error: 'Invalid file key format' }, 400);
     }
 
     // ── Per-object authorization (SEC-A01) ────────────────────────────────────
@@ -438,15 +488,15 @@ export default {
     // budget (which would otherwise be a cost/DoS lever available to anyone).
     const cap = await verifyMediaToken(request, env, key);
     if (!cap.ok) {
-      return json({ error: cap.error }, cap.status);
+      return respond({ error: cap.error }, cap.status);
     }
 
     // ── Daily request gate ────────────────────────────────────────────────────
-    const dailyLimited = await checkDailyRequestLimit(env);
+    const dailyLimited = await checkDailyRequestLimit(env, cors);
     if (dailyLimited) return dailyLimited;
 
     // ── Per-isolate rate limit ────────────────────────────────────────────────
-    const rateLimited = await checkPerUserRateLimit(request, env);
+    const rateLimited = await checkPerUserRateLimit(request, env, cors);
     if (rateLimited) return rateLimited;
 
     // ── UPLOAD ────────────────────────────────────────────────────────────────
@@ -457,12 +507,12 @@ export default {
       const declaredBytes = safeInt(request.headers.get('Content-Length'));
 
       if (declaredBytes > maxFileSize(env)) {
-        return json({ error: `File too large (max ${maxFileSize(env) / 1_048_576} MB)` }, 413);
+        return respond({ error: `File too large (max ${maxFileSize(env) / 1_048_576} MB)` }, 413);
       }
 
       const r2Bytes = await getR2Bytes(env);
       if (r2Bytes + declaredBytes > MAX_R2_BYTES) {
-        return json({
+        return respond({
           error:           'Upload rejected — R2 storage limit (9.5 GB) reached. No new media accepted.',
           r2_used_bytes:   r2Bytes,
           r2_limit_bytes:  MAX_R2_BYTES,
@@ -470,11 +520,29 @@ export default {
         }, 507);
       }
 
+      // S03-H3: per-holder budget, checked in addition to (not instead of)
+      // the global cap above. Without this, one account's uploads alone can
+      // exhaust the entire 9.5 GB global cap and stop uploads platform-wide
+      // for weeks (objects only leave R2 via the 30-day tiering cron).
+      const userBytes = await getUserBytes(env, cap.holder);
+      if (userBytes + declaredBytes > maxUserBytes(env)) {
+        return respond({
+          error:            'Upload rejected — per-user storage quota reached.',
+          user_used_bytes:  userBytes,
+          user_limit_bytes: maxUserBytes(env),
+        }, 507);
+      }
+
       const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
 
       await env.HOT_BUCKET.put(key, request.body, {
         httpMetadata:   { contentType },
-        customMetadata: { uploadedAt: Date.now().toString() },
+        // `uploader` records cap.holder purely for storage-quota accounting
+        // (so a later DELETE, regardless of who performs it — see S03-M2,
+        // out of scope here — credits the right holder's quota back). It is
+        // NOT read as an ownership/authorization check anywhere; that
+        // remains a separate, tracked fix.
+        customMetadata: { uploadedAt: Date.now().toString(), uploader: cap.holder },
       });
 
       // HEAD the object to get the real stored byte count.
@@ -485,15 +553,17 @@ export default {
       // Post-upload size guard: catches missing or lying Content-Length headers.
       if (actualBytes > maxFileSize(env)) {
         await env.HOT_BUCKET.delete(key).catch(() => {});
-        return json({
+        return respond({
           error: `Upload rejected — actual size (${actualBytes} B) exceeds the ${maxFileSize(env) / 1_048_576} MB limit`,
         }, 413);
       }
 
-      // Increment R2 counter with the actual stored size, not the declared size.
+      // Increment R2 counter and the uploader's per-user counter with the
+      // actual stored size, not the declared size.
       ctx.waitUntil(adjustR2(env, actualBytes));
+      ctx.waitUntil(adjustUserBytes(env, cap.holder, actualBytes));
 
-      return json({ status: 'stored', key, tier: 'hot', bytes: actualBytes });
+      return respond({ status: 'stored', key, tier: 'hot', bytes: actualBytes });
     }
 
     // ── DOWNLOAD ──────────────────────────────────────────────────────────────
@@ -507,7 +577,7 @@ export default {
           'ETag':           r2Object.httpEtag ?? '',
           'Cache-Control':  'private, max-age=3600',
           'X-Storage-Tier': 'hot',
-          ...corsHeaders(),
+          ...cors,
         });
         return new Response(r2Object.body, { headers });
       }
@@ -518,7 +588,7 @@ export default {
       try {
         b2Response = await b2.fetch(b2Url(env, key));
       } catch (err) {
-        return json({ error: 'B2 fetch failed', detail: err.message }, 502);
+        return respond({ error: 'B2 fetch failed', detail: err.message }, 502);
       }
 
       if (b2Response.ok) {
@@ -531,13 +601,13 @@ export default {
           'ETag':           b2Response.headers.get('ETag') ?? '',
           'Cache-Control':  'private, max-age=3600',
           'X-Storage-Tier': 'cold',
-          ...corsHeaders(),
+          ...cors,
         });
         return new Response(b2Response.body, { status: 200, headers });
       }
 
-      if (b2Response.status === 404) return json({ error: 'File not found', key }, 404);
-      return json({ error: 'B2 error', status: b2Response.status }, 502);
+      if (b2Response.status === 404) return respond({ error: 'File not found', key }, 404);
+      return respond({ error: 'B2 error', status: b2Response.status }, 502);
     }
 
     // ── DELETE ────────────────────────────────────────────────────────────────
