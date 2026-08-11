@@ -3,7 +3,6 @@
 # DuoShield — Build Debug + Release APKs
 # Run from repo root. Requires env vars set as Replit Secrets:
 #   GOOGLE_SERVICES_JSON               (always required)
-#   GOOGLE_APPLICATION_CREDENTIALS_JSON (always required)
 #   KEYSTORE_BASE64                    (release only)
 #   KEYSTORE_PASSWORD                  (release only)
 #   KEY_PASSWORD                       (release only)
@@ -36,14 +35,21 @@ open("app/google-services.json", "w").write(val)
 print("  ✅ app/google-services.json written")
 PY
 
-python3 - << 'PY'
-import os, sys
-val = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
-if not val:
-    print("ERROR: GOOGLE_APPLICATION_CREDENTIALS_JSON not set"); sys.exit(1)
-open("app/src/main/assets/service-account.json", "w").write(val)
-print("  ✅ app/src/main/assets/service-account.json written")
-PY
+# S08-C1: the Firebase **admin** service-account key must NEVER be written into
+# app/src/main/assets/. That directory is packaged verbatim into the APK, and an
+# APK is a public artifact — the key was recoverable with
+# `unzip -p app-release.apk assets/service-account.json`, handing any downloader
+# full Admin SDK authority over every user's Firestore data and auth tokens. No
+# application code ever read it, so it leaked without providing any function.
+# FCM HTTP v1 send credentials live on the push server (Render env) only.
+# See app/src/main/assets/README.txt.
+#
+# Guard: fail the build if the file was reintroduced by any other path.
+if [ -f app/src/main/assets/service-account.json ]; then
+  echo "  ❌ app/src/main/assets/service-account.json exists — admin credentials must never be packaged into the APK (S08-C1)." >&2
+  exit 1
+fi
+echo "  ✅ no admin service-account.json packaged (S08-C1)"
 
 # ── 3. Debug APK ──────────────────────────────────
 echo ""

@@ -5,7 +5,7 @@ Cloudflare Worker providing tiered media storage for DuoShield.
 ```
 Android app
     │  HTTPS  (PUT / GET / DELETE)
-    │  Authorization: Bearer <WORKER_SECRET>
+    │  Authorization: Bearer <per-object capability token>   (SEC-A01)
     ▼
 Cloudflare Worker  ← this directory
     │
@@ -63,12 +63,20 @@ Update these values:
 ```bash
 npx wrangler secret put B2_ACCESS_KEY_ID      # paste your B2 keyID
 npx wrangler secret put B2_SECRET_ACCESS_KEY  # paste your B2 applicationKey
-npx wrangler secret put WORKER_SECRET         # shared token for the Android app
+npx wrangler secret put STATS_SECRET          # operator-only /stats token (S08-H1)
+npx wrangler secret put MEDIA_TOKEN_SECRET    # per-object capability signing key (must match the push server)
 ```
 
-**`WORKER_SECRET`** is a random string you generate (e.g. `openssl rand -hex 32`).
-Every request from the Android app must include `Authorization: Bearer <WORKER_SECRET>`.
-Without it the Worker returns 401.
+**`STATS_SECRET`** is a random string you generate (e.g. `openssl rand -hex 32`)
+that gates the operator-only `/stats` view. It is **never shipped to a client**
+— it replaces the old `WORKER_SECRET`, which was compiled into every APK and is
+therefore treated as a public, leaked value (S08-H1). Requests to `/stats` must
+include `Authorization: Bearer <STATS_SECRET>`; without it `/stats` returns 401.
+
+**`MEDIA_TOKEN_SECRET`** signs the per-object capability tokens the push server
+mints for each media PUT/GET/DELETE (SEC-A01). It must be byte-identical to the
+push server's `MEDIA_TOKEN_SECRET`. The data plane no longer uses any shared
+bearer secret, so the client never holds a long-lived storage credential.
 
 ### 7. Install dependencies and deploy
 
@@ -83,45 +91,37 @@ Your Worker URL will be:
 https://duoshield-storage.<your-subdomain>.workers.dev
 ```
 
-### 8. Wire the Worker URL and secret into the Android app
+### 8. Wire the Worker URL into the Android app
 
 Add to `local.properties`:
 ```
 worker.url=https://duoshield-storage.<your-subdomain>.workers.dev
-worker.secret=<your WORKER_SECRET value>
 ```
 
 Then rebuild the APK. `B2StorageHelper` automatically routes all storage calls
 through the Worker when `WORKER_URL` is non-empty.
 
+> **S08-H1 / SC-02:** do **not** add any `worker.secret` (or other credential)
+> to `local.properties`. `local.properties` feeds `BuildConfig`, which is
+> packaged into the public APK. The client authenticates each storage operation
+> with a short-lived, per-object capability token fetched at runtime from the
+> push server (`POST /mediaToken`), so it needs no baked-in secret. `worker.url`
+> is a non-secret endpoint and is the only value that belongs here.
+
 ---
 
 ## Testing
 
+# Data-plane ops (PUT/GET/DELETE) require a per-object capability token minted
+# by the push server (POST /mediaToken) — bound to one key, one verb, one user,
+# short expiry (SEC-A01). There is no shared data-plane secret to paste here;
+# obtain a token for the exact key/verb under test and pass it as the Bearer.
+
 ```bash
-TOKEN="your-worker-secret"
-
-# Upload a test file
-curl -X PUT "https://duoshield-storage.<sub>.workers.dev/test/hello.bin" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/octet-stream" \
-  -H "Content-Length: 5" \
-  -H "X-Client-ID: test-user" \
-  --data-binary "hello"
-
-# Download it back
-curl "https://duoshield-storage.<sub>.workers.dev/test/hello.bin" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Client-ID: test-user"
-
-# Delete it
-curl -X DELETE "https://duoshield-storage.<sub>.workers.dev/test/hello.bin" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Client-ID: test-user"
-
-# Check storage stats (admin)
+# Check storage stats (operator-only) — gated by STATS_SECRET, never a client secret.
+STATS_TOKEN="your-stats-secret"
 curl "https://duoshield-storage.<sub>.workers.dev/stats" \
-  -H "Authorization: Bearer $TOKEN"
+  -H "Authorization: Bearer $STATS_TOKEN"
 
 # Trigger the cron manually (local dev only)
 npx wrangler dev --test-scheduled
@@ -170,8 +170,12 @@ auto-deletes anything from B2.
 
 ## Security
 
-- **Authentication:** All data-plane and stats endpoints require
-  `Authorization: Bearer <WORKER_SECRET>`. Health check (`/health`) is public.
+- **Authentication:** Data-plane operations (PUT/GET/DELETE) require a
+  short-lived, per-object capability token minted by the push server
+  (SEC-A01) — never a shared secret. The operator-only `/stats` view requires
+  `Authorization: Bearer <STATS_SECRET>`, a secret that is never shipped to a
+  client (it replaces the APK-leaked `WORKER_SECRET`, S08-H1). Health check
+  (`/health`) is public.
 - **Encryption:** All file content is AES-256-GCM encrypted client-side before
   upload. The Worker and both storage tiers only ever see ciphertext.
 - **Rate limiting:** 120 req/min per `X-Client-ID` enforced per edge isolate

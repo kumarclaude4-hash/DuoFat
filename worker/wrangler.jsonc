@@ -43,7 +43,8 @@
   // ── Secrets — set with wrangler, never put credentials in this file ─────────
   // npx wrangler secret put B2_ACCESS_KEY_ID       ← Backblaze application key ID
   // npx wrangler secret put B2_SECRET_ACCESS_KEY   ← Backblaze application key
-  // npx wrangler secret put WORKER_SECRET           ← shared auth token for the Android app
+  // npx wrangler secret put STATS_SECRET            ← operator-only /stats token (S08-H1; never shipped to a client; replaces the leaked WORKER_SECRET)
+  // npx wrangler secret put MEDIA_TOKEN_SECRET      ← per-object capability-token signing key (must match the push server)
 
   // Daily tiering cron (02:00 UTC every day)
   "triggers": {
