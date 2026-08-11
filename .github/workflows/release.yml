@@ -166,42 +166,48 @@ jobs:
           echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "Resolved release tag: ${TAG}"
 
-      # ── Delete ALL existing releases + their tags ────────────────────────────
-      # Runs after a successful build, before publishing the new release, so we
-      # never have more than one release live at a time.
-      # Uses paginated REST API calls (100 per page) so it never misses releases
-      # regardless of how many have accumulated.
-      - name: Delete all previous releases and tags
+      # ── Clear only the release being republished ─────────────────────────────
+      # SC-05: this step used to enumerate and DELETE *every* release and *every*
+      # tag in the repo on every push to `main` — paginating through the whole
+      # list and issuing `DELETE …/releases/{id}` + `DELETE …/git/refs/tags/{tag}`
+      # for each one. That destroyed the entire release/provenance history on
+      # each build: prior signed APKs, their tags, and their checksums all
+      # vanished, so nobody could pin, audit, or roll back to an earlier build,
+      # and a single push (or a compromised token) could wipe the record for
+      # every past version at once.
+      #
+      # The only legitimate goal was "don't stack duplicate releases on the
+      # rolling `v{versionName}` tag." That needs deleting AT MOST the one tag we
+      # are about to republish — never anyone else's. `action-gh-release` below
+      # updates an existing release in place, so this step just removes a stale
+      # release record for THIS tag (if present) and lets the tag be re-pointed
+      # at the new commit. All other releases and tags are preserved.
+      - name: Clear existing release for this tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -u
           REPO="${{ github.repository }}"
-          PAGE=1
-          TOTAL=0
+          TAG="${{ steps.tag.outputs.name }}"
 
-          while true; do
-            # Fetch one page of releases (id + tag_name pairs).
-            BATCH=$(gh api "repos/${REPO}/releases?per_page=100&page=${PAGE}" \
-              --jq '.[] | "\(.id) \(.tag_name)"' 2>/dev/null || true)
+          if [ -z "$TAG" ]; then
+            echo "::error::No resolved tag — refusing to touch any releases."
+            exit 1
+          fi
 
-            [ -z "$BATCH" ] && break   # no more releases
+          # Look up a release whose tag_name is EXACTLY this tag. `gh api` returns
+          # 404 when none exists; that is the normal first-release case, not an
+          # error.
+          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" \
+            --jq '.id' 2>/dev/null || true)
 
-            while IFS=' ' read -r RELEASE_ID TAG_NAME; do
-              [ -z "$RELEASE_ID" ] && continue
-              echo "Deleting release '${TAG_NAME}' (id=${RELEASE_ID})..."
-              # Delete the release record
-              gh api --method DELETE "repos/${REPO}/releases/${RELEASE_ID}" \
-                2>/dev/null || echo "  could not delete release ${RELEASE_ID}"
-              # Delete the git tag
-              gh api --method DELETE "repos/${REPO}/git/refs/tags/${TAG_NAME}" \
-                2>/dev/null || echo "  could not delete tag ${TAG_NAME}"
-              TOTAL=$((TOTAL + 1))
-            done <<< "$BATCH"
-
-            PAGE=$((PAGE + 1))
-          done
-
-          echo "Done — deleted ${TOTAL} release(s)."
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Removing stale release for '${TAG}' (id=${RELEASE_ID}) so it can be republished..."
+            gh api --method DELETE "repos/${REPO}/releases/${RELEASE_ID}" \
+              || echo "  could not delete release ${RELEASE_ID} (continuing)"
+          else
+            echo "No existing release for '${TAG}' — nothing to clear."
+          fi
 
       # ── Publish the new release ──────────────────────────────────────────────
       - name: Create GitHub Release
