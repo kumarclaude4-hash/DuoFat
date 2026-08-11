@@ -273,3 +273,65 @@ NEXT SESSION: Round 2 cluster B — S04-H1/H2/H3 (SSRF predicate, /linkPreview c
               Ready-to-paste prompt persisted in SESSION_PROTOCOL.md §8.
               MUST NOT REDO: any cluster A code — all four rows hold final dispositions.
 ```
+
+---
+
+## FINAL VERIFICATION session — 2026-08-11 (protocol §9)
+
+This session fixed **no findings** and wrote **no application code** — that separation is required by
+§9, which forbids declaring the chain complete in the same session that closes the last finding.
+Its only job was to verify every disposition against current source and produce the final report.
+
+**What it found.** The remediation work is real: all seven security modules are required *and* have
+live call sites in the request path (the anti-dead-code check that cluster A's inert
+`maintainLockCredential()` made mandatory). `S07-C1` — the finding that was falsely reported fixed
+once on the strength of a fabricated `xed25519.js` — is genuinely closed: `/mintToken` rejects a
+missing nonce/signature at `index.js:1957`, consumes the nonce single-use *before* verifying at
+`:2013`, and verifies an XEdDSA signature at `:2027`, with its 16 tests now actually executing.
+
+**What it corrected.** Three trackers were badly stale — `REMEDIATION_PROGRESS.md` and
+`SESSION_INDEX.md` still said `S07-C1` was open and exploitable and that Rounds 2–3 had never
+started, and `SESSION_PROTOCOL.md` §8 still handed the next session a cluster-B prompt for work
+already done. This was narrative lag rather than a fourth fabrication — the underlying work existed
+and was recorded in `FINDING_INDEX.md` — but it was corrected anyway, because a stale document is
+indistinguishable from a fabricated one until someone spends budget checking.
+
+**The baseline improved on its own.** The documented "expect 84 tests / 83 pass / 1 fail" caveat is
+obsolete: `@signalapp/libsignal-client@0.54.2` now resolves in `server/pnpm-lock.yaml`, so the suite
+is **153/153**. That lockfile change was the one uncommitted diff in the worktree; it is committed
+with this record.
+
+```
+SESSION:  FINAL VERIFICATION   MODEL: Opus 5   BUDGET: $5 max
+CLUSTER:  none — verification + reporting only   STATUS: program code-complete, NOT signed off
+CHANGES:      - FINAL_SECURITY_REPORT.md: NEW. Written from source per §4. Tallies, per-severity
+                disposition table, anti-dead-code wiring table, 8 operator actions, 3 BLOCKED
+                verification gaps, program-integrity assessment.
+              - REMEDIATION_PROGRESS.md: status block replaced — "S07-C1 open/exploitable,
+                Rounds 2-3 not started" was false; new baseline recorded.
+              - SESSION_INDEX.md: Round 2/3 rows corrected ("NOT STARTED - file does not exist"
+                was false); 2026-08-11 correction notice added.
+              - SESSION_PROTOCOL.md: §8 superseded (cluster B prompt folded into <details> as
+                historical); §9 records that the final verification ran and its verdict.
+              - server/pnpm-lock.yaml: commits the @signalapp/libsignal-client@0.54.2 resolution
+                that makes identityVerify.test.js executable.
+              - NO application code changed. NO finding disposition changed.
+VERIFICATION: PASS: cd server && npm test -> 153 tests / 153 pass / 0 fail (run this session)
+              PASS: per-suite cross-check sums to 153 (27+15+7+5+16+9+16+32+26) - two independent
+                    derivations of the same number, not one asserted twice
+              PASS: node --test lib/identityVerify.test.js -> 16 pass / 0 fail (previously ABORTED)
+              PASS: node --check server/index.js -> clean
+              PASS: wiring grep - all 7 modules have live call sites; none inert
+              FAIL: none
+              BLOCKED: Android compilation (which java/javac/gradle -> all absent);
+                       firestore-tests/rules.test.js (no firebase CLI) - still never executed
+              NOT RUN: runtime/integration testing of the deployed server
+              OPERATOR-PENDING: gh api .../branches/main/protection -> 404 "Branch not protected"
+                       (SC-12 re-checked, still not done by a human); GCP key still un-revoked
+NEXT SESSION: NONE for remediation. There is no next cluster - all 116 findings dispositioned.
+              Remaining work is operator-only: FINAL_SECURITY_REPORT.md §3 (revoke the leaked GCP
+              service-account key FIRST), then build + release the APK together with the server
+              (/mintToken hard-requires nonce+signatureHex; do NOT make them optional).
+              A future session may only re-check whether an operator finished a §3 item, or fix a
+              newly discovered defect. Do not re-litigate any row recorded `fixed`.
+```

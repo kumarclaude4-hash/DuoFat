@@ -5,19 +5,32 @@ closed remediation program built on it._
 
 Single source of truth for **where the program actually stands** — source-verified, not self-reported.
 
-**Last reconciled:** 2026-08-10 (planning session). Reconciled three separate documents that disagreed
-about `S07-C1`: this file's own 2026-08-09 entry (below, correctly left `S07-C1` open), a later
-2026-08-07-dated rewrite of `SESSION-01.md` that overwrote that correct state with a **false**
-`fixed` claim and a fabricated defect narrative, and `SESSION_INDEX.md` which had copied the false
-claim forward. **The 6-of-11 count below is confirmed correct by direct source re-verification on
-2026-08-10** (see `SESSION_PROTOCOL.md` §0 for the fabrication this caught).
-**Program phase:** Round 1: 6 of 11 findings genuinely fixed in source. `S07-C1` — **the audit's
-single most severe finding** — is open and still exploitable; the entity minting tokens still
-authenticates by hashing a value that is public by design (`server/index.js:1755,1839`; readable by
-any authenticated user per `firestore.rules:17`). 2 items (`SC-12`, credential rotation) blocked on
-operator/console access — not closeable by an AI session. Rounds 2 and 3 **not started** (their
-session logs do not exist on disk, despite `SESSION_INDEX.md` having briefly claimed otherwise).
-**Rounds executed:** 1 of 3, in progress (R1 not closed — see §1).
+**Last reconciled:** 2026-08-11 (FINAL VERIFICATION session, protocol §9). See
+`FINAL_SECURITY_REPORT.md` for the full verified state; that report supersedes the status text in
+this file.
+
+**Program phase: code remediation COMPLETE, operator actions OUTSTANDING.** All **116 findings hold
+exactly one disposition in `FINDING_INDEX.md` — 0 open, 0 partial.** No Critical or High finding is
+unfixed in code (4 Critical + 27 High + 3 Med→High, all in the fixed family).
+
+**`S07-C1` is FIXED and re-verified from source on 2026-08-11** — superseding the "open and still
+exploitable" text that stood here through 2026-08-10. `/mintToken` now requires
+`{nonce, signatureHex}`, consumes the nonce single-use before verifying (`server/index.js:2013`), and
+verifies an XEdDSA signature via `@signalapp/libsignal-client` (`index.js:2027` →
+`lib/identityVerify.js`, **16/16 tests executed**). The old `sha256(identityPubKeyHex)` check was kept
+alongside it, so `S07-H1` stays closed.
+
+**Verified test baseline (run 2026-08-11): `cd server && npm test` → 153 tests / 153 pass / 0 fail.**
+This replaces the older "84 tests / 83 pass / 1 fail" baseline — `@signalapp/libsignal-client@0.54.2`
+is now resolved in `server/pnpm-lock.yaml`, so `identityVerify.test.js` executes instead of aborting.
+
+**Still outstanding, and not counted as done:** 8 operator actions (credential rotation incl. the
+**leaked GCP admin key**, `SC-12` branch protection — re-checked 2026-08-11, still `404 Branch not
+protected`, TTL policy, App Check, SBOM) and 3 verification gaps (**Android has never been
+compiled** — no JDK/SDK here; `firestore-tests/rules.test.js` never executed — no `firebase` CLI; no
+runtime/integration testing). Enumerated in `FINAL_SECURITY_REPORT.md` §3–§4.
+
+**Rounds executed:** 3 of 3 dispositioned; program not signed off (see `FINAL_SIGNOFF.md`).
 
 > ### Correction notice (2026-08-07)
 >

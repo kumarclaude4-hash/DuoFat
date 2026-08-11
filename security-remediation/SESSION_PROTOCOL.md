@@ -320,9 +320,42 @@ Run a dedicated FINAL VERIFICATION session (§9) first.
 
 ---
 
-## 8. Chain state + ready-to-paste prompt for the NEXT session (Round 2, cluster B — egress/admin)
+## 8. Chain state + ready-to-paste prompt for the NEXT session
 
-### Chain state (authoritative, updated 2026-08-10)
+### ⛔ SUPERSEDED 2026-08-11 — the cluster B prompt below is HISTORICAL. Do not execute it.
+
+**Round 2 cluster B is DONE** (`S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` — code in
+`48a3f7e`/PR #57, plus `7653515`). Cluster C is done. **All 116 findings in `FINDING_INDEX.md` now
+hold exactly one disposition: 0 open, 0 partial.** The §9 FINAL VERIFICATION session has been run
+(2026-08-11) and produced [`FINAL_SECURITY_REPORT.md`](./FINAL_SECURITY_REPORT.md), which is now the
+authoritative state document.
+
+**Baseline correction — use this number, not the 83/84 one below:** `cd server && npm test` →
+**153 tests / 153 pass / 0 fail**, verified 2026-08-11 and cross-checked per-suite
+(27+15+7+5+16+9+16+32+26 = 153). `@signalapp/libsignal-client@0.54.2` now resolves in
+`server/pnpm-lock.yaml`, so `identityVerify.test.js` runs **16/16** instead of aborting. If your run
+differs by anything other than tests you added, you caused a regression.
+
+**There is no next remediation cluster.** What remains is **not AI-session work**:
+
+1. **8 operator actions** — `FINAL_SECURITY_REPORT.md` §3. Most urgent: **revoke the leaked GCP
+   service-account key** (it shipped inside published APKs). Also `SC-12` branch protection, still
+   `404 Branch not protected` as of 2026-08-11.
+2. **3 verification gaps** — §4. Android has **never been compiled** (no JDK/Gradle/SDK in this
+   environment); `firestore-tests/rules.test.js` has **never been executed** (no `firebase` CLI); no
+   runtime/integration testing.
+3. **Release coupling** — the server and APK **must ship together**; `/mintToken` hard-requires
+   `nonce`+`signatureHex`. Making them optional for old clients reintroduces the takeover.
+
+A future session should only: re-check whether an operator completed one of the §3 items and update
+the disposition (that is verification, not doing the human's job), or fix a *newly discovered* defect.
+**Do not re-open, re-litigate, or "improve" any finding recorded `fixed`** unless current source
+falsifies it — and if it does, say so loudly, because that would be a real regression.
+
+<details>
+<summary>Historical chain state + cluster B prompt (completed — retained for the record only)</summary>
+
+### Chain state (as written 2026-08-10 — now outdated, see the notice above)
 
 | Unit | Findings | State |
 |---|---|---|
@@ -412,6 +445,10 @@ half-finishing six rows.
 > §8 chain state before you stop. If budget runs short, finish `S04-*` completely and defer `S05-*`
 > honestly rather than half-finishing all six.
 
+</details>
+
+---
+
 ## 9. What "done" looks like for this whole program
 
 **Chain termination requires a dedicated FINAL VERIFICATION session** that: reads the complete finding
@@ -419,6 +456,17 @@ index; verifies *every* disposition against current source; hunts for contradict
 highest-value regression/security tests available; confirms no required finding was skipped; and only
 then produces the final report. Marking the chain COMPLETE in the same session that fixes the last
 finding is forbidden — that is the exact shape of the earlier false closures in §0.
+
+> **That session was run on 2026-08-11** (correctly, in a session that fixed no findings) and produced
+> [`FINAL_SECURITY_REPORT.md`](./FINAL_SECURITY_REPORT.md). Its conclusion, stated deliberately and not
+> rounded up: **code remediation is complete and verified to the limit of this environment — but the
+> program is NOT signed off and the system is NOT to be considered remediated in production**, because
+> the leaked GCP admin key is un-revoked and the Android client has never been compiled. That session
+> also corrected three stale trackers (`REMEDIATION_PROGRESS.md`, `SESSION_INDEX.md`, §8 above) that
+> still described `S07-C1` as open and Rounds 2–3 as never started.
+>
+> `FINAL_SIGNOFF.md` remains **PENDING** by design. Sign it only after the §3 operator actions in the
+> final report are done and an operator has built and released the APK together with the server.
 
 
 Unchanged from `REMEDIATION_PLAN.md`'s Round 3 hard stop: every one of the 116 findings has exactly
