@@ -1,5 +1,10 @@
 # DuoShield Security Audit
 
+> **For current finding status, see [`../BUG_TRACKER.md`](../BUG_TRACKER.md).** `AUDIT_PROGRESS.md`
+> (previously in this folder) is retired — it and `security-remediation/FINDING_INDEX.md` had
+> drifted out of sync with each other and with the code. The session reports below remain the
+> immutable record of what was originally found.
+
 This folder is the **single source of truth** for the DuoShield security assessment.
 It is written so that any security engineer can pick up the audit **cold** — with no
 prior conversation context — and continue exactly where the previous session stopped.
@@ -32,7 +37,7 @@ five P0 items, starting with credential revocation.
 
 1. **Final report:** [`SESSION-10-SYNTHESIS.md`](./SESSION-10-SYNTHESIS.md).
 2. **Context, if you need it:** `SESSION-00-RECON.md` → `ARCHITECTURE.md` → `ATTACK_SURFACE.md` →
-   `AUDIT_PROGRESS.md`.
+   `../BUG_TRACKER.md`.
 3. **Per-surface detail:** `SESSION-01-FIRESTORE.md` … `SESSION-09-SUPPLY-CHAIN-CI.md`, each with
    `path:line` anchors, exploit paths and fixes.
 4. **Internalize the threat model below.** Only server / Worker / Firestore-rule enforcement counts as
@@ -83,7 +88,7 @@ the trust boundaries, because a compromised client can already read its own plai
 | [`README.md`](./README.md) | This overview + how to use the audit set. |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Components, trust boundaries, auth/authz flow, data flow, external services. |
 | [`ATTACK_SURFACE.md`](./ATTACK_SURFACE.md) | Every identified attack surface, entry point, and control, with file:line anchors. |
-| [`AUDIT_PROGRESS.md`](./AUDIT_PROGRESS.md) | Session ledger with per-session severity counts, audit order and rationale, and the running result notes. |
+| [`../BUG_TRACKER.md`](../BUG_TRACKER.md) | Current disposition of every finding, re-verified against source. |
 | [`SESSION-00-RECON.md`](./SESSION-00-RECON.md) | The full reconnaissance report. Risk ranking + the 10-session plan. |
 | `SESSION-01-FIRESTORE.md` … `SESSION-09-SUPPLY-CHAIN-CI.md` | The nine per-surface assessment reports. Findings with `path:line`, exploit path, severity and fix. |
 | [**`SESSION-10-SYNTHESIS.md`**](./SESSION-10-SYNTHESIS.md) | **The final report.** Aggregate findings, the four Criticals, eight cross-cutting themes, regression pass over the prior review, advertised-guarantees scorecard, prioritized remediation roadmap, audit limitations. **Start here.** |

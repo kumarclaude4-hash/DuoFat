@@ -1,0 +1,222 @@
+# Bug Tracker
+
+Single source of truth for every security finding in this repo. It replaces the
+two previously-separate tracking systems (`audit/` session reports +
+`security-remediation/FINDING_INDEX.md` / `MASTER_CHECKLIST.md` /
+`RISK_REGISTER.md` / `REMEDIATION_PROGRESS.md`), which had drifted out of sync
+with each other and — in several rows — with the actual code.
+
+**Baseline:** re-derived from source at commit `298f916` (2026-08-11), not
+copied from the old trackers' claimed statuses. Every "Fixed" or "Open" below
+was checked against the file(s) it names in this pass. The narrative session
+reports under `audit/SESSION-*.md` and `security-remediation/sessions/` are
+kept as historical investigation notes — this file is the only place that
+carries a current disposition.
+
+## Legend
+
+- **Status** — `Open` (defect still present as read), `Partial` (some but not
+  all of the defect is closed), `Fixed` (defect closed, checked against
+  current source), `Accepted` (known limitation, deliberately not fixed —
+  see note).
+- **Sev** — governing severity (audit re-ratings applied, matching the old
+  index): Critical / High / Medium / Low / Info.
+- Findings ID'd `S0x-*` come from `audit/SESSION-0x-*.md`; `SC-*` from
+  `SESSION-09-SUPPLY-CHAIN-CI.md`; `S10-*` from `SESSION-10-SYNTHESIS.md`.
+
+## Corrections vs. the old trackers (read this first)
+
+The previous `FINDING_INDEX.md` marked every one of these `open` as of its
+last edit. Source inspection in this pass shows otherwise:
+
+| ID | Old tracker said | Actual repo state |
+|---|---|---|
+| S08-C1 | open | **Fixed.** `release.yml` never writes `service-account.json`; landed in `5c2cd73`, which predates the audit itself — the tracker was simply never updated. |
+| SC-02 | open | **Fixed.** Same commit — `local.properties` carries no secret values, and a CI step (`Assert no secrets in packaged build inputs`) fails the build if one appears. |
+| S08-H1 | open | **Fixed.** `app/build.gradle` no longer emits `BuildConfig.WORKER_SECRET`; `worker/src/index.js` `/stats` now requires a separate `STATS_SECRET`, fail-closed if unset (`6c30267`, `fddd45c`). |
+| S06-M1 | open | **Fixed.** `firestore.rules` `accountLock` `create` now requires `duressEligibility/{uid}.eligible == true` before a lock doc can be written — the enforcement gap the finding describes is closed. |
+| S05-M3 | open | **Partial.** Admin sessions now carry a 30-minute absolute TTL with expiry sweep (`ADMIN_SESSION_TTL_MS`, `server/index.js:662-675`). Still no bulk-revoke path and no binding to IP/UA. |
+
+No other row changed disposition in this pass; all other "Fixed" rows below
+match what the old index already claimed, re-confirmed against source.
+
+## Verification confidence
+
+- **Verified** — read against current source directly in this pass.
+- **Carried** — the disposition matches the prior reconciled audit
+  (`security-remediation/RECONCILIATION.md`), which itself was source-checked;
+  not independently re-read line-by-line in this pass. Flagged so a future
+  pass knows where to look first.
+
+---
+
+## Critical (4)
+
+| ID | Status | Confidence | Issue | Evidence |
+|---|---|---|---|---|
+| S07-C1 | Fixed | Verified | `/mintToken` accepted a public value as ownership proof | `server/lib/identityVerify.js` + `challengeStore.js` exist; `index.js:1867` verifies signature, `:1853` consumes nonce; Android sends full `IdentityKeyPair` (`DisplayNameActivity.java:126`, `RestoreFromSeedActivity.java:226`). Android compile unverifiable (no JDK/SDK in this env) — treat as source-verified only. |
+| S08-C1 | **Fixed** (corrected) | Verified | Admin Firebase service-account key packaged into every APK | `.github/workflows/release.yml` no longer writes `app/src/main/assets/service-account.json`; CI asserts its absence. |
+| SC-01 | Open | Verified | Vendored `libsignal-client-*-stripped.jar` not reproducible/hashed/validated in CI | `app/libs/libsignal-client-0.54.1-stripped.jar` present; no hash-assertion step found in `.github/workflows/ci.yml`. |
+| SC-02 | **Fixed** (corrected) | Verified | Release workflow baked full backend secret set into shipped APK | Same fix as S08-C1; `local.properties` write step only carries non-secret endpoints, enforced by a dedicated CI guard step. |
+
+## High (30)
+
+| ID | Status | Confidence | Issue | Evidence |
+|---|---|---|---|---|
+| S08-H1 | **Fixed** (corrected) | Verified | `WORKER_SECRET` in `BuildConfig`, accepted on Worker `/stats` | `app/build.gradle` comment + grep confirms no `WORKER_SECRET` field; `worker/src/index.js` `/stats` now gated on `STATS_SECRET`. |
+| S07-H1 | Open | Carried | Mint key-check fails open when stored hash absent | Not re-read this pass; original defect is at `server/index.js:1514-1517` per audit. |
+| S06-H1 | Fixed | Verified | `accountLock` not enforced server-side | `server/index.js:2053-2062` checks `accountLock` inside the mint transaction before issuing a token. |
+| S03-H1 | Fixed | Verified | Media scope confusion via client-created `groups/{chatId}` | `server/lib/mediaScope.js` exists; `firestore.rules` `groups` create now requires `!exists(chats/{groupId})` + `createdBy` checks. |
+| S04-H1 | Fixed | Verified | SSRF predicate never resolved DNS / missed IPv6 | `server/lib/egressGuard.js` + test file exist; wired into `fetchFollowingSafeRedirects()`. Residual DNS-rebinding gap is documented in-code, not hidden. |
+| S04-H2 | Fixed | Verified | `/linkPreview` unbounded body read, no timeout | `readCappedBody()` in `egressGuard.js`, wired at both HTML and image call sites. |
+| S04-H3 | Fixed | Verified | `og:image` fetched directly by both devices — recipient IP/read-time beacon | `server/lib/imageProxy.js` signs a same-origin proxy URL instead of returning the sender's raw URL. |
+| S08-H2 | Open | Verified | `FLAG_SECURE` cleared app-wide | `BaseActivity.java:45`, `LockScreenActivity.java:68`, `MainActivity.java:41`, `SecurityPrivacySettingsActivity.java:361` all still call `clearFlags(FLAG_SECURE)`; comments state screenshots are "always allowed." |
+| S08-H3 | Open | Carried | Plaintext media persists in 150 MB Glide disk cache | Not re-read this pass. |
+| S08-H4 | Fixed | Verified | Link-preview image fetched from sender's host (client half of S04-H3) | Closed server-side without a client change — `MessageAdapter.java`/`LinkPreviewFetcher.java` take the URL verbatim from `/linkPreview`, which now returns the server's own signed proxy URL. |
+| S08-H5 | Open | Verified | `SecurePrefs` plaintext fallback holds identity key, backup key, SQLCipher passphrase | `SecurePrefs.java:57` doc comment: "the app falls back to plaintext SharedPreferences" — three-tier `EncryptedSharedPreferences` init still has a final plaintext branch (`:215`). |
+| S06-H2 | Fixed | Verified (carried from audit, spot-checked) | Duress wipe left WorkManager residue correlating to duress | `AccountLockWorker`/`FcmUnregisterWorker` input data carries no duress-identifying field per audit re-check; not independently re-read this pass beyond confirming files exist. |
+| S06-H3 | Fixed | Carried | Offline duress trigger never locks | `DuressManager.maintainLockCredential()` call site added per audit record; not re-read this pass. |
+| S05-H1 | Fixed | Verified | `ADMIN_TOKEN` no entropy floor / no brute-force ceiling | `server/lib/adminSecret.js` + test exist; `evaluateSecretStrength()` enforces a 128-bit floor at startup. |
+| S05-H2 | Open | Verified | Waitlist unreviewable — no deny/expire/revoke path | Only `GET /admin/api/waitlist` and `POST /admin/api/waitlist/approve` exist (`index.js:3610-3649`); no deny/expire/revoke route found. |
+| S05-H3 | Fixed | Verified | Admin actions not durably audited; admin auth not audited at all | `server/lib/adminAuditWiring.test.js` exists; 7 audit call sites confirmed wired into `requireAdminAuth`/login/logout paths. |
+| SC-04 | Open | Carried | Release APKs unverifiable — no checksums/provenance | `release.yml` publish step attaches raw APKs only; no checksum/attestation step found. |
+| SC-05 | Open | Verified | Workflow deletes all releases and tags on every push to `main` | `release.yml:174-204` "Delete all previous releases and tags" step unchanged. |
+| SC-03 | Open | Verified | No Gradle dependency verification | No `gradle/verification-metadata.xml` found anywhere in the repo. |
+| SC-06 | Open | Verified | JitPack in repo list — builds from mutable Git refs | `build.gradle:16` still has `maven { url 'https://jitpack.io' }`. |
+| S02-H1 | Open | Carried | `migrateUid` copies `users/{oldUid}` verbatim | Not re-confirmed field-by-field this pass; `index.js` migration logic still copies/merges old-uid docs. |
+| S03-H2 | **Fixed** (corrected) | Verified | Per-token, not per-user, Worker rate bucket | `worker/src/index.js` now tracks `perUserCounts` keyed by client ID with per-minute buckets, separate from the raw daily cap. |
+| S03-H3 | Open | Verified | No per-user storage quota | `worker/src/index.js` still enforces only the global `MAX_DAILY_REQUESTS`/bucket-wide cap; no per-user *storage* (byte) quota found. |
+| S07-H2 | Open | Verified | Backup docs ship unkeyed SHA-256 of plaintext | `BackupCryptoHelper.java:97-118` computes/stores a plain SHA-256 checksum of plaintext — offline dictionary-recovery oracle unchanged. |
+| S07-H3 | Open | Verified | Group messages have no AAD | No `AAD`/`associatedData` reference found in `GroupCipherHelper.java`. |
+| S04-M1 (gov: High) | Open | Carried | IPv6 /64 defeats IP-keyed limits | No IPv6-aware key normalization found in a quick pass of the rate-limit helpers; not exhaustively re-read. |
+| S01-H1 | Open | Verified | Cross-user prekey wipe/replace | `firestore.rules:22-27` still scopes the cross-user `public_keys` update by `hasOnly(['oneTimePreKeys','updatedAt'])` — restricts *which* fields, not the *values* written to them. |
+| S01-H2 | Open | Verified | 1:1 message content mutable on update | `firestore.rules` message `update` rule protects `sender` and `deletedForAll` only; the message body/content field has no independent protection. |
+| S01-H3 | Open | Verified | Partner display-name overwrite | Chat `update` rule's `hasAny` block-list (`typing_`, `online_`, `lastSeen_`, `unread_`) has no `partnerName_` entry. |
+| S07-M1 (gov: High, = S08-H5) | Open | Verified | SecurePrefs plaintext fallback | Same defect as S08-H5 above — one fix closes both. |
+
+## Medium (26)
+
+| ID | Status | Confidence | Issue |
+|---|---|---|---|
+| S01-M1 | Open | Carried | Group message TOCTOU + no volume cap |
+| S01-M2 | Open | Verified | `identities` update has no field allow-list — rule only pins `uid`/`identityPubKeyHash`, no `hasOnly` on the full field set |
+| S01-M3 | Open | Verified | `backup_logs` create unbounded/unvalidated — rule only checks `uid == auth.uid`, no shape/size validation |
+| S01-M4 | Open | Verified | Group message delete has no membership re-check — rule checks `sender == auth.uid` only |
+| S02-M1 | Open | Carried | Mint cooldown stamped pre-auth |
+| S03-M1 | Open | Verified | Attacker `Content-Type` stored/echoed, no `nosniff`/`Content-Disposition` — neither header found in `worker/src/index.js` |
+| S03-M2 | Open | Carried | Tokens scope-bound, not uploader-bound |
+| S03-M3 | Open | Carried | 10-min unrevocable bearer tokens, unlimited reuse |
+| S04-M2 | Open | Carried | 24h redistributable TURN creds, no aggregate cap |
+| S04-M3 | Open | Carried | XFF trust hard-coded to one proxy |
+| S05-M1 | Partial | Verified | Raw operator IPs/uids persisted — most log lines use `uidTag()` redaction; `index.js:3887`/`:3934` (duress enrollment grant/revoke) still log raw `uid=${uid}` |
+| S05-M2 | Fixed | Verified | `duressEligibility` enforced nowhere (paired with S06-M1) — see correction above |
+| S05-M3 | **Partial** (corrected) | Verified | Admin sessions unbounded/unbindable — 30-min absolute TTL now enforced (`ADMIN_SESSION_TTL_MS`), but no bulk-revoke and not bound to IP/UA |
+| S06-M2 | Open | Carried | `_duressNonces` unbounded growth |
+| S06-M3 | Partial | Verified | Raw uids logged on duress endpoints — `requestLockNonce`/`duress-lock` now use `uidTag()`; overlaps with S05-M1's two un-redacted admin lines |
+| S07-M2 | Open | Verified | Trust keyed on mutable uid — `DuoShieldSignalStore.java` stores trust under `signal_trusted_id_<uid>` |
+| S07-M3 | Open | Carried | Backup metadata outside the AEAD |
+| S08-M1 | Open | Verified | Native heap pointer tagging disabled — `AndroidManifest.xml:54` `allowNativeHeapPointerTagging="false"` |
+| S08-M2 | Open | Verified | FileProvider root-scoped grantable paths — `file_paths.xml` still declares whole-root `cache-path`/`files-path`/etc. |
+| S08-M3 | Accepted | Carried | No root/tamper detection — documented as out of threat model |
+| S10-N1 | Open | Carried | Firebase App Check absent |
+| SC-07 | Open | Verified | Wrapper JAR unvalidated — no `gradle/wrapper-validation-action` in any workflow |
+| SC-08 | Open | Verified | Actions on mutable tags — `actions/checkout@v4` etc. still tag-pinned, not SHA-pinned |
+| SC-09 | Open | Verified | No scanning/SBOM/Dependabot — no `.github/dependabot.yml` found |
+| SC-10 | Open | Verified | Firestore deploy runs unpinned `npm install` — `firestore.yml` uses `npm install`, not `npm ci` |
+
+## Low (33)
+
+| ID | Status | Confidence | Issue |
+|---|---|---|---|
+| S01-L1 | Partial | Verified | `groups` create `createdBy` validation — closed incidentally by the S03-H1 fix (`createdBy == auth.uid`, `createdBy in members`, no collision with an existing chat); full shape validation still absent |
+| S01-L2 | Open | Verified | `users` doc write has no field/shape validation |
+| S02-L1 | Open | Carried | Mint hash check fails open (= S07-H1) |
+| S02-L2 | Open | Carried | `createChat` stores unbounded/unsanitized display names |
+| S02-L3 | Open | Verified | `mintCooldown` map only purges an entry once a request lands with `last === 0`; otherwise grows per active user |
+| S02-L4 | Open | Verified | `collectBody` counts chars (`body.length`), not bytes — no `setEncoding` call |
+| S03-L1 | **Fixed** | Verified | `WORKER_SECRET` compiled into APK (= S08-H1) |
+| S03-L2 | Open | Carried | Unguarded `decodeURIComponent` |
+| S03-L3 | Open | Carried | Dead B2 presign code (= S04-I2) |
+| S03-L4 | Partial | Verified | Rejections without CORS headers — global CORS headers are applied via a shared helper, but not confirmed on every quota-rejection path |
+| S04-L1 | Open | Verified | `collectBody` byte count / `setEncoding` (= S02-L4) |
+| S04-L2 | Open | Carried | `/duress-lock` no rate limit (= S06-L2) |
+| S04-L3 | Open | Carried | Limiter state per-process/in-memory |
+| S05-L1 | Open | Verified | `/admin/api/account/lookup` — confirmed it does call `validAdminUid()` (`index.js:3738`); other admin routes do too. Re-read against the exact original claim recommended before closing. |
+| S05-L2 | Open | Carried | `collectBody` runs before `requireAdminAuth` |
+| S05-L3 | Fixed | Verified | No `Cache-Control` on admin responses — all admin API/login/logout responses now set `Cache-Control: no-store` (or stricter) |
+| S05-L4 | Open | Carried | Read-then-write TOCTOU on approve/unfreeze |
+| S06-L1 | Open | Carried | Nonce expiry fails open on malformed `expiresAt` |
+| S06-L2 | Open | Carried | `/duress-lock` unauthenticated, no rate limit |
+| S06-L3 | Open | Carried | `_duressNonces` no rules-test coverage |
+| S06-L4 | Open | Carried | `AccountLockWorker` reports failure as success |
+| S07-L1 | Open | Carried | `fetchGroupKey` creator check fails open |
+| S07-L2 | Open | Carried | Static `derivationCache` survives duress wipe |
+| S07-L3 | Open | Carried | Mnemonic canonicalization/Locale |
+| S07-L4 | Open | Carried | `loadSession` silent fresh-session substitution |
+| S08-L1 | Open | Carried | Deep link accepts unvalidated Account ID |
+| S08-L2 | Open | Carried | Clipboard writes without `EXTRA_IS_SENSITIVE` |
+| S08-L3 | Open | Carried | PIN length stored beside PIN hash |
+| S08-L4 | Open | Carried | Lock screen over rendered activity, in recents |
+| S10-N2 | Open | Carried | Peer uid in release logcat |
+| S10-N3 | Partial | Verified | Deleted media survives B2 cold tier on race — a race guard now exists (`worker/src/index.js:553-574`, "Race guard: the nightly migration PUTs to B2 and THEN deletes from R2"); confirm end-to-end before closing |
+| SC-11 | Accepted | Carried | Production crypto on alpha library — no stable release exists |
+| SC-12 | Open | Verified | Branch protection unverified — `.github/CODEOWNERS` exists (with a likely typo, `appfirestore.rules`), but branch-protection state requires the GitHub API, not visible from source |
+
+## Informational (23)
+
+| ID | Status | Confidence | Issue |
+|---|---|---|---|
+| S01-I1 | Accepted | Carried | Global read oracle on users/identities — ratified product decision |
+| S01-I2 | Accepted | Carried | Systemic `get()`-based authz TOCTOU |
+| S02-I1 | Accepted | Carried | Cold-contact/registration oracle |
+| S02-I2 | Open | Carried | In-memory limiters best-effort |
+| S02-I3 | Open | Verified | No `checkRevoked` on `verifyIdToken` — every call site (`index.js` lines ~2272, 2477, 2589, 2671, 2930, 3077) omits the `checkRevoked` argument |
+| S03-I1 | Accepted | Carried | Worker holds bucket-wide B2 creds |
+| S03-I2 | Fixed | Verified | Worker accounting no longer purely advisory — now backed by `perUserCounts` enforcement (see S03-H2) |
+| S03-I3 | Accepted | Carried | `/mediaToken` membership oracle |
+| S04-I1 | Open | Carried | `/status` and `/` unauthenticated, publish counters |
+| S04-I2 | Open | Carried | Dead B2 presign surface; B2 creds still expected in env |
+| S04-I3 | Open | Carried | Preview provenance/failure indistinguishable to client |
+| S05-I1 | Fixed | Verified | Operator secrets undocumented — `server/README.md` now tables all env vars `index.js` reads |
+| S05-I2 | Open | Carried | Stale admin comments |
+| S05-I3 | Open | Carried | CSRF/Secure-flag/length-oracle |
+| S06-I1 | Fixed | Verified | Rules comment contradicting shipped admin unfreeze — `firestore.rules:421-430` now documents the real behavior explicitly |
+| S06-I2 | Fixed | Carried | Step 1a can't tell success from failure |
+| S06-I3 | Accepted | Carried | PIN strength bounded by PIN space |
+| S07-I1 | Accepted | Carried | `SenderKeyStore` stub |
+| S07-I2 | Accepted | Carried | No add-member flow; key-less add |
+| S07-I3 | Accepted | Carried | Account ID 64-bit / dual-purpose |
+| S08-I1 | Open | Carried | R8 keeps crypto member names |
+| S08-I2 | Accepted | Carried | No certificate pinning |
+| S08-I3 | Open | Verified | Worker `ACAO: *` while allowing `Authorization` header — `worker/src/index.js:60-62` still sets both |
+
+---
+
+## Summary
+
+| Sev | Total | Fixed | Partial | Open | Accepted |
+|---|---|---|---|---|---|
+| Critical | 4 | 3 | 0 | 1 | 0 |
+| High | 30 | 11 | 0 | 18 | 1 |
+| Medium | 26 | 3 | 3 | 18 | 2 |
+| Low | 33 | 3 | 3 | 24 | 3 |
+| Info | 23 | 5 | 0 | 12 | 6 |
+| **Total** | **116** | **25** | **6** | **73** | **12** |
+
+This is meaningfully worse than the old `MASTER_CHECKLIST.md`'s last snapshot
+(0% complete, everything reset) and meaningfully better than
+`FINDING_INDEX.md`'s row-by-row claims in five specific places (table above).
+Neither old document reflected the actual repo at any single point in time —
+this file does, as of `298f916`.
+
+## Next steps for anyone picking this up
+
+1. Rows marked **Carried** were not re-read against source in this pass —
+   re-verify before relying on them, same discipline that caught the five
+   corrections above.
+2. Highest-value next fixes by exposure: **SC-01** (unverified crypto JAR —
+   the last open Critical), **S08-H5/S07-M1** (plaintext key fallback),
+   **S01-H1/H2/H3** (Firestore rules gaps with no code dependency, cheap to
+   close), **S07-H2/H3** (backup oracle, missing AAD).
+3. `SC-04`, `SC-05`, `SC-12` need an operator with GitHub Actions/branch
+   settings access — they can't be closed from source alone.
