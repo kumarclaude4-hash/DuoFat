@@ -6,6 +6,8 @@ const { createChallengeStore } = require("./lib/challengeStore");
 const { verifyMintTokenSignature } = require("./lib/identityVerify");
 const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
 const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
+const { createAdminLockoutStore } = require("./lib/adminLockoutStore");
+const { Redis } = require("@upstash/redis");
 
 let serviceAccount;
 try {
@@ -204,7 +206,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ──────────────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -496,6 +498,38 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// ── /turnCredentials daily aggregate cap (S04-M2) ─────────────────────────────
+// The per-minute bucket above (turnCredentials: 20) still allows ~28,800 mints
+// per day from a single account. Each mint is a plain bearer username/password
+// that works from anywhere — unbound to the account, device, or a specific
+// call — so bulk minting is a resale/redistribution vector and direct
+// bandwidth theft billed to this project via Cloudflare's metered TURN relay.
+// This is a SEPARATE, longer window layered on top of the per-minute one, not
+// a replacement for it: it reuses the same pure fixed-window evaluator with a
+// 24h window instead of 60s. The default (100/day) comfortably covers even
+// heavy legitimate use (dozens of calls a day between two people) while
+// cutting the worst case by ~2-3 orders of magnitude.
+const TURN_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TURN_DAILY_CAP = Number(process.env.TURN_CRED_DAILY_CAP) || 100;
+const turnDailyMints = new Map(); // uid → { count, windowStart }
+
+function checkTurnDailyCap(uid) {
+  const now = Date.now();
+  const rec = turnDailyMints.get(uid);
+  const { allowed, record } = pure.evaluateFixedWindow(rec, now, TURN_DAILY_WINDOW_MS, TURN_DAILY_CAP);
+  turnDailyMints.set(uid, record);
+  return allowed;
+}
+
+// Purge stale daily-cap entries once an hour — mirrors the per-minute purge
+// above (S02-L3 precedent: every limiter Map needs one or it grows forever).
+setInterval(() => {
+  const cutoff = Date.now() - TURN_DAILY_WINDOW_MS;
+  for (const [uid, rec] of turnDailyMints) {
+    if (rec.windowStart < cutoff) turnDailyMints.delete(uid);
+  }
+}, 60 * 60 * 1000);
+
 // ── Scoped media capability tokens (SEC-A01) ──────────────────────────────────
 // Shared with the Cloudflare Worker ONLY. Set the identical value in both places:
 //   server: MEDIA_TOKEN_SECRET env var
@@ -680,16 +714,8 @@ if (ADMIN_TOKEN) {
 
 const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_IP_MAX_FAILS = 10;
-const adminIpFails = new Map(); // ip → { count, windowStart }
 const ADMIN_SESSION_TTL_MS = 30 * 60 * 1000;
 const adminSessions = new Map(); // opaque session id → expiry timestamp
-
-setInterval(() => {
-  const cutoff = Date.now() - ADMIN_IP_WINDOW_MS;
-  for (const [ip, rec] of adminIpFails) {
-    if (rec.windowStart < cutoff) adminIpFails.delete(ip);
-  }
-}, 30 * 60 * 1000);
 
 setInterval(() => {
   const now = Date.now();
@@ -698,27 +724,66 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// S04-L3: the admin brute-force failure counter (formerly the `adminIpFails`
+// Map right here) lived only in process memory, so a Render redeploy/crash/
+// restart silently reset every IP's count to zero — the only ceiling in
+// front of ADMIN_TOKEN (see lib/adminSecret.js's S05-H1 note) never actually
+// accumulated across the instance's lifetime. `createAdminLockoutStore()`
+// (lib/adminLockoutStore.js) backs the same counter with Upstash Redis so it
+// survives restarts and is shared across instances, and degrades to an
+// in-memory fallback (same semantics as the code this replaces) only if
+// Redis is unconfigured or unreachable — see that module's header comment
+// for the full fail-safe/atomicity rationale.
+//
+// KV_REST_API_URL / KV_REST_API_TOKEN are the standard Upstash Redis REST
+// credentials; this server intentionally does not invent new env var names.
+// Both are optional: an operator who has not provisioned Redis still gets a
+// working (process-local, pre-fix-equivalent) lockout rather than a crash.
+const adminRedisClient = (() => {
+  const url = process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN;
+  if (!url || !token) {
+    console.warn(
+      "admin lockout: KV_REST_API_URL/KV_REST_API_TOKEN not set — falling back to " +
+      "process-local lockout state, which does NOT survive a restart or span multiple " +
+      "instances. Set both to enable the durable, Redis-backed lockout (S04-L3)."
+    );
+    return null;
+  }
+  return new Redis({ url, token });
+})();
+
+const adminLockoutStore = createAdminLockoutStore({
+  redis: adminRedisClient,
+  windowMs: ADMIN_IP_WINDOW_MS,
+  maxFails: ADMIN_IP_MAX_FAILS,
+  normalizeIp: pure.normalizeIpForRateLimit,
+  onError: (op, err) => console.warn(`admin lockout: Redis ${op} failed, using local fallback:`, err.message),
+});
+if (adminRedisClient) {
+  console.log("admin lockout: Redis-backed (durable across restarts/instances)");
+}
+
 // S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix. The
 // admin lockout is the highest-value target of this class of bypass (it
 // gates the operator panel), so it must not be left keyed by raw IPv6
-// address while the lower-stakes limiters get the fix.
-function adminIpLocked(ip) {
-  const key = pure.normalizeIpForRateLimit(ip);
-  const rec = adminIpFails.get(key);
-  if (!rec) return false;
-  if (Date.now() - rec.windowStart >= ADMIN_IP_WINDOW_MS) return false;
-  return rec.count >= ADMIN_IP_MAX_FAILS;
+// address while the lower-stakes limiters get the fix. IP normalization is
+// applied inside adminLockoutStore itself (via the normalizeIp option above),
+// not here, so both the Redis-backed and local-fallback paths get it.
+async function adminIpLocked(ip) {
+  return adminLockoutStore.isLocked(ip);
 }
 
-function recordAdminAuthFailure(ip) {
-  const key = pure.normalizeIpForRateLimit(ip);
-  const now = Date.now();
-  const rec = adminIpFails.get(key);
-  if (!rec || now - rec.windowStart >= ADMIN_IP_WINDOW_MS) {
-    adminIpFails.set(key, { count: 1, windowStart: now });
-  } else {
-    rec.count++;
-  }
+async function recordAdminAuthFailure(ip) {
+  return adminLockoutStore.recordFailure(ip);
+}
+
+// Called on every successful admin authentication (login form and, for
+// symmetry, any request that clears the token check inside
+// requireAdminAuth) so a legitimate operator's earlier mistyped attempts do
+// not linger and count toward a future lockout window.
+async function resetAdminAuthFailures(ip) {
+  return adminLockoutStore.reset(ip);
 }
 
 // S05-H3: admin ACTIONS were already written to adminAuditLog (waitlist approve,
@@ -798,9 +863,16 @@ function hasValidAdminSession(req) {
 
 // Returns true and lets the caller proceed, or writes a 401/429/503 response
 // and returns false. Every admin/api route must call this first.
-function requireAdminAuth(req, res) {
+//
+// S04-L3: adminIpLocked()/recordAdminAuthFailure() are now backed by
+// adminLockoutStore (Redis, with a local-fallback path — see that module and
+// the constant declarations above), which is why this function is async.
+// Every call site is already inside an async context (an `async () => {}`
+// IIFE or an `async (body) => {}` collectBody callback) so this only adds
+// `await`, not new restructuring.
+async function requireAdminAuth(req, res) {
   const ip = getClientIp(req);
-  if (adminIpLocked(ip)) {
+  if (await adminIpLocked(ip)) {
     auditAdminEvent("admin_api_blocked_locked_out", req, { path: String(req.url).slice(0, 200) });
     res.writeHead(429, { "Content-Type": "text/plain" });
     res.end("Too many failed attempts — wait 15 min and retry");
@@ -815,7 +887,7 @@ function requireAdminAuth(req, res) {
   const supplied = req.headers["x-admin-token"] || "";
   const tokenValid = supplied && safeTokenEqual(supplied, ADMIN_TOKEN);
   if (!tokenValid && !hasValidAdminSession(req)) {
-    recordAdminAuthFailure(ip);
+    await recordAdminAuthFailure(ip);
     // Logged so an unexpected mass-401 (e.g. the in-memory session map was
     // wiped by a restart between login and this call) is visible in Render
     // logs instead of silently bouncing the browser back to the login gate.
@@ -1721,7 +1793,7 @@ async function loadAuditLog() {
   }
 }
 
-// ── Inactivity auto-logout (10 minutes) ───���──────────────────────────────────
+// ── Inactivity auto-logout (10 minutes) ───����──────────────────────────────────
 // Starts counting down once the session is unlocked. Any mouse, keyboard, or
 // touch event resets the timer. A 60-second warning banner appears before logout.
 const INACTIVITY_TIMEOUT_MS  = 10 * 60 * 1000; // 10 min
@@ -2028,7 +2100,7 @@ http.createServer((req, res) => {
         // derived from a seed and is not a secret, so anyone could POST that uid
         // with garbage key material once a minute, forever. Each attempt was
         // rejected 403 yet still stamped the cooldown, so the legitimate owner —
-        // who never authenticated successfully — was held at 429 indefinitely.
+        // who never authenticated successfully �� was held at 429 indefinitely.
         //
         // Resolution: reserve the slot now to close the race, then release it on
         // any failure path (see the `catch` below, and the finally-style release
@@ -2765,6 +2837,17 @@ http.createServer((req, res) => {
           return;
         }
 
+        // ── S04-M2: per-account daily aggregate cap ───────────────────────────
+        // Layered on top of the per-minute limiter above — see
+        // checkTurnDailyCap's doc comment for why the per-minute bucket alone
+        // (~28,800 mints/day) was not enough.
+        if (!checkTurnDailyCap(turnUid)) {
+          console.warn(`[turnCredentials] daily cap hit uid=${uidTag(turnUid)}`);
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Daily TURN credential limit exceeded");
+          return;
+        }
+
         // ── Cloudflare credentials ───────────────────────────────────────────
         const tokenId  = process.env.TURN_TOKEN_ID  || "";
         const apiToken = process.env.TURN_API_TOKEN || "";
@@ -2775,15 +2858,50 @@ http.createServer((req, res) => {
           return;
         }
 
-        const cfUrl = `https://rtc.live.cloudflare.com/v1/turn/keys/${tokenId}/credentials/generate`;
-        const cfRes = await fetch(cfUrl, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ ttl: 86400 }),
-        });
+        // ── S04-M2: TTL clamped, never the old 24h default ────────────────────
+        // See clampTurnCredentialTtlSeconds's doc comment: the ceiling (1h)
+        // matches what the Android client already assumes
+        // (TurnCredentialCache.TTL_MS), so this changes nothing about how long
+        // a credential stays USEFUL to the app, only how long a stolen one
+        // stays valid to anyone else.
+        const ttlSeconds = pure.clampTurnCredentialTtlSeconds(
+          process.env.TURN_CRED_TTL_SECONDS,
+          60,    // floor: short enough to matter, long enough not to break slow ICE negotiation
+          3600,  // ceiling: matches the client's own 1h refresh assumption
+        );
+
+        // ── S04-M2: outbound timeout ───────────────────────────────────────────
+        // Node's fetch has no default timeout. Without this, a stalling
+        // Cloudflare connection holds the inbound socket (and this outbound
+        // one) open indefinitely — 20/min/account of deliberately-stalled
+        // upstreams is an unbounded resource leak. Mirrors /linkPreview's
+        // existing AbortController pattern (timeoutMs: 6000 there).
+        const cfCtrl = new AbortController();
+        const cfTimeout = setTimeout(() => cfCtrl.abort(), 8000);
+        let cfRes;
+        try {
+          const cfUrl = `https://rtc.live.cloudflare.com/v1/turn/keys/${tokenId}/credentials/generate`;
+          cfRes = await fetch(cfUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ttl: ttlSeconds }),
+            signal: cfCtrl.signal,
+          });
+        } catch (fetchErr) {
+          const timedOut = fetchErr.name === "AbortError";
+          console.error(
+            `turnCredentials: Cloudflare fetch ${timedOut ? "timed out" : "failed"}:`,
+            fetchErr.message
+          );
+          res.writeHead(504, { "Content-Type": "text/plain" });
+          res.end(timedOut ? "Cloudflare TURN request timed out" : "Cloudflare TURN error");
+          return;
+        } finally {
+          clearTimeout(cfTimeout);
+        }
 
         if (!cfRes.ok) {
           const text = await cfRes.text().catch(() => "");
@@ -2794,6 +2912,17 @@ http.createServer((req, res) => {
         }
 
         const data = await cfRes.json();
+        // ── S04-M2: validate shape before responding 200 ──────────────────────
+        // A 200 with an unexpected/missing iceServers shape used to send
+        // JSON.stringify(undefined) — an empty 200 body the client cannot
+        // distinguish from a valid response. Fail loudly (502) instead of
+        // silently handing the caller nothing.
+        if (!data || !data.iceServers || typeof data.iceServers !== "object") {
+          console.error("turnCredentials: Cloudflare response missing iceServers:", JSON.stringify(data));
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Cloudflare TURN error");
+          return;
+        }
         // data.iceServers = { urls: [...], username: "...", credential: "..." }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(data.iceServers));
@@ -3044,7 +3173,14 @@ http.createServer((req, res) => {
             headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
             timeoutMs: 6000,
           });
-          const preview = { url: targetUrl, domain: parsed.hostname.replace(/^www\./, "") };
+          // S04-I3: label the preview with the domain content actually came
+          // from (the final hop of the redirect chain), not the originally
+          // submitted host — see pure.previewDomainFromUrl's doc comment for
+          // the phishing scenario this closes. `url` stays the
+          // originally-submitted address (what the sender actually typed/
+          // pasted into the chat), only `domain` — the field the UI renders
+          // as the card's identity — changes.
+          const preview = { url: targetUrl, domain: pure.previewDomainFromUrl(finalUrl, parsed.hostname) };
           if (r.ok && (r.headers.get("content-type") || "").includes("text/html")) {
             // S04-H2: `await r.text()` buffered the ENTIRE body before this
             // `.slice()` could bound it, so a host that streams gigabytes (or
@@ -3085,7 +3221,7 @@ http.createServer((req, res) => {
                 const imageUrlParsed = new URL(rawImageUrl, targetUrl); // resolve relative URLs
                 // S04-H3: returning imageUrlParsed.href directly is what leaked
                 // the RECIPIENT's IP and a covert read-receipt to the linked
-                // host — MessageAdapter.java hands preview.imageUrl straight to
+                // host �� MessageAdapter.java hands preview.imageUrl straight to
                 // Glide, so every device that renders the message hits an
                 // attacker-chosen server. Re-check the extracted host through the
                 // egress guard (a page can point og:image at 169.254.169.254),
@@ -3576,11 +3712,11 @@ http.createServer((req, res) => {
   // session cookie, so the admin API can authenticate normal same-origin
   // requests without exposing the token to page JavaScript.
   if (req.method === "POST" && requestPath === "/admin/login") {
-    collectBody(req, res, (body) => {
+    collectBody(req, res, async (body) => {
       const params = new URLSearchParams(body);
       const supplied = (params.get("token") || "").trim();
       const ip = getClientIp(req);
-      if (adminIpLocked(ip)) {
+      if (await adminIpLocked(ip)) {
         console.warn(`admin login: locked out ip=${ip}`);
         // S05-H3: the login gate is the event an investigator cares about most,
         // and until this call existed it was recorded ONLY in Render's rolling
@@ -3598,7 +3734,7 @@ http.createServer((req, res) => {
         return;
       }
       if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
-        recordAdminAuthFailure(ip);
+        await recordAdminAuthFailure(ip);
         console.warn(`admin login: invalid token ip=${ip} suppliedLen=${supplied.length}`);
         // suppliedLength (not the token) distinguishes a fat-fingered operator
         // from a scripted guesser walking a wordlist. The secret itself is never
@@ -3606,12 +3742,17 @@ http.createServer((req, res) => {
         // turn the audit trail into a second place to steal it from.
         auditAdminEvent("admin_login_failed", req, {
           suppliedLength: supplied.length,
-          failuresInWindow: (adminIpFails.get(ip) || {}).count || 1,
+          failuresInWindow: await adminLockoutStore.count(ip),
         });
         res.writeHead(303, { "Location": "/admin?error=invalid", "Cache-Control": "no-store" });
         res.end();
         return;
       }
+      // S04-L3: clear any accumulated failures now that this IP has proven it
+      // holds the real token — mirrors the pre-fix intent that a legitimate
+      // operator's earlier mistyped attempts shouldn't count toward a future
+      // lockout window. (See adminLockoutStore.reset()'s doc comment.)
+      await resetAdminAuthFailures(ip);
       const sessionId = createAdminSession();
       console.log(`admin login: success ip=${ip}`);
       // Success is audited as deliberately as failure: "nobody failed" is not
@@ -3697,7 +3838,7 @@ http.createServer((req, res) => {
   // first, so the operator can see who's asking for access.
   if (req.method === "GET" && req.url === "/admin/api/waitlist") {
     (async () => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         // Single-field filter only — deliberately NO `.orderBy("createdAt")`
         // here. Combining a `where` on `status` with an `orderBy` on a
@@ -3732,7 +3873,7 @@ http.createServer((req, res) => {
   // next /waitlistStatus poll lets them proceed to account creation.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
     collectBody(req, res, async (body) => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -3784,7 +3925,7 @@ http.createServer((req, res) => {
   // operator can see who's frozen and pick one to unfreeze.
   if (req.method === "GET" && req.url === "/admin/api/locked") {
     (async () => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         const snap = await db.collection("accountLock")
           .where("locked", "==", true)
@@ -3810,7 +3951,7 @@ http.createServer((req, res) => {
   // removed, per firestore.rules (clients get `allow delete: if false`).
   if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
     collectBody(req, res, async (body) => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -3883,7 +4024,7 @@ http.createServer((req, res) => {
   // duress-PIN eligibility (duressEligibility/{uid}.eligible == true).
   if (req.method === "GET" && req.url === "/admin/api/duress/enrolled") {
     (async () => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         const snap = await db.collection("duressEligibility")
           .where("eligible", "==", true)
@@ -3911,7 +4052,7 @@ http.createServer((req, res) => {
   // enrollment must never be granted blind to a UID that isn't a real account.
   if (req.method === "GET" && req.url.startsWith("/admin/api/account/lookup")) {
     (async () => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         const requestUrl = new URL(req.url, "http://localhost");
         const uid = requestUrl.searchParams.get("uid") || "";
@@ -3935,7 +4076,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
+  // ── POST /admin/api/duress/enroll ─────────────────────────────────────��───
   //
   // Body: { uid }. Auth: x-admin-token header.
   // Creates or updates duressEligibility/{uid} with eligible:true so the app
@@ -3944,7 +4085,7 @@ http.createServer((req, res) => {
   // enrollment is never granted blind to an unverified/nonexistent UID.
   if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
     collectBody(req, res, async (body) => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -3993,7 +4134,7 @@ http.createServer((req, res) => {
   // is updated on the next eligibility refresh (sign-in or foreground).
   if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
     collectBody(req, res, async (body) => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4040,7 +4181,7 @@ http.createServer((req, res) => {
   // evident record of who did what and when.
   if (req.method === "GET" && req.url === "/admin/api/auditlog") {
     (async () => {
-      if (!requireAdminAuth(req, res)) return;
+      if (!(await requireAdminAuth(req, res))) return;
       try {
         const snap = await db.collection("adminAuditLog")
           .orderBy("at", "desc")

@@ -110,6 +110,46 @@ test("isBlockedPreviewHost allows legitimate public hosts", () => {
   assert.equal(pure.isBlockedPreviewHost(undefined), false);
 });
 
+test("previewDomainFromUrl labels the preview with the FINAL redirect hop, not the original host (S04-I3)", () => {
+  // The phishing scenario the fix closes: trusted.example 302s to
+  // attacker.example. The card must be labelled attacker.example, matching
+  // where title/imageUrl actually came from — not trusted.example, which
+  // would misattribute attacker content to a trusted-looking domain.
+  assert.equal(
+    pure.previewDomainFromUrl("https://attacker.example/landing", "trusted.example"),
+    "attacker.example"
+  );
+});
+
+test("previewDomainFromUrl strips a leading www. from the final host", () => {
+  assert.equal(pure.previewDomainFromUrl("https://www.example.com/page", "example.com"), "example.com");
+});
+
+test("previewDomainFromUrl falls back to fallbackHostname on an unparseable finalUrl", () => {
+  assert.equal(pure.previewDomainFromUrl("not a url", "example.com"), "example.com");
+  assert.equal(pure.previewDomainFromUrl("not a url", "www.example.com"), "example.com");
+  assert.equal(pure.previewDomainFromUrl(undefined, undefined), "");
+});
+
+test("clampTurnCredentialTtlSeconds caps a value above the ceiling (S04-M2, closes the 24h exposure)", () => {
+  // 86400 (the old hardcoded default) must never pass through uncapped.
+  assert.equal(pure.clampTurnCredentialTtlSeconds(86400, 60, 3600), 3600);
+});
+
+test("clampTurnCredentialTtlSeconds raises a value below the floor", () => {
+  assert.equal(pure.clampTurnCredentialTtlSeconds(5, 60, 3600), 60);
+});
+
+test("clampTurnCredentialTtlSeconds passes through an in-range value unchanged", () => {
+  assert.equal(pure.clampTurnCredentialTtlSeconds(600, 60, 3600), 600);
+});
+
+test("clampTurnCredentialTtlSeconds falls back to the ceiling (never the old 24h default) on a missing/non-numeric env value", () => {
+  assert.equal(pure.clampTurnCredentialTtlSeconds(undefined, 60, 3600), 3600);
+  assert.equal(pure.clampTurnCredentialTtlSeconds(NaN, 60, 3600), 3600);
+  assert.equal(pure.clampTurnCredentialTtlSeconds("not-a-number", 60, 3600), 3600);
+});
+
 test("evaluateFixedWindow opens a window on first hit", () => {
   const { allowed, record } = pure.evaluateFixedWindow(undefined, 1000, 60000, 5);
   assert.equal(allowed, true);

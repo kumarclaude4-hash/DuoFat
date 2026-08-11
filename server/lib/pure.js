@@ -93,6 +93,45 @@ function isBlockedPreviewHost(hostname) {
     host.endsWith(".local");
 }
 
+// S04-I3: /linkPreview labeled every result with the hostname of the
+// ORIGINALLY SUBMITTED url, even though title/imageUrl are scraped from the
+// FINAL hop of a (validated) redirect chain — so a link on trusted.example
+// that 302s to attacker.example rendered a preview card labelled
+// trusted.example carrying attacker.example's title and image. Fed
+// `finalUrl` (already checked per-hop by fetchFollowingSafeRedirects, so
+// this never surfaces an unvalidated host), this returns the domain that
+// content actually came from. Falls back to `fallbackHostname` (the
+// originally-submitted host) only if `finalUrl` fails to parse — belt and
+// suspenders, since a value that reached here already round-tripped through
+// `new URL()` in fetchFollowingSafeRedirects.
+function previewDomainFromUrl(finalUrl, fallbackHostname) {
+  try {
+    return new URL(finalUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return String(fallbackHostname || "").replace(/^www\./, "");
+  }
+}
+
+// S04-M2: `/turnCredentials` minted 24-hour Cloudflare TURN relay credentials
+// (`ttl: 86400`) — wildly longer than any call needs, and long enough that a
+// bulk-minted, resold, or leaked credential (a plain bearer username/password
+// that works from anywhere, bound to nothing) stays useful for a full day.
+// This clamps whatever TTL the caller asks for into a hard floor/ceiling that
+// holds regardless of a misconfigured env var, so a typo'd
+// `TURN_CRED_TTL_SECONDS` can never resurrect the original 24h exposure. The
+// default ceiling (3600s / 1h) intentionally matches the Android client's own
+// refresh assumption — `TurnCredentialCache.TTL_MS` (app-side) already treats
+// a cached credential as stale after 1h, so this does not change client
+// behavior, only how long a stolen credential remains valid server-side.
+function clampTurnCredentialTtlSeconds(requestedSeconds, minSeconds, maxSeconds) {
+  const min = Number.isFinite(minSeconds) ? minSeconds : 60;
+  const max = Number.isFinite(maxSeconds) ? maxSeconds : 3600;
+  const requested = Number(requestedSeconds);
+  const fallback = max; // unset/non-numeric env var -> ceiling, never the old 24h default
+  const value = Number.isFinite(requested) ? requested : fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 // ── Fixed-window rate-limit evaluation (pure) ─────────────────────────────────
 // Given the caller's current record ({ count, windowStart } | undefined) and the
 // clock, decide whether the request is allowed and return the record to persist.
@@ -456,6 +495,8 @@ module.exports = {
   validAdminUid,
   getCookie,
   isBlockedPreviewHost,
+  previewDomainFromUrl,
+  clampTurnCredentialTtlSeconds,
   evaluateFixedWindow,
   collectStaleKeys,
   pickClientIp,
