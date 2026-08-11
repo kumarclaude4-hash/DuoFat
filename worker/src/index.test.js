@@ -319,3 +319,228 @@ test('S03-H3: a missing/unknowable Content-Length cannot be used to smuggle byte
   }), env, ctx);
   assert.equal(put3.status, 507, 'the rejected/deleted upload must not have consumed any of the quota — the holder is still at 900/1000, not 1800/1000');
 });
+
+// ─── S03-M2: tokens must be uploader-bound, not just scope-bound ───────────
+// A capability token only proves the caller participates in the chat/group
+// that owns the key (verifyMediaToken has no concept of "whose media this
+// is") — every participant of a conversation can mint a valid write/delete
+// token for any key inside it, including one another participant uploaded.
+// These tests assert the Worker itself closes that gap at the object layer.
+
+test('S03-M2: a different chat participant with a valid write token cannot overwrite media they did not upload', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const attacker = 'user-bob'; // also a participant of the same chat — has a legitimately-minted token
+
+  const key = `media/${CHAT_ID}/photo.jpg`;
+  const putToken1 = await mintToken('write', key, uploader);
+  const put1 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken1}`, 'Content-Length': '10' },
+    body: new Uint8Array(10),
+  }), env, ctx);
+  assert.equal(put1.status, 200, await put1.clone().text());
+
+  // Bob's token is entirely genuine — correctly signed, correct op, correct
+  // key, unexpired — it is only bound to the wrong holder for this object.
+  const putToken2 = await mintToken('write', key, attacker);
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken2}`, 'Content-Length': '20' },
+    body: new Uint8Array(20),
+  }), env, ctx);
+  assert.equal(put2.status, 403, await put2.clone().text());
+
+  // The original bytes must be untouched — no swap occurred.
+  const head = await env.HOT_BUCKET.head(key);
+  assert.equal(head.size, 10, 'the object must be unchanged after the rejected overwrite attempt');
+});
+
+test('S03-M2: the original uploader may still overwrite their own object', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const key = `media/${CHAT_ID}/photo.jpg`;
+
+  const putToken1 = await mintToken('write', key, uploader);
+  await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken1}`, 'Content-Length': '10' },
+    body: new Uint8Array(10),
+  }), env, ctx);
+
+  const putToken2 = await mintToken('write', key, uploader);
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken2}`, 'Content-Length': '20' },
+    body: new Uint8Array(20),
+  }), env, ctx);
+  assert.equal(put2.status, 200, await put2.clone().text());
+
+  const head = await env.HOT_BUCKET.head(key);
+  assert.equal(head.size, 20, 'the same uploader must be able to overwrite their own object');
+});
+
+test('S03-M2: a brand-new key (no existing object) may be written by any holder with a valid scope-bound token', async () => {
+  const env = makeEnv();
+  const key = `media/${CHAT_ID}/brand-new.jpg`;
+  const token = await mintToken('write', key, 'user-anyone');
+  const put = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Length': '5' },
+    body: new Uint8Array(5),
+  }), env, ctx);
+  // Nothing exists yet at this key, so there is no prior uploader to protect —
+  // the ownership check must only ever block overwriting SOMEONE ELSE's
+  // existing object, never the initial upload itself.
+  assert.equal(put.status, 200, await put.clone().text());
+});
+
+test('S03-M2: a different chat participant with a valid delete token cannot delete R2-tier media they did not upload', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const attacker = 'user-bob';
+  const key = `media/${CHAT_ID}/voicemsg.m4a`;
+
+  const putToken = await mintToken('write', key, uploader);
+  await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken}`, 'Content-Length': '10' },
+    body: new Uint8Array(10),
+  }), env, ctx);
+
+  const deleteToken = await mintToken('delete', key, attacker);
+  const del = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteToken}` },
+  }), env, ctx);
+  assert.equal(del.status, 403, await del.clone().text());
+
+  // The object must still exist — the delete must never have happened.
+  const head = await env.HOT_BUCKET.head(key);
+  assert.notEqual(head, null, 'the object must still exist after the rejected delete attempt');
+});
+
+test('S03-M2: the original uploader may still delete their own R2-tier object', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const key = `media/${CHAT_ID}/voicemsg.m4a`;
+
+  const putToken = await mintToken('write', key, uploader);
+  await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken}`, 'Content-Length': '10' },
+    body: new Uint8Array(10),
+  }), env, ctx);
+
+  const deleteToken = await mintToken('delete', key, uploader);
+  const del = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteToken}` },
+  }), env, ctx);
+  assert.equal(del.status, 200, await del.clone().text());
+  assert.equal(await env.HOT_BUCKET.head(key), null, 'the uploader\'s own delete must actually remove the object');
+});
+
+test('S03-M2: a different chat participant with a valid delete token cannot delete B2 (cold-tier) media they did not upload', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const attacker = 'user-bob';
+  const key = `media/${CHAT_ID}/coldfile.jpg`;
+
+  // Simulate an object that has already tiered to B2: nothing in R2 (the
+  // Worker's cold-tier branch is only reached when `HOT_BUCKET.head()` misses),
+  // and stub the global `fetch` that aws4fetch's AwsClient wraps, so a HEAD on
+  // the B2 URL returns the migrated object's carried-over uploader tag
+  // (`x-amz-meta-uploader` — see the `scheduled()` migration handler, which
+  // copies this from R2's customMetadata.uploader specifically for this check).
+  const realFetch = globalThis.fetch;
+  let deleteCalled = false;
+  globalThis.fetch = async (input) => {
+    const req = input instanceof Request ? input : new Request(input);
+    if (req.method === 'HEAD') {
+      return new Response(null, { status: 200, headers: { 'x-amz-meta-uploader': uploader } });
+    }
+    if (req.method === 'DELETE') {
+      deleteCalled = true;
+      return new Response(null, { status: 204 });
+    }
+    return realFetch(input);
+  };
+
+  try {
+    const deleteToken = await mintToken('delete', key, attacker);
+    const del = await worker.fetch(new Request(`https://worker.example/${key}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${deleteToken}` },
+    }), env, ctx);
+    assert.equal(del.status, 403, await del.clone().text());
+    assert.equal(deleteCalled, false, 'the B2 DELETE must never be issued once ownership fails the HEAD check');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('S03-M2: the original uploader may still delete their own B2 (cold-tier) object', async () => {
+  const env = makeEnv();
+  const uploader = 'user-alice';
+  const key = `media/${CHAT_ID}/coldfile.jpg`;
+
+  const realFetch = globalThis.fetch;
+  let deleteCalled = false;
+  globalThis.fetch = async (input) => {
+    const req = input instanceof Request ? input : new Request(input);
+    if (req.method === 'HEAD') {
+      return new Response(null, { status: 200, headers: { 'x-amz-meta-uploader': uploader } });
+    }
+    if (req.method === 'DELETE') {
+      deleteCalled = true;
+      return new Response(null, { status: 204 });
+    }
+    return realFetch(input);
+  };
+
+  try {
+    const deleteToken = await mintToken('delete', key, uploader);
+    const del = await worker.fetch(new Request(`https://worker.example/${key}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${deleteToken}` },
+    }), env, ctx);
+    assert.equal(del.status, 200, await del.clone().text());
+    assert.equal(deleteCalled, true, 'the uploader\'s own delete must actually reach the B2 DELETE call');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('S03-M2: a B2 (cold-tier) object with no carried-over uploader tag (pre-S3-11 migration) may still be deleted by any holder with a valid scope-bound token', async () => {
+  const env = makeEnv();
+  const key = `media/${CHAT_ID}/legacycoldfile.jpg`;
+
+  const realFetch = globalThis.fetch;
+  let deleteCalled = false;
+  globalThis.fetch = async (input) => {
+    const req = input instanceof Request ? input : new Request(input);
+    if (req.method === 'HEAD') {
+      // No x-amz-meta-uploader header at all — this object predates the
+      // migration fix that started carrying the uploader tag to B2.
+      return new Response(null, { status: 200, headers: {} });
+    }
+    if (req.method === 'DELETE') {
+      deleteCalled = true;
+      return new Response(null, { status: 204 });
+    }
+    return realFetch(input);
+  };
+
+  try {
+    const deleteToken = await mintToken('delete', key, 'user-anyone');
+    const del = await worker.fetch(new Request(`https://worker.example/${key}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${deleteToken}` },
+    }), env, ctx);
+    assert.equal(del.status, 200, await del.clone().text());
+    assert.equal(deleteCalled, true, 'an untagged legacy object must not be permanently undeletable');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
