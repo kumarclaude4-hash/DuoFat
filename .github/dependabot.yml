@@ -1,0 +1,69 @@
+# SC-09 — automated dependency update surveillance.
+#
+# Dependabot opens PRs when a tracked dependency has a newer or security-fixed
+# version. It covers every ecosystem this repo actually ships or builds with:
+# the GitHub Actions in the workflows (kept in lockstep with the SC-08 SHA
+# pins — Dependabot updates both the SHA and the `# vX` comment together), the
+# Gradle/Android app, and each Node service. Grouping minor+patch bumps keeps
+# the PR volume reviewable while still surfacing majors individually.
+version: 2
+updates:
+  # GitHub Actions used across all workflows (SC-08 SHA pins).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+
+  # Android app (root build.gradle + app/build.gradle).
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      gradle-minor-patch:
+        update-types: [minor, patch]
+
+  # Push/relay server.
+  - package-ecosystem: npm
+    directory: "/server"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      server-minor-patch:
+        update-types: [minor, patch]
+
+  # Cloudflare Worker (media broker).
+  - package-ecosystem: npm
+    directory: "/worker"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      worker-minor-patch:
+        update-types: [minor, patch]
+
+  # Firebase Cloud Functions.
+  - package-ecosystem: npm
+    directory: "/functions"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      functions-minor-patch:
+        update-types: [minor, patch]
+
+  # Firestore rules test harness.
+  - package-ecosystem: npm
+    directory: "/firestore-tests"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      firestore-tests-minor-patch:
+        update-types: [minor, patch]

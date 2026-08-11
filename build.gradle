@@ -13,6 +13,22 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
+
+        // SC-06: JitPack builds artifacts on demand from mutable Git refs, so a
+        // compromised or typo-squatted repo there could serve a malicious build
+        // for ANY coordinate if JitPack is left unscoped in the repository list.
+        // Restrict it to the only groups actually resolved from it
+        // (`com.github.*`, e.g. com.github.chrisbanes:PhotoView) via a content
+        // filter. Every other dependency — including all androidx/Firebase/Google
+        // artifacts — can then only ever be served by google()/mavenCentral(),
+        // which are declared first and are content-addressed. glide's real
+        // coordinates live on Maven Central and resolve there (declared above),
+        // so they never reach JitPack.
+        maven {
+            url 'https://jitpack.io'
+            content {
+                includeGroupByRegex 'com\\.github\\..*'
+            }
+        }
     }
 }
