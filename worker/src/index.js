@@ -63,23 +63,35 @@ function corsHeaders() {
   };
 }
 
-// ─── Authentication ───────────────────────────────────────────────────────────
-// Set via: npx wrangler secret put WORKER_SECRET
-// All data-plane and stats requests must include:
-//   Authorization: Bearer <WORKER_SECRET>
+// ─── Operator /stats authentication ─────────────────────────────────────────
+// Set via: npx wrangler secret put STATS_SECRET
+// The operator-only /stats view requires:
+//   Authorization: Bearer <STATS_SECRET>
 // Health check is intentionally unauthenticated.
-// FAIL CLOSED if WORKER_SECRET is unset — a missing secret must never widen
-// access. (Previously this fell back to "open mode", which meant a deploy
-// that forgot to set the secret silently exposed every user's media with
-// zero authentication. Local dev should set a throwaway WORKER_SECRET via
-// `.dev.vars` / `wrangler secret put` rather than relying on an open mode.)
-async function isAuthorized(request, env) {
-  if (!env.WORKER_SECRET) {
-    console.error('WORKER_SECRET is not configured — denying all requests (fail closed)');
+//
+// S08-H1: this gate deliberately consumes STATS_SECRET, NOT the historical
+// WORKER_SECRET. WORKER_SECRET was compiled into every released APK
+// (app/build.gradle BuildConfig), so any published release leaked it and it
+// must be treated as a public value. It no longer authorizes anything: the
+// media data plane moved to per-object capability tokens (verifyMediaToken,
+// SEC-A01), and /stats — the last consumer — now requires a distinct
+// operator-only secret that was never shipped to a client. A value recovered
+// from any APK therefore opens nothing here, independent of whether the
+// operator has rotated the old WORKER_SECRET yet (that rotation is still a
+// tracked runbook item; this change means the leak is dead even if it lags).
+//
+// FAIL CLOSED if STATS_SECRET is unset — a missing secret must never widen
+// access. (Previously the shared secret fell back to "open mode", silently
+// exposing the stats view; that is gone.) Local dev should set a throwaway
+// STATS_SECRET via `.dev.vars` / `wrangler secret put` rather than relying on
+// any open mode.
+async function isStatsAuthorized(request, env) {
+  if (!env.STATS_SECRET) {
+    console.error('STATS_SECRET is not configured — denying /stats (fail closed)');
     return false;
   }
   const supplied = request.headers.get('Authorization') ?? '';
-  const expected = `Bearer ${env.WORKER_SECRET}`;
+  const expected = `Bearer ${env.STATS_SECRET}`;
   // Use constant-time comparison to prevent timing-oracle attacks that could
   // recover the secret byte-by-byte. JS string === short-circuits on the first
   // differing character, leaking secret length and content via response time.
@@ -354,13 +366,15 @@ export default {
       return json({ status: 'ok', service: 'duoshield-storage' });
     }
 
-    // ── Stats endpoint (admin view) — gated by the shared WORKER_SECRET ───────
+    // ── Stats endpoint (admin view) — gated by the operator-only STATS_SECRET ─
     // /stats is an operator-only view, not a per-user object operation, so it
-    // keeps the shared-secret bearer check. The data plane (GET/PUT/DELETE on an
-    // object key) does NOT use this secret — it requires a per-object capability
-    // token (verifyMediaToken) minted by the push server. See SEC-A01 below.
+    // keeps a shared-secret bearer check — but against STATS_SECRET, a secret
+    // that was never shipped to a client, NOT the APK-leaked WORKER_SECRET
+    // (S08-H1). The data plane (GET/PUT/DELETE on an object key) does NOT use
+    // any shared secret — it requires a per-object capability token
+    // (verifyMediaToken) minted by the push server. See SEC-A01 below.
     if (url.pathname === '/stats') {
-      if (!await isAuthorized(request, env)) {
+      if (!await isStatsAuthorized(request, env)) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status:  401,
           headers: { 'Content-Type': 'application/json', ...corsHeaders() },
