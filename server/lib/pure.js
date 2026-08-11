@@ -132,6 +132,33 @@ function clampTurnCredentialTtlSeconds(requestedSeconds, minSeconds, maxSeconds)
   return Math.min(max, Math.max(min, value));
 }
 
+// S06-L1: /duress-lock's nonce-expiry check used to be
+// `new Date() > new Date(expiresAt.toDate ? expiresAt.toDate() : expiresAt)`
+// inline inside the Firestore transaction, with no test coverage. Two ways
+// that failed: a missing `expiresAt` threw a TypeError with no `.status`,
+// which surfaced as a 500 that AccountLockWorker retries forever
+// (5xx == retryable); a value `Date` cannot parse compared against
+// `Invalid Date` as `false`, so the nonce was treated as NOT expired —
+// fail-open, valid indefinitely. `_duressNonces` docs are Admin-SDK-only
+// (never client-writable), so today the only way to hit either path is
+// corrupted or hand-edited data — but the fix is extracted to a pure,
+// directly-testable function precisely because the surrounding code is
+// otherwise carefully fail-closed and this is the one path that wasn't.
+function resolveNonceExpiry(expiresAt) {
+  if (expiresAt && typeof expiresAt.toDate === "function") return expiresAt.toDate();
+  if (expiresAt instanceof Date) return expiresAt;
+  return null; // missing, string, number, or otherwise malformed — untrusted
+}
+
+// Fail-closed nonce validity: usable only if it names a uid AND its expiry
+// resolves to a real, non-NaN Date AND that Date has not yet passed. Any
+// other shape (no uid, no/garbage expiresAt) must be invalid, never
+// "not yet expired".
+function isNonceUsable(nonceUid, expiresAt, now) {
+  const exp = resolveNonceExpiry(expiresAt);
+  return Boolean(nonceUid) && exp instanceof Date && !Number.isNaN(exp.getTime()) && now <= exp.getTime();
+}
+
 // ── Fixed-window rate-limit evaluation (pure) ─────────────────────────────────
 // Given the caller's current record ({ count, windowStart } | undefined) and the
 // clock, decide whether the request is allowed and return the record to persist.
@@ -497,6 +524,8 @@ module.exports = {
   isBlockedPreviewHost,
   previewDomainFromUrl,
   clampTurnCredentialTtlSeconds,
+  resolveNonceExpiry,
+  isNonceUsable,
   evaluateFixedWindow,
   collectStaleKeys,
   pickClientIp,

@@ -206,7 +206,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ──────────────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -3434,7 +3434,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── /requestLockNonce ─────────────────────────────────────────────────────
+  // ── /requestLockNonce ──────────────────────────────────────────────────────
   //
   // Issues a single-use, uid-bound, 24-hour nonce for AccountLockWorker to
   // consume later via /duress-lock. Called by DuressManager on the background
@@ -3623,8 +3623,7 @@ http.createServer((req, res) => {
             // a permanently broken nonce forever. An unparseable string compared
             // against `Invalid Date` yields `false`, so the nonce was treated as
             // NOT expired: valid indefinitely, fail-open.
-            const exp = expiresAt?.toDate?.() ?? (expiresAt instanceof Date ? expiresAt : null);
-            if (!nonceUid || !exp || Number.isNaN(exp.getTime()) || Date.now() > exp.getTime()) {
+            if (!pure.isNonceUsable(nonceUid, expiresAt, Date.now())) {
               // Expired or malformed — delete to clean up and signal the client
               // not to retry. Deleting on this path is also what stops a broken
               // doc from lingering (S06-M2).
@@ -4109,7 +4108,13 @@ http.createServer((req, res) => {
           eligible:   true,
           enrolledAt: FieldValue.serverTimestamp(),
         }, { merge: true });
-        console.log(`[admin] duress enrollment granted: uid=${uid}`);
+        // S06-M3/S05-M1: uidTag, never the raw uid. A cleartext uid next to
+        // "duress enrollment" is a durable, plaintext, timestamped record of
+        // which account has the duress feature enrolled at all — a precursor
+        // signal for the exact event (S06-M3) this feature exists to make
+        // undetectable, sitting outside Firestore's access controls in
+        // whatever log aggregator the server ships to.
+        console.log(`[admin] duress enrollment granted: uid=${uidTag(uid)}`);
 
         db.collection("adminAuditLog").add({
           action:  "duress_enrolled",
@@ -4156,7 +4161,8 @@ http.createServer((req, res) => {
           return;
         }
         await ref.update({ eligible: false, revokedAt: FieldValue.serverTimestamp() });
-        console.log(`[admin] duress enrollment revoked: uid=${uid}`);
+        // S06-M3/S05-M1: same redaction as the grant path above.
+        console.log(`[admin] duress enrollment revoked: uid=${uidTag(uid)}`);
 
         db.collection("adminAuditLog").add({
           action:  "duress_revoked",

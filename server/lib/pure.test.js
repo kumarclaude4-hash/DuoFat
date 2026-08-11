@@ -150,6 +150,68 @@ test("clampTurnCredentialTtlSeconds falls back to the ceiling (never the old 24h
   assert.equal(pure.clampTurnCredentialTtlSeconds("not-a-number", 60, 3600), 3600);
 });
 
+// Minimal stand-in for a Firestore Timestamp: exposes .toDate() like the real
+// admin.firestore.Timestamp does, without requiring the Firestore SDK in a
+// pure unit test.
+function fakeTimestamp(date) {
+  return { toDate: () => date };
+}
+
+test("resolveNonceExpiry unwraps a Firestore-Timestamp-shaped value via .toDate()", () => {
+  const d = new Date("2030-01-01T00:00:00Z");
+  assert.deepEqual(pure.resolveNonceExpiry(fakeTimestamp(d)), d);
+});
+
+test("resolveNonceExpiry passes through a plain Date unchanged", () => {
+  const d = new Date("2030-01-01T00:00:00Z");
+  assert.equal(pure.resolveNonceExpiry(d), d);
+});
+
+test("resolveNonceExpiry returns null for a missing/malformed expiresAt (S06-L1 — must not throw)", () => {
+  assert.equal(pure.resolveNonceExpiry(undefined), null);
+  assert.equal(pure.resolveNonceExpiry(null), null);
+  assert.equal(pure.resolveNonceExpiry("not-a-date"), null);
+  assert.equal(pure.resolveNonceExpiry(1234567890), null);
+  assert.equal(pure.resolveNonceExpiry({}), null);
+});
+
+test("isNonceUsable accepts a Firestore Timestamp expiry that has not yet passed", () => {
+  const now = Date.now();
+  const future = fakeTimestamp(new Date(now + 60000));
+  assert.equal(pure.isNonceUsable("uid-1", future, now), true);
+});
+
+test("isNonceUsable rejects an expiry that has already passed", () => {
+  const now = Date.now();
+  const past = fakeTimestamp(new Date(now - 1000));
+  assert.equal(pure.isNonceUsable("uid-1", past, now), false);
+});
+
+test("isNonceUsable rejects a missing uid even with a valid future expiry", () => {
+  const now = Date.now();
+  const future = fakeTimestamp(new Date(now + 60000));
+  assert.equal(pure.isNonceUsable(undefined, future, now), false);
+  assert.equal(pure.isNonceUsable(null, future, now), false);
+  assert.equal(pure.isNonceUsable("", future, now), false);
+});
+
+test("isNonceUsable fails CLOSED on a missing expiresAt, never throws (S06-L1 — old code threw a bare TypeError here)", () => {
+  const now = Date.now();
+  assert.doesNotThrow(() => pure.isNonceUsable("uid-1", undefined, now));
+  assert.equal(pure.isNonceUsable("uid-1", undefined, now), false);
+});
+
+test("isNonceUsable fails CLOSED on an unparseable expiresAt string, never fail-open (S06-L1 — old code compared against Invalid Date and returned true)", () => {
+  const now = Date.now();
+  assert.equal(pure.isNonceUsable("uid-1", "not-a-real-date", now), false);
+});
+
+test("isNonceUsable treats the exact expiry instant as still usable (inclusive boundary)", () => {
+  const now = Date.now();
+  const exact = fakeTimestamp(new Date(now));
+  assert.equal(pure.isNonceUsable("uid-1", exact, now), true);
+});
+
 test("evaluateFixedWindow opens a window on first hit", () => {
   const { allowed, record } = pure.evaluateFixedWindow(undefined, 1000, 60000, 5);
   assert.equal(allowed, true);
