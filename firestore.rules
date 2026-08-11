@@ -6,7 +6,33 @@ service cloud.firestore {
     // partner display info, FCM token delivery). Only the owner can write.
     match /users/{uid} {
       allow read:  if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == uid;
+
+      // S01-L2: `write` (create+update+delete) let the owner put arbitrary
+      // fields/values into a doc every authenticated user can read (the line
+      // above) — same class of world-readable content-injection primitive as
+      // S01-M2 on identities/{userId}, but here on users/{uid}. The client only
+      // ever writes displayName/photoUrl/fcmToken/platform/updatedAt (ContactManager,
+      // SettingsActivity, FcmTokenHelper, SeedPhraseDisplayActivity — grepped every
+      // `collection("users").document(...)` client call site); allow-listing those
+      // and bounding their shapes closes the arbitrary-broadcast surface without
+      // touching any real write path. Delete is left unconstrained (no
+      // request.resource on delete, and no client code deletes this doc) to
+      // preserve prior "owner can write" semantics for that operation.
+      allow create, update: if request.auth != null && request.auth.uid == uid
+                    && request.resource.data.keys().hasOnly(
+                         ['displayName', 'fcmToken', 'platform', 'photoUrl', 'updatedAt'])
+                    && (!('displayName' in request.resource.data)
+                        || (request.resource.data.displayName is string
+                            && request.resource.data.displayName.size() <= 200))
+                    && (!('fcmToken' in request.resource.data)
+                        || (request.resource.data.fcmToken is string
+                            && request.resource.data.fcmToken.size() <= 4096))
+                    && (!('photoUrl' in request.resource.data)
+                        || (request.resource.data.photoUrl is string
+                            && request.resource.data.photoUrl.size() <= 2000))
+                    && (!('platform' in request.resource.data)
+                        || request.resource.data.platform is string);
+      allow delete: if request.auth != null && request.auth.uid == uid;
 
       // public_keys subcollection: owner can write their own bundle.
       // Any authenticated user can UPDATE (not create/delete) the bundle to
@@ -192,11 +218,28 @@ service cloud.firestore {
       //      than merely immutable-after-the-fact.
       //   3. createdBy must itself be in members, matching what mediaScope.js
       //      requires of a well-formed group.
+      //
+      // S01-L1: the ID-squatting/namespace-collision half of this finding is the
+      // `!exists(chats/$(groupId))` check above (S03-H1). What was still missing —
+      // "full shape validation" per BUG_TRACKER — is validated here: the field set a
+      // client may set at create time (CreateGroupActivity: name/createdBy/createdAt/
+      // members — grepped every `collection("groups").document(...).set(...)` call
+      // site; `lastActivity` is only ever set later via `update`, never at create) and
+      // basic shape/size bounds on each, so a group document can't be abused as an
+      // arbitrary-content primitive or an unbounded-membership list.
       allow create: if request.auth != null
                     && request.auth.uid in request.resource.data.members
                     && !exists(/databases/$(database)/documents/chats/$(groupId))
                     && request.resource.data.createdBy == request.auth.uid
-                    && request.resource.data.createdBy in request.resource.data.members;
+                    && request.resource.data.createdBy in request.resource.data.members
+                    && request.resource.data.keys().hasOnly(
+                         ['name', 'createdBy', 'createdAt', 'members'])
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0
+                    && request.resource.data.name.size() <= 200
+                    && request.resource.data.members is list
+                    && request.resource.data.members.size() >= 1
+                    && request.resource.data.members.size() <= 256;
       allow read:   if request.auth != null
                     && request.auth.uid in resource.data.members;
       // createdBy is immutable after creation. Without this, any member could
@@ -226,15 +269,40 @@ service cloud.firestore {
         // auth UID, and that the message is marked encrypted. Without these constraints a
         // member could write a forged sender or send a plaintext (isEncrypted:false) message
         // that bypasses decryption on the receiver.
+        //
+        // S01-M1: membership is evaluated only at write time via get() on the group doc.
+        // Because member removal (the creator-only `members` edit above) and a message
+        // write are independent operations, a member who is *about to be* removed can race
+        // the write until the members array commits. This is an inherent TOCTOU of every
+        // get()-based membership check in this file, not fixable from within a single rule
+        // evaluation (Firestore rules have no cross-request locking) — accepted and
+        // documented per the audit's own recommendation (audit/SESSION-01-FIRESTORE.md
+        // S01-M1), rather than papered over. What IS fixable here is the other half of the
+        // finding: no cap existed on message size, so any member could bulk-write
+        // oversized documents (cost/DoS against the group and the server's
+        // collectionGroup("messages") listener). `text` carries the ciphertext (or "" for
+        // media/album messages — GroupChatActivity:579,997,1076) and is capped well above
+        // any real encrypted chat payload but far below Firestore's 1 MiB document limit.
         allow create: if request.auth != null
                       && request.auth.uid in
                          get(/databases/$(database)/documents/groups/$(groupId)).data.members
                       && request.resource.data.sender == request.auth.uid
-                      && request.resource.data.isEncrypted == true;
+                      && request.resource.data.isEncrypted == true
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() < 100000;
         // Messages are append-only — no update allowed (prevents silent edit injection).
         // delete is restricted to the original sender so they can retract their own messages.
+        //
+        // S01-M4: delete previously checked only `sender == auth.uid`, with no re-check of
+        // current group membership (unlike read/create above, which both call
+        // get(groups/$(groupId)).data.members). A member removed from the group after
+        // sending could still delete their own historical messages post-departure —
+        // selective expunging of message history the remaining members can no longer
+        // prevent. Mirrors the read/create membership guard.
         allow delete: if request.auth != null
-                      && resource.data.sender == request.auth.uid;
+                      && resource.data.sender == request.auth.uid
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/groups/$(groupId)).data.members;
       }
 
       // Group key distribution: each member's encrypted copy of the group key.
@@ -370,12 +438,23 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.auth.uid == userId
                     && request.resource.data.uid == userId;
+      // S01-M2: `uid`/`identityPubKeyHash` were pinned (good — the anti-takeover
+      // continuity check) but nothing constrained any OTHER field the owner could add.
+      // identities/{userId} is world-readable (line above, the contact-lookup oracle),
+      // so an unconstrained update let the owner publish arbitrary attacker-controlled
+      // content into a globally-readable doc (stored-content injection / metadata
+      // pollution). The client only ever merge-writes `uid` itself (registerIdentity,
+      // SeedPhraseDisplayActivity.java) — `identityPubKeyHash` is written exclusively by
+      // the server's Admin SDK at /mintToken — so the full legitimate field set for a
+      // client-issued update is exactly these two, and no client update ever legitimately
+      // introduces a new key.
       allow update: if request.auth != null
                     && request.auth.uid == userId
                     && resource.data.uid == userId
                     && request.resource.data.uid == userId
                     && request.resource.data.identityPubKeyHash
-                       == resource.data.identityPubKeyHash;
+                       == resource.data.identityPubKeyHash
+                    && request.resource.data.keys().hasOnly(['uid', 'identityPubKeyHash']);
       allow delete: if false;
     }
 
@@ -515,7 +594,7 @@ service cloud.firestore {
     // Duress lock nonces: server-managed, single-use tokens that allow
     // AccountLockWorker to write accountLock/{uid} via the push server's
     // /duress-lock endpoint after a device wipe. Stored and consumed entirely
-    // by the server's Admin SDK — no client should ever read or write these.
+    // by the server's Admin SDK �� no client should ever read or write these.
     match /_duressNonces/{nonce} {
       allow read, write: if false;
     }
@@ -531,9 +610,27 @@ service cloud.firestore {
     // Backup event log: write-only for the owning user; no client-side reads.
     // Logs backup_started / backup_complete / backup_failed events for
     // server-side monitoring.  Clients never need to read these back.
+    // S01-M3: only `uid` ownership was checked — no cap on document count, no size
+    // bound, no field-shape validation. An authenticated attacker could create
+    // unbounded backup_logs/* documents as themselves (monotonic auto-IDs): a pure
+    // write-amplification / storage-cost DoS. Reads are denied so there's no
+    // confidentiality impact, but Firestore billing and any downstream log processor
+    // were exposed. Fix validates the minimal schema BackupManager.logEvent actually
+    // writes (uid, event, ts, count, optional error) and rejects anything else —
+    // defense-in-depth per the audit's own recommendation; volume itself still relies
+    // on server-side/quota controls (rules alone cannot rate-limit document count).
     match /backup_logs/{logId} {
       allow create: if request.auth != null
-                    && request.resource.data.uid == request.auth.uid;
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['uid', 'event', 'ts', 'count', 'error'])
+                    && request.resource.data.event is string
+                    && request.resource.data.event in
+                       ['backup_started', 'backup_complete', 'backup_failed', 'backup_size_warning']
+                    && request.resource.data.ts is number
+                    && request.resource.data.count is number
+                    && (!('error' in request.resource.data)
+                        || (request.resource.data.error is string
+                            && request.resource.data.error.size() < 2000));
       allow read:   if false;
       allow update: if false;
       allow delete: if false;

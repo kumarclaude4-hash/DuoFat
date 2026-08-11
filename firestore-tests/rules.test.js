@@ -95,6 +95,46 @@ describe('/users/{uid}', () => {
       asAnon().doc('users/alice').set({ displayName: 'X' })
     );
   });
+
+  // S01-L1 fix regression: `write` had no field/shape validation, so the owner
+  // could publish arbitrary content into this world-readable doc.
+  test('owner can write all allow-listed fields with valid shapes', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        fcmToken: 'tok_abc',
+        platform: 'android',
+        photoUrl: 'https://example.com/a.jpg',
+        updatedAt: Date.now(),
+      })
+    );
+  });
+
+  test('owner cannot write a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        payload: '<img src=x onerror=alert(1)>',
+      })
+    );
+  });
+
+  test('owner cannot write an oversized displayName', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'x'.repeat(500),
+      })
+    );
+  });
+
+  test('owner cannot write a non-string fcmToken', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        fcmToken: { evil: true },
+      })
+    );
+  });
 });
 
 describe('/users/{uid}/public_keys/{doc}', () => {
@@ -497,6 +537,53 @@ describe('/groups/{groupId}', () => {
     );
   });
 
+  // ── S01-L1 regression tests ────────────────────────────────────────────────
+  // "full shape validation still absent" per BUG_TRACKER — the ID-squatting half
+  // was already closed by S03-H1 above.
+
+  test('S01-L1: cannot create a group with a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_6').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: 'New Group',
+        adminOnly: true,
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with an empty name', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_7').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: '',
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with a non-string name', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_8').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: { evil: true },
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with more than 256 members', async () => {
+    const members = Array.from({ length: 257 }, (_, i) => `u${i}`);
+    members[0] = 'carol';
+    await assertFails(
+      asUser('carol').doc('groups/group_9').set({
+        members,
+        createdBy: 'carol',
+        name: 'Huge Group',
+      })
+    );
+  });
+
   test('member can update the group', async () => {
     await assertSucceeds(
       asUser('bob').doc(`groups/${GROUP_ID}`).update({ name: 'Renamed' })
@@ -560,6 +647,64 @@ describe('/groups/{groupId}/messages/{msgId}', () => {
         text: 'reply',
         isEncrypted: true,  // required by rules (F28 fix)
       })
+    );
+  });
+
+  // ── S01-M1 regression tests ────────────────────────────────────────────────
+  // No cap previously existed on message document size — a member could
+  // bulk-write oversized documents (cost/DoS). The membership TOCTOU itself is
+  // accepted per the audit's own recommendation and is not testable as a
+  // single-rule-evaluation unit test.
+
+  test('S01-M1: member cannot write an oversized group message', async () => {
+    await assertFails(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_toolong`).set({
+        sender: 'bob',
+        text: 'x'.repeat(100000),
+        isEncrypted: true,
+      })
+    );
+  });
+
+  test('S01-M1: member can still write an empty-text media message', async () => {
+    await assertSucceeds(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_media`).set({
+        sender: 'bob',
+        text: '',
+        isEncrypted: true,
+        type: 'image',
+      })
+    );
+  });
+
+  // ── S01-M4 regression tests ────────────────────────────────────────────────
+  // delete previously checked only `sender == auth.uid`, with no re-check of
+  // current membership (unlike read/create, which both call get() on the group).
+
+  test('S01-M4: sender who is still a member can delete their own message', async () => {
+    await assertSucceeds(
+      asUser('alice').doc(`groups/${GROUP_ID}/messages/msg_1`).delete()
+    );
+  });
+
+  test('S01-M4: removed ex-member cannot delete their own historical message', async () => {
+    // Carol sent msg_carol while a member, then was removed from the group.
+    await seed(`groups/${GROUP_ID}/messages/msg_carol`, {
+      sender: 'carol',
+      text: 'about to leave',
+    });
+    await seed(`groups/${GROUP_ID}`, {
+      members: ['alice', 'bob'], // carol no longer present
+      createdBy: 'alice',
+    });
+    await assertFails(
+      asUser('carol').doc(`groups/${GROUP_ID}/messages/msg_carol`).delete()
+    );
+  });
+
+  test('non-sender member cannot delete another member message', async () => {
+    await assertFails(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_1`).delete()
     );
   });
 });
@@ -948,7 +1093,7 @@ describe('/conversations/{convId} (retired)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────���───────────────────
 // RECOVERY
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1161,7 +1306,7 @@ describe('/_server_health/{doc}', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNT LOCK  (Issue 1 — one-way latch enforcement)
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────��──────────────────────────
 
 describe('/accountLock/{accountId}', () => {
   // Client create now additionally requires duressEligibility/{uid}.eligible.
@@ -1342,7 +1487,7 @@ describe('/duressEligibility/{accountId}', () => {
 // The nonce doc also holds {uid, expiresAt}, so client read access would let any
 // authenticated user enumerate which accounts have a duress trigger in flight —
 // the exact event the feature exists to make undetectable.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────��───────────────────
 
 describe('/_duressNonces/{nonce}', () => {
   const NONCE = 'a'.repeat(64);
