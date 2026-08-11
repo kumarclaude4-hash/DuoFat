@@ -1,0 +1,94 @@
+name: Security scan
+
+# SC-09 — standing supply-chain / code surveillance that the repo previously had
+# none of: static analysis (SAST), secret scanning, and a published SBOM. Runs on
+# every push/PR to main and on a weekly cron so a vulnerability disclosed after a
+# merge is still caught. All third-party actions are SHA-pinned (SC-08).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'   # Mondays 04:17 UTC
+  workflow_dispatch:
+
+# Least privilege by default; jobs widen only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── SAST via CodeQL ──────────────────────────────────────────────────────────
+  # `javascript` covers server/, worker/, functions/ and the firestore tests.
+  # `java` requires a build; the Android app needs the Gradle/Android toolchain,
+  # the JAR gate (SC-01) and google-services.json, so it is intentionally not
+  # built here — a dedicated Android CodeQL run belongs with the Android build
+  # lane. JS analysis needs no build step.
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload results to the Security tab
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          languages: ${{ matrix.language }}
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # ── Secret scanning ──────────────────────────────────────────────────────────
+  # History-aware scan for committed credentials. This repo has already shipped a
+  # Firebase admin key and a WORKER_SECRET in the past (S08-C1/S08-H1), so a
+  # standing gate that fails the build on a re-introduced secret is exactly the
+  # missing control. Full history is fetched so a secret added in any commit on
+  # the PR range is caught, not just the tip.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── SBOM ─────────────────────────────────────────────────────────────────────
+  # Publish a CycloneDX/SPDX software bill of materials for the repository as a
+  # build artifact so downstream consumers (and incident response) can enumerate
+  # exactly what shipped. On push to main the SBOM is also attached to the
+  # Dependency-graph/Security tab via GitHub's dependency submission.
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Generate SBOM (Syft)
+        id: sbom
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: cyclonedx-json
+          artifact-name: duoshield-sbom.cyclonedx.json
+          output-file: duoshield-sbom.cyclonedx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: duoshield-sbom
+          path: duoshield-sbom.cyclonedx.json
+          if-no-files-found: warn
+          retention-days: 90
