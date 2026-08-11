@@ -124,11 +124,16 @@ already corrected in `S3-09`. Not re-touched or re-described here.
 
 ## Git discipline
 
-Implementation change (`server/index.js`,
-`server/lib/adminAuditWiring.test.js`) and documentation change
-(`BUG_TRACKER.md`, this file, `START_HERE.md`, `SESSION_INDEX.md`) are
-committed separately, per protocol. `git status` / `git diff` were reviewed
-immediately before each commit to confirm no unrelated changes were staged.
+**Correction (reconciliation pass, out-of-order-session follow-up):** the
+implementation change (`server/index.js`,
+`server/lib/adminAuditWiring.test.js`) and this session's `BUG_TRACKER.md`/
+`SESSION-S3-13.md` documentation landed together in a single commit,
+`e776a1f`, not in separate commits as originally recorded here — the
+"committed separately" claim above was inaccurate and is corrected in
+place rather than silently left wrong, per protocol (source/`git log` beats
+narrative). `START_HERE.md` and `SESSION_INDEX.md` were **not** updated by
+that commit; a follow-up documentation-only commit closes that gap without
+touching `e776a1f` or any other implementation commit.
 
 ## Chain state
 
