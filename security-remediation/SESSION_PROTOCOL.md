@@ -1,5 +1,17 @@
 # SESSION PROTOCOL — read this first, every session, before anything else
 
+> **2026-08-11 tracker consolidation:** `FINDING_INDEX.md`, `MASTER_CHECKLIST.md`,
+> `REMEDIATION_PROGRESS.md`, and `RISK_REGISTER.md` are **deleted**. Every reference to them below —
+> including "the one file every session must trust" in §1 — now means
+> **[`../BUG_TRACKER.md`](../BUG_TRACKER.md)**, which holds one re-verified-from-source row per
+> finding. `FINAL_SECURITY_REPORT.md` is also deleted; it was a stale point-in-time snapshot and its
+> §8/§9 claim below that "the chain is complete, 0 open, 0 partial" is **false and superseded** —
+> `../BUG_TRACKER.md` and [`ROUND3_REMEDIATION_PLAN.md`](./ROUND3_REMEDIATION_PLAN.md) are correct:
+> Round 3 was never implemented and dozens of findings remain open. **For "what to do next," trust
+> [`START_HERE.md`](./START_HERE.md)'s `NEXT SESSION` line, not §8/§9 of this file.** Historical
+> narrative below (§0, §8's `<details>` block) is left as-is as the frozen record of what actually
+> happened; only the *forward-looking* instructions are superseded.
+
 This file exists because the program's own documents have lied about progress **three times now**,
 each time in a different way:
 
@@ -104,8 +116,9 @@ caused all three failures, and re-deriving trust after a bad session costs far m
 
 ## 1. The one file every session must trust
 
-Designate **`FINDING_INDEX.md`** as the only status source. Every other document (`REMEDIATION_PROGRESS.md`,
-`SESSION_INDEX.md`, the session logs) is a **narrative record**, useful for context, never for status.
+Designate **[`../BUG_TRACKER.md`](../BUG_TRACKER.md)** as the only status source. Every other
+document (`SESSION_INDEX.md`, the session logs) is a **narrative record**, useful for context, never
+for status.
 If a narrative disagrees with what you read in source, source wins, and you fix the narrative — not
 the other way around.
 
@@ -124,10 +137,10 @@ cut verification.
 | 1. Verify inherited state | ~15% | Steps 2–3 below, for the cluster you're about to touch only |
 | 2. Implement | ~55% | The fix itself, scoped to one cluster (see §5) |
 | 3. Verify your own work | ~20% | Step 4 below — re-read from source, run tests if they exist |
-| 4. Record | ~10% | Update `FINDING_INDEX.md` + append one session log entry — short, factual, no narrative padding |
+| 4. Record | ~10% | Update `../BUG_TRACKER.md` + append one session log entry — short, factual, no narrative padding |
 
 Do not spend budget re-reading the full audit (`../audit/`) or the full remediation history each
-session. Read only: this file, `FINDING_INDEX.md`'s rows for your cluster, and the specific source
+session. Read only: this file, `../BUG_TRACKER.md`'s rows for your cluster, and the specific source
 files your cluster touches.
 
 ---
@@ -136,7 +149,7 @@ files your cluster touches.
 
 For the specific finding IDs you're about to work on **only**:
 
-1. Read the finding's row in `FINDING_INDEX.md`.
+1. Read the finding's row in `../BUG_TRACKER.md`.
 2. If it's marked `fixed` or `fixed+runbook`, do not take that on faith. Run the smallest possible
    check that would falsify it:
    - `grep` for the vulnerable pattern the finding describes — confirm it's actually gone.
@@ -249,7 +262,7 @@ cannot be closed by an AI session in this environment. Each AI session that "att
 reports a result risks generating another false claim. Instead:
 
 - They live in `migration/MIGRATION_PLAN.md` as numbered operator steps with exact commands.
-- `FINDING_INDEX.md` marks them `fixed+runbook` (code half done) or `open` (nothing to fix in code)
+- `../BUG_TRACKER.md` marks them `fixed+runbook` (code half done) or `open` (nothing to fix in code)
   and points at the migration plan — never `fixed`.
 - A session may re-check whether an operator has completed one (e.g. re-run the `gh api` branch
   protection check) and update the disposition if it now passes — that's verification, not an
@@ -263,7 +276,7 @@ This remediation runs as a **continuous chain of bounded sessions**. Model: Clau
 session has a **hard $5 ceiling — a ceiling, not a target.** Optimize for *verified security work per
 token*.
 
-**Mandatory session start (in this order):** this file → `FINDING_INDEX.md` → the previous session's
+**Mandatory session start (in this order):** this file → `../BUG_TRACKER.md` → the previous session's
 recorded evidence → `git status --short` → `git log -3 --oneline --stat`. Then identify the exact next
 *unfinished* cluster. Never redo a finding recorded `fixed` unless current source falsifies it.
 
@@ -283,7 +296,7 @@ recorded evidence → `git status --short` → `git log -3 --oneline --stat`. Th
   security tests → affected module tests → relevant integration tests → broader suites only if cheap.
   If a toolchain is missing, mark it `BLOCKED` and fall back to source-level verification; **do not**
   provision large toolchains for low-value checks. **Never fabricate a PASS.**
-- **Record + checkpoint** — evidence, `FINDING_INDEX.md`, session log, commit, clean `git status`,
+- **Record + checkpoint** — evidence, `../BUG_TRACKER.md`, session log, commit, clean `git status`,
   next-session prompt. **Documentation is mandatory before stopping.**
 
 **Stop implementation immediately when** the finding is fixed and verified · tests pass and only docs
@@ -322,13 +335,15 @@ Run a dedicated FINAL VERIFICATION session (§9) first.
 
 ## 8. Chain state + ready-to-paste prompt for the NEXT session
 
-### ⛔ SUPERSEDED 2026-08-11 — the cluster B prompt below is HISTORICAL. Do not execute it.
+### ⛔ DOUBLY SUPERSEDED — the cluster B prompt below AND the "chain complete" claim after it are HISTORICAL. Do not execute either.
 
-**Round 2 cluster B is DONE** (`S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` — code in
-`48a3f7e`/PR #57, plus `7653515`). Cluster C is done. **All 116 findings in `FINDING_INDEX.md` now
-hold exactly one disposition: 0 open, 0 partial.** The §9 FINAL VERIFICATION session has been run
-(2026-08-11) and produced [`FINAL_SECURITY_REPORT.md`](./FINAL_SECURITY_REPORT.md), which is now the
-authoritative state document.
+**This section's own claim that "all 116 findings hold exactly one disposition, 0 open, 0 partial" was
+itself false and was caught by the later reconciliation pass that produced
+[`ROUND3_REMEDIATION_PLAN.md`](./ROUND3_REMEDIATION_PLAN.md).** `FINAL_SECURITY_REPORT.md` (referenced
+below) has been deleted — it was the stale snapshot that made this claim. The real state, re-verified
+2026-08-11 and current in [`../BUG_TRACKER.md`](../BUG_TRACKER.md): Rounds 1–2 are code-complete and
+server-test-verified; **Round 3 was never implemented**, and dozens of findings remain `open`. Follow
+[`START_HERE.md`](./START_HERE.md)'s `NEXT SESSION` line, not the "no next cluster" claim below.
 
 **Baseline correction — use this number, not the 83/84 one below:** `cd server && npm test` →
 **153 tests / 153 pass / 0 fail**, verified 2026-08-11 and cross-checked per-suite
@@ -457,20 +472,23 @@ highest-value regression/security tests available; confirms no required finding 
 then produces the final report. Marking the chain COMPLETE in the same session that fixes the last
 finding is forbidden — that is the exact shape of the earlier false closures in §0.
 
-> **That session was run on 2026-08-11** (correctly, in a session that fixed no findings) and produced
-> [`FINAL_SECURITY_REPORT.md`](./FINAL_SECURITY_REPORT.md). Its conclusion, stated deliberately and not
-> rounded up: **code remediation is complete and verified to the limit of this environment — but the
-> program is NOT signed off and the system is NOT to be considered remediated in production**, because
-> the leaked GCP admin key is un-revoked and the Android client has never been compiled. That session
-> also corrected three stale trackers (`REMEDIATION_PROGRESS.md`, `SESSION_INDEX.md`, §8 above) that
-> still described `S07-C1` as open and Rounds 2–3 as never started.
+> **That session was run on 2026-08-11 and produced a report that itself required a same-day
+> correction** (see the §8 notice above) — it had counted the *intent* column as a *result*. Its
+> corrected conclusion, and the one that stands: **Rounds 1–2 are code-complete and verified to the
+> limit of this environment; Round 3 (the bulk of the findings) was never implemented.** That report
+> has since been deleted as a stale snapshot — **[`../BUG_TRACKER.md`](../BUG_TRACKER.md) is now the
+> living record**, and [`ROUND3_REMEDIATION_PLAN.md`](./ROUND3_REMEDIATION_PLAN.md) schedules the
+> remaining work across 20 sessions. The program is **NOT signed off** and the system is **NOT** to be
+> considered remediated in production — the leaked GCP admin key is un-revoked, the Android client has
+> never been compiled, and most findings remain open.
 >
-> `FINAL_SIGNOFF.md` remains **PENDING** by design. Sign it only after the §3 operator actions in the
-> final report are done and an operator has built and released the APK together with the server.
+> `FINAL_SIGNOFF.md` remains **PENDING** by design. Sign it only after Round 3 is genuinely
+> implemented and verified, the operator actions are done, and an operator has built and released the
+> APK together with the server.
 
 
 Unchanged from `REMEDIATION_PLAN.md`'s Round 3 hard stop: every one of the 116 findings has exactly
-one disposition in `FINDING_INDEX.md`, no Critical/High remains open, `FINAL_SECURITY_REPORT.md` and
-`FINAL_SIGNOFF.md` are written — and each of those documents must itself pass the §4 test (written
-from source, not from the trackers) before it's trusted. Number of sessions to get there is
-irrelevant; a false "done" is worse than a slow true one.
+one disposition in `../BUG_TRACKER.md`, no Critical/High remains open, and a final report + sign-off
+are written — each must itself pass the §4 test (written from source, not from the trackers) before
+it's trusted. Number of sessions to get there is irrelevant; a false "done" is worse than a slow true
+one.

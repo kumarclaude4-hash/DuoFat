@@ -1,5 +1,13 @@
 # TRUST BOUNDARIES — revalidation map
 
+> **2026-08-11 tracker consolidation note:** `../RISK_REGISTER.md` referenced below is deleted;
+> accepted-risk items now live in [`../../BUG_TRACKER.md`](../../BUG_TRACKER.md). This table's
+> "modified"/"verified" marks describe **Round 1–2 work only** (server-test-verified) — Round 3 is
+> still open per `../ROUND3_REMEDIATION_PLAN.md`, so several boundaries below (notably TB-2/TB-4
+> rows that cite Round-3 finding IDs like `S01-M1..M4`) are **more finished on paper here than in
+> current source**. Cross-check any specific finding ID against `../../BUG_TRACKER.md` before relying
+> on this table's per-boundary verdict.
+
 Maps the ten trust boundaries from `../../audit/SESSION-00-RECON.md` / `ARCHITECTURE.md` to their
 remediation state. Each boundary is marked:
 
@@ -7,7 +15,7 @@ remediation state. Each boundary is marked:
 - **modified** — remediation changed the enforcement here; re-verified after the change.
 - **runbook** — code change lands in-repo; an out-of-band console action completes it (tracked in
   `../migration/MIGRATION_PLAN.md`).
-- **accepted** — a residual property consciously carried (see `../RISK_REGISTER.md`).
+- **accepted** — a residual property consciously carried (see `../../BUG_TRACKER.md`).
 
 No boundary is left `blocked`.
 

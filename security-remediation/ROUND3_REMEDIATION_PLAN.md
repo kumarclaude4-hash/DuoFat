@@ -4,7 +4,15 @@ Status: **PLAN (intent, not result).** Drafted 2026-08-11 after the FINAL_SIGNOF
 established that Rounds 1–2 are code-complete and server-test-verified, but **Round 3 was never
 implemented**. This document schedules the remaining work. It creates **no** `fixed` disposition;
 per `SESSION_PROTOCOL.md` §0–§1, a row moves to `fixed` only in its own session, only after the
-verification named here actually runs, and only recorded in `FINDING_INDEX.md`.
+verification named here actually runs, and only recorded in **[`../BUG_TRACKER.md`](../BUG_TRACKER.md)**
+(the successor to the deleted `FINDING_INDEX.md`/`MASTER_CHECKLIST.md`/`REMEDIATION_PROGRESS.md`/
+`RISK_REGISTER.md`).
+
+> **2026-08-11 re-verification note:** a fresh source pass for the tracker consolidation found some of
+> this plan's "open" assumptions were already stale — e.g. `S08-H1` (WORKER_SECRET in the APK) is now
+> fixed in source even though it wasn't yet reflected here. Before starting any session below, check
+> that finding's row in `../BUG_TRACKER.md` first; some of the 20 sessions may already be partially or
+> fully satisfied.
 
 ## Scope
 
@@ -16,7 +24,7 @@ verification named here actually runs, and only recorded in `FINDING_INDEX.md`.
   (documentation, no code) and are consolidated into S3-20; the rest require a code change.
 - Each session below is one unit of work = **fix + verify + document** exactly as the protocol
   defines: land the change, run the verification for that session's lane, then update the row's
-  `Status`/`Verify` in `FINDING_INDEX.md` and write the session file under `sessions/`.
+  status in `../BUG_TRACKER.md` and write the session file under `sessions/`.
 
 ## Standing invariants (apply to every session)
 
@@ -200,18 +208,18 @@ Not new fixes: `./gradlew :app:assembleDebug` + unit tests for every Android cha
 **No release and no sign-off before this passes.**
 
 ### S3-20 — Accepted dispositions + final reconciliation  · lane DOC
-Write the justification for every `accepted`/`accepted+partial` row into `RISK_REGISTER.md` /
+Write the justification for every `accepted`/`accepted+partial` row into `../BUG_TRACKER.md` /
 `decisions/`: `S01-I1`, `S01-I2`, `S02-I1`, `S02-I3` (checkRevoked half), `S03-I1`, `S03-I3`,
-`S06-I3`, `S07-I1`, `S07-I2`, `S07-I3`, `S08-M3`, `S08-I2`, `SC-11`. Then reconcile the
-`FINDING_INDEX.md` `Verify` column end-to-end, confirm the 108-fixed / 8-accepted rollup **actually
-matches recorded dispositions** (not the intent column), and only then revisit `FINAL_SIGNOFF.md`.
+`S06-I3`, `S07-I1`, `S07-I2`, `S07-I3`, `S08-M3`, `S08-I2`, `SC-11`. Then reconcile `../BUG_TRACKER.md`
+end-to-end, confirm the rollup **actually matches recorded dispositions** (not an intent column), and
+only then revisit `FINAL_SIGNOFF.md`.
 
 ---
 
 ## Sign-off gate (unchanged from FINAL_SIGNOFF.md)
 
 `FINAL_SIGNOFF.md` stays **PENDING** until: all 20 sessions above are recorded `fixed`/`accepted`
-in `FINDING_INDEX.md` with real evidence; **S3-15b and S3-19b have actually run** (no BLOCKED rows
+in `../BUG_TRACKER.md` with real evidence; **S3-15b and S3-19b have actually run** (no BLOCKED rows
 left claiming `fixed`); operator items — GCP key revoked, all creds rotated, branch protection on,
 TTL/App Check/SBOM done; and an operator has built and released the Android client together with the
 server. Anything asserted before that is false progress.
