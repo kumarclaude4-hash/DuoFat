@@ -108,6 +108,103 @@ function evaluateFixedWindow(rec, now, windowMs, max) {
   return { allowed: true, record: { count: rec.count + 1, windowStart: rec.windowStart } };
 }
 
+// ── Stale-entry purge (pure) ──────────────────────────────────────────────────
+// S02-L3: `mintCooldown` (one key per userId ever seen, value = last-mint
+// timestamp) has no purge job, unlike every sibling limiter Map in index.js
+// (`ipHits`, `waitlistIpHits`, `authRateLimits`), so on a long-lived Render
+// instance it grows by one entry per distinct userId forever — unbounded
+// memory growth is itself a DoS surface. This holds only the "which keys are
+// stale" decision so it is testable against plain arrays/timestamps, with no
+// Map or real clock involved; the caller (index.js) owns the actual Map and
+// setInterval and does the `.delete()`.
+//
+// `entries` is any iterable of `[key, timestampMs]` pairs — a `Map` satisfies
+// this directly via its default iterator, so callers can pass the live Map.
+function collectStaleKeys(entries, now, ttlMs) {
+  const stale = [];
+  const cutoff = now - ttlMs;
+  for (const [key, timestampMs] of entries) {
+    if (timestampMs < cutoff) stale.push(key);
+  }
+  return stale;
+}
+
+// ── Client IP resolution with configurable proxy trust (pure) ────────────────
+// S04-M3: `getClientIp()` unconditionally trusted the rightmost entry of
+// X-Forwarded-For as proxy-appended, hardcoding "exactly one trusted hop"
+// (Render's edge). That is correct for the current deployment topology but
+// wrong — and silently insecure — for any other one: zero proxies (XFF absent
+// or fully attacker-controlled) or more than one trusted hop (e.g. a CDN in
+// front of Render) both need a different pick, and there was no way to
+// configure it without editing code. `trustedHops` makes the pick explicit:
+//   0         → ignore X-Forwarded-For entirely, always use the socket address.
+//   N (>=1)   → trust that the terminating proxy appended exactly N hops of
+//               its own, and pick the Nth-from-right entry (N=1 reproduces the
+//               original "rightmost" behavior byte-for-byte).
+// Malformed/insufficient entries fall back to the socket address rather than
+// guessing, so a misconfigured hop count fails toward "less trust", not more.
+function pickClientIp(forwardedHeader, remoteAddress, trustedHops) {
+  const fallback = remoteAddress || "unknown";
+  const hops = Number.isInteger(trustedHops) ? trustedHops : 1;
+  if (hops <= 0 || !forwardedHeader) return fallback;
+
+  const entries = String(forwardedHeader).split(",").map((s) => s.trim()).filter(Boolean);
+  if (entries.length < hops) return fallback;
+
+  const picked = entries[entries.length - hops];
+  return picked || fallback;
+}
+
+// ── IPv6 /64-aware rate-limit key normalization (pure) ────────────────────────
+// S04-M1: every IP-keyed limiter (waitlistIpHits, waitlistPollHits, ipHits,
+// adminIpFails) used the raw client IP string as its Map key. A residential
+// ISP delegates a whole /64 (2^64 addresses) to a single customer, and an
+// attacker on that customer's own connection can rotate the last 64 bits of
+// their address per request (many OSes do this automatically for privacy —
+// "privacy extensions" / RFC 4941) at zero cost, so keying by the full 128-bit
+// address makes the limiter's actual granularity "one bucket per request" for
+// any IPv6 attacker — the limit is defeated entirely, not just weakened.
+// IPv4 has no such delegated-block problem (a /32 *is* the single address)
+// and is returned unchanged. IPv4-mapped IPv6 addresses (::ffff:a.b.c.d, used
+// by some dual-stack proxies) are unwrapped to their IPv4 form for the same
+// reason. Malformed input is returned unchanged rather than guessed at, so a
+// parse failure fails toward "no worse than pre-fix", not toward silently
+// merging unrelated clients into one bucket.
+function normalizeIpForRateLimit(ip) {
+  if (typeof ip !== "string" || ip.length === 0) return ip;
+
+  // Strip an IPv6 zone index (fe80::1%eth0) and enclosing brackets ([::1]),
+  // both of which can appear on remoteAddress/XFF values but are irrelevant
+  // to which /64 an address belongs to.
+  let addr = ip.split("%")[0];
+  if (addr.startsWith("[") && addr.endsWith("]")) addr = addr.slice(1, -1);
+
+  if (!addr.includes(":")) return ip; // IPv4, or already-unparseable — leave as-is
+
+  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (mapped) return mapped[1];
+
+  // Expand "::" (at most one occurrence in a valid address) into explicit
+  // zero groups so the /64 prefix (first 4 of 8 groups) is unambiguous
+  // regardless of where the shorthand run of zeros falls.
+  const halves = addr.split("::");
+  if (halves.length > 2) return ip; // malformed (multiple "::") — don't guess
+
+  let groups;
+  if (halves.length === 2) {
+    const left  = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - left.length - right.length;
+    if (missing < 0) return ip; // malformed — too many groups already
+    groups = [...left, ...Array(missing).fill("0"), ...right];
+  } else {
+    groups = addr.split(":");
+    if (groups.length !== 8) return ip; // malformed — not a full address
+  }
+
+  return groups.slice(0, 4).join(":");
+}
+
 // ── YouTube search: query validation (pure) ───────────────────────────────────
 // Watch Together lets a user search YouTube through the server so the API key
 // never ships in the APK. Every input constraint below exists to bound YouTube
@@ -360,6 +457,9 @@ module.exports = {
   getCookie,
   isBlockedPreviewHost,
   evaluateFixedWindow,
+  collectStaleKeys,
+  pickClientIp,
+  normalizeIpForRateLimit,
   b2HmacKey,
   buildB2PresignUrl,
   // YouTube search (Watch Together)

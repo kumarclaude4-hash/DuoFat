@@ -5,6 +5,7 @@ const pure = require("./lib/pure");
 const { createChallengeStore } = require("./lib/challengeStore");
 const { verifyMintTokenSignature } = require("./lib/identityVerify");
 const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
+const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
 
 let serviceAccount;
 try {
@@ -343,7 +344,22 @@ db.collection("calls").onSnapshot(
 
 // ── Per-userId mint cooldown (in-memory rate limit) ───────────────────────────
 // Allows at most one token mint per userId per 60 seconds.
+const MINT_COOLDOWN_MS = 60_000;
 const mintCooldown = new Map();
+
+// S02-L3: unlike every sibling limiter Map below (ipHits, waitlistIpHits,
+// authRateLimits), this one had no purge job — one entry accumulates per
+// distinct userId ever seen (successful or merely attempted) and is never
+// removed, so a long-lived Render instance grows this Map forever. userId is
+// not a secret (see the S02-M1 comment further down), so an attacker can grow
+// it arbitrarily just by POSTing distinct userIds. Purge on the same cadence
+// as the other per-key limiters.
+setInterval(() => {
+  const now = Date.now();
+  for (const key of pure.collectStaleKeys(mintCooldown, now, MINT_COOLDOWN_MS)) {
+    mintCooldown.delete(key);
+  }
+}, 5 * 60 * 1000);
 
 // S07-C1 remediation, part 1 of 2: single-use nonce issuance for /mintChallenge.
 // NOT YET enforced by /mintToken — see that handler's comment. This store only
@@ -371,11 +387,16 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+// S04-M1: key by pure.normalizeIpForRateLimit(ip), not the raw ip, so every
+// address within an attacker's own delegated IPv6 /64 shares one bucket
+// instead of each rotated address getting its own. See the helper's comment
+// in lib/pure.js for the full rationale. IPv4 keys pass through unchanged.
 function checkWaitlistIpRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = waitlistIpHits.get(ip);
+  const rec = waitlistIpHits.get(key);
   if (!rec || now - rec.windowStart >= WAITLIST_IP_WINDOW_MS) {
-    waitlistIpHits.set(ip, { count: 1, windowStart: now });
+    waitlistIpHits.set(key, { count: 1, windowStart: now });
     return true;
   }
   if (rec.count >= WAITLIST_IP_MAX_HITS) return false;
@@ -384,10 +405,11 @@ function checkWaitlistIpRateLimit(ip) {
 }
 
 function checkWaitlistPollRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = waitlistPollHits.get(ip);
+  const rec = waitlistPollHits.get(key);
   if (!rec || now - rec.windowStart >= WAITLIST_POLL_WINDOW_MS) {
-    waitlistPollHits.set(ip, { count: 1, windowStart: now });
+    waitlistPollHits.set(key, { count: 1, windowStart: now });
     return true;
   }
   if (rec.count >= WAITLIST_POLL_MAX_HITS) return false;
@@ -395,7 +417,7 @@ function checkWaitlistPollRateLimit(ip) {
   return true;
 }
 
-// ── Per-IP rate limit ─────────────────────────────────────────────────────────
+// ── Per-IP rate limit ────────────────────────���────────────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
 // Render appends its own entry to X-Forwarded-For; we use the RIGHTMOST value
 // (proxy-appended, not client-controlled) via getClientIp(). See CRIT-1 fix.
@@ -411,7 +433,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ── Per-UID authenticated-endpoint rate limiter ───────────���───────────────────
+// ── Per-UID authenticated-endpoint rate limiter ───────────����───────────────────
 // Prevents an authenticated user from flooding B2 presign/delete or other
 // server-mediated endpoints.  Each endpoint has its own per-minute bucket.
 const AUTH_RATE_WINDOW_MS = 60_000;
@@ -676,18 +698,24 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix. The
+// admin lockout is the highest-value target of this class of bypass (it
+// gates the operator panel), so it must not be left keyed by raw IPv6
+// address while the lower-stakes limiters get the fix.
 function adminIpLocked(ip) {
-  const rec = adminIpFails.get(ip);
+  const key = pure.normalizeIpForRateLimit(ip);
+  const rec = adminIpFails.get(key);
   if (!rec) return false;
   if (Date.now() - rec.windowStart >= ADMIN_IP_WINDOW_MS) return false;
   return rec.count >= ADMIN_IP_MAX_FAILS;
 }
 
 function recordAdminAuthFailure(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = adminIpFails.get(ip);
+  const rec = adminIpFails.get(key);
   if (!rec || now - rec.windowStart >= ADMIN_IP_WINDOW_MS) {
-    adminIpFails.set(ip, { count: 1, windowStart: now });
+    adminIpFails.set(key, { count: 1, windowStart: now });
   } else {
     rec.count++;
   }
@@ -815,18 +843,30 @@ process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err.message, "\n", err.stack);
 });
 
+// S04-M3: how many trusted proxy hops sit in front of this server and are
+// expected to have appended their own entry to X-Forwarded-For. Render's edge
+// is exactly one hop, so the default (1) reproduces the original hardcoded
+// "always trust the rightmost entry" behavior for the deployment this server
+// actually runs on. Set to 0 to disable XFF trust entirely (bare socket
+// address only — e.g. local dev, or a topology with no trusted proxy at all),
+// or higher if another trusted proxy/CDN is added in front of Render later.
+// See pickClientIp() in lib/pure.js for the resolution logic this configures.
+const TRUSTED_PROXY_HOPS = (() => {
+  const raw = parseInt(process.env.TRUSTED_PROXY_HOPS, 10);
+  return Number.isInteger(raw) && raw >= 0 ? raw : 1;
+})();
+
 function getClientIp(req) {
-  // Use the RIGHTMOST entry in X-Forwarded-For — the one appended by the
-  // trusted terminating proxy (Render). The leftmost entries are client-
-  // controlled and trivially spoofable; trusting them would let any attacker
-  // bypass every IP-based rate limit and the admin lockout by forging:
-  //   X-Forwarded-For: 1.2.3.4
-  const forwarded = req.headers["x-forwarded-for"];
-  if (forwarded) {
-    const entries = forwarded.split(",");
-    return entries[entries.length - 1].trim() || req.socket.remoteAddress || "unknown";
-  }
-  return req.socket.remoteAddress || "unknown";
+  // The leftmost X-Forwarded-For entries are client-controlled and trivially
+  // spoofable; trusting them would let any attacker bypass every IP-based
+  // rate limit and the admin lockout by forging: X-Forwarded-For: 1.2.3.4
+  // pickClientIp() only trusts the entries appended by TRUSTED_PROXY_HOPS
+  // trusted proxies, counted from the right.
+  return pure.pickClientIp(
+    req.headers["x-forwarded-for"],
+    req.socket.remoteAddress,
+    TRUSTED_PROXY_HOPS
+  );
 }
 
 // ── Log hygiene ───────────────────────────────────────────────────────────────
@@ -887,11 +927,13 @@ function sendServerError(res, tag, err, status = 500) {
   res.end(`Server error (ref: ${ref})`);
 }
 
+// S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix.
 function checkIpRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = ipHits.get(ip);
+  const rec = ipHits.get(key);
   if (!rec || now - rec.windowStart >= IP_WINDOW_MS) {
-    ipHits.set(ip, { count: 1, windowStart: now });
+    ipHits.set(key, { count: 1, windowStart: now });
     return true; // allowed
   }
   if (rec.count >= IP_MAX_HITS) return false; // blocked
@@ -1054,11 +1096,22 @@ function readBody(req, res) {
 // otherwise the 413 response is already sent and onComplete is not called.
 function collectBody(req, res, onComplete) {
   let body = "";
+  // S02-L4/S04-L1: the cap was `body.length > MAX_BODY_BYTES`, i.e. the JS
+  // string's UTF-16 code-unit count, not the wire byte count. `chunk` arrives
+  // as a Buffer (no setEncoding() is ever called on `req`, deliberately — see
+  // note below), and `body += chunk` coerces it via `chunk.toString("utf8")`.
+  // A 4-byte UTF-8 sequence (e.g. many emoji) decodes to 2 UTF-16 code units,
+  // so `body.length` undercounts true bytes by up to 2x — an attacker sending
+  // such bodies could push roughly double MAX_BODY_BYTES onto the heap before
+  // this check ever tripped. Track true byte length from the Buffer directly,
+  // matching the (already-correct) pattern in readBody() above.
+  let bytes = 0;
   let tooLarge = false;
   req.on("data", (chunk) => {
     if (tooLarge) return;
+    bytes += chunk.length;
     body += chunk;
-    if (body.length > MAX_BODY_BYTES) {
+    if (bytes > MAX_BODY_BYTES) {
       tooLarge = true;
       res.writeHead(413, { "Content-Type": "text/plain" });
       res.end("Request body too large");
@@ -1785,7 +1838,7 @@ document.getElementById("duressUidInput").addEventListener("keydown", (event) =>
 </html>
 `;
 
-// ── Security response headers ───────────────────────────────────────��─────────
+// ── Security response headers ───────���───────────────────────────────��─────────
 // Baseline defense-in-depth headers applied to *every* response via setHeader()
 // at the top of the request handler. Node merges these with the object passed to
 // res.writeHead(), and writeHead values take precedence — so the two HTML routes
@@ -1983,7 +2036,7 @@ http.createServer((req, res) => {
         // guesses cost the attacker nothing they can inflict on the victim.
         const now  = Date.now();
         const last = mintCooldown.get(userId) || 0;
-        if (now - last < 60_000) {
+        if (now - last < MINT_COOLDOWN_MS) {
           res.writeHead(429, { "Content-Type": "text/plain" });
           res.end("Too many requests — wait 60 s and retry");
           return;
@@ -2237,7 +2290,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /migrateUid ─────────────────────────────────────────────────────────
+  // ── POST /migrateUid ──────────────────────��──────────────────────────────────
   //
   // Body (JSON): { userId, oldUid }
   // Auth: Firebase ID token in Authorization: Bearer <token> header.
@@ -2351,11 +2404,28 @@ http.createServer((req, res) => {
         // 1. Copy users/{oldUid} → users/{userId}. The old document is not
         // deleted: a failed later step must leave the migration retryable without
         // destroying the legacy account's visible profile.
+        //
+        // S02-H1: this used to `.set(data)` with the raw document verbatim. That
+        // document is client-writable (via the `users/{uid}` create/update rule)
+        // and this migration runs with the Admin SDK, which bypasses Firestore
+        // rules entirely — so any field an attacker managed to stash on
+        // `users/{oldUid}` (through a bug in the rule, a legacy doc predating a
+        // rule tightening, or a field the rule allows but this endpoint should
+        // never trust blindly) would be replayed onto `users/{userId}` with
+        // elevated (rule-bypassing) privilege. Copy only the same allow-listed,
+        // type/size-bounded fields the `users/{uid}` write rule itself permits
+        // (`firestore.rules` create/update block, mirrored in
+        // `lib/profileSanitize.js` so the decision is unit-tested) — never the
+        // whole document.
         const oldUserSnap = await db.collection("users").doc(oldUid).get();
         if (oldUserSnap.exists) {
           const data = oldUserSnap.data();
           if (data) {
-            await db.collection("users").doc(userId).set(data);
+            const safeData = sanitizeMigratedUserFields(data);
+            await db.collection("users").doc(userId).set({
+              ...safeData,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
             results.userDocCopied = true;
           }
         }
@@ -2523,11 +2593,25 @@ http.createServer((req, res) => {
         const chatId = require("crypto").createHash("sha256").update(chatIdInput).digest("hex");
 
         // Write/merge chat doc (idempotent — same as before, but now through server only)
+        //
+        // S02-L2: `myDisplayName`/`partnerDisplayName` come straight from the
+        // request body with no type check or length bound before this fix, so
+        // any authenticated caller could stash an arbitrarily large value (or a
+        // non-string, which Firestore would still happily store) on a doc the
+        // other participant reads — unbounded storage growth and a content-
+        // injection surface into the partner's chat list UI. `isValidDisplayName`
+        // (unit-tested in `lib/profileSanitize.js`) bounds it to a plain,
+        // size-capped string, matching the `users/{uid}.displayName` allow-list
+        // bound already enforced in `firestore.rules`.
         const chatDocData = {
           participants: [myUid, partnerUid],
         };
-        if (myDisplayName)      chatDocData["partnerName_" + partnerUid] = myDisplayName;
-        if (partnerDisplayName) chatDocData["partnerName_" + myUid]      = partnerDisplayName;
+        if (isValidDisplayName(myDisplayName)) {
+          chatDocData["partnerName_" + partnerUid] = myDisplayName;
+        }
+        if (isValidDisplayName(partnerDisplayName)) {
+          chatDocData["partnerName_" + myUid] = partnerDisplayName;
+        }
 
         await db.collection("chats").doc(chatId).set(chatDocData, { merge: true });
         console.log(`createChat: chatId=${chatId} participants=[${uidTag(myUid)},${uidTag(partnerUid)}]`);
@@ -3607,7 +3691,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/waitlist ───────────────────────────────────────────────
+  // ── GET /admin/api/waitlist ────────���──────────────────────────────────────
   //
   // Auth: x-admin-token header. Returns pending waitlist requests, newest
   // first, so the operator can see who's asking for access.
