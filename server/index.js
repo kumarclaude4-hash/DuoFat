@@ -5,6 +5,7 @@ const pure = require("./lib/pure");
 const { createChallengeStore } = require("./lib/challengeStore");
 const { verifyMintTokenSignature } = require("./lib/identityVerify");
 const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
+const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
 
 let serviceAccount;
 try {
@@ -411,7 +412,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ── Per-UID authenticated-endpoint rate limiter ───────────���───────────────────
+// ── Per-UID authenticated-endpoint rate limiter ───────────����───────────────────
 // Prevents an authenticated user from flooding B2 presign/delete or other
 // server-mediated endpoints.  Each endpoint has its own per-minute bucket.
 const AUTH_RATE_WINDOW_MS = 60_000;
@@ -2351,11 +2352,28 @@ http.createServer((req, res) => {
         // 1. Copy users/{oldUid} → users/{userId}. The old document is not
         // deleted: a failed later step must leave the migration retryable without
         // destroying the legacy account's visible profile.
+        //
+        // S02-H1: this used to `.set(data)` with the raw document verbatim. That
+        // document is client-writable (via the `users/{uid}` create/update rule)
+        // and this migration runs with the Admin SDK, which bypasses Firestore
+        // rules entirely — so any field an attacker managed to stash on
+        // `users/{oldUid}` (through a bug in the rule, a legacy doc predating a
+        // rule tightening, or a field the rule allows but this endpoint should
+        // never trust blindly) would be replayed onto `users/{userId}` with
+        // elevated (rule-bypassing) privilege. Copy only the same allow-listed,
+        // type/size-bounded fields the `users/{uid}` write rule itself permits
+        // (`firestore.rules` create/update block, mirrored in
+        // `lib/profileSanitize.js` so the decision is unit-tested) — never the
+        // whole document.
         const oldUserSnap = await db.collection("users").doc(oldUid).get();
         if (oldUserSnap.exists) {
           const data = oldUserSnap.data();
           if (data) {
-            await db.collection("users").doc(userId).set(data);
+            const safeData = sanitizeMigratedUserFields(data);
+            await db.collection("users").doc(userId).set({
+              ...safeData,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
             results.userDocCopied = true;
           }
         }
@@ -2523,11 +2541,25 @@ http.createServer((req, res) => {
         const chatId = require("crypto").createHash("sha256").update(chatIdInput).digest("hex");
 
         // Write/merge chat doc (idempotent — same as before, but now through server only)
+        //
+        // S02-L2: `myDisplayName`/`partnerDisplayName` come straight from the
+        // request body with no type check or length bound before this fix, so
+        // any authenticated caller could stash an arbitrarily large value (or a
+        // non-string, which Firestore would still happily store) on a doc the
+        // other participant reads — unbounded storage growth and a content-
+        // injection surface into the partner's chat list UI. `isValidDisplayName`
+        // (unit-tested in `lib/profileSanitize.js`) bounds it to a plain,
+        // size-capped string, matching the `users/{uid}.displayName` allow-list
+        // bound already enforced in `firestore.rules`.
         const chatDocData = {
           participants: [myUid, partnerUid],
         };
-        if (myDisplayName)      chatDocData["partnerName_" + partnerUid] = myDisplayName;
-        if (partnerDisplayName) chatDocData["partnerName_" + myUid]      = partnerDisplayName;
+        if (isValidDisplayName(myDisplayName)) {
+          chatDocData["partnerName_" + partnerUid] = myDisplayName;
+        }
+        if (isValidDisplayName(partnerDisplayName)) {
+          chatDocData["partnerName_" + myUid] = partnerDisplayName;
+        }
 
         await db.collection("chats").doc(chatId).set(chatDocData, { merge: true });
         console.log(`createChat: chatId=${chatId} participants=[${uidTag(myUid)},${uidTag(partnerUid)}]`);
@@ -3607,7 +3639,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/waitlist ───────────────────────────────────────────────
+  // ── GET /admin/api/waitlist ────────���──────────────────────────────────────
   //
   // Auth: x-admin-token header. Returns pending waitlist requests, newest
   // first, so the operator can see who's asking for access.
