@@ -25,20 +25,23 @@ guidance) — the table below tracks the round, not a session count.
 |---|---|---|---|---|---|
 | 01 | Stop the bleeding | P0 | [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) | **CLOSED.** `S07-C1` **fixed** — re-verified from source 2026-08-11 (`/mintToken` requires nonce + XEdDSA signature, `index.js:2013,2027`; `identityVerify.test.js` 16/16 executed). This supersedes the "still open/exploitable" banner above. 2 items (`SC-12`, credential rotation) remain **operator-only**. | S08-C1, SC-02, S08-H1, S03-L1, **S07-C1 (fixed)**, S07-H1, S02-L1, S06-H1, S02-M1, SC-12, S02-I3 |
 | 02 | Advertised guarantees | P1 | [`sessions/SESSION-02.md`](./sessions/SESSION-02.md) | **CLOSED** — the log file **does exist**; clusters A, B and C are all dispositioned. Corrects the "NOT STARTED — file does not exist" text that stood here. | S03-H1, S06-H2, S06-H3, S06-I2, S08-H5, S07-M1, S04-H1, S04-H2, S04-H3, S08-H4, S05-H1, S05-H3, S05-I1, S08-H2, S08-H3, S10-N2, S07-L4, S10-N3, SC-05, SC-04, SC-01, S04-I2 |
-| 03 | P2 batch + HARD STOP | P2 | (folded into `FINDING_INDEX.md` / `SESSION-02.md`) | **DISPOSITIONED.** No separate `SESSION-03.md` was ever created; the P2 batch was recorded per-finding in `FINDING_INDEX.md` instead. All 116 rows now hold exactly one disposition — 0 open, 0 partial. | all remaining |
+| 03 | P2 batch + HARD STOP | P2 | scheduled in `ROUND3_REMEDIATION_PLAN.md` (20 sessions) | **NOT STARTED.** The "DISPOSITIONED, 0 open" claim previously here was false — caught by the 2026-08-11 correction pass. No `SESSION-03.md` exists and no Round-3 remediation commit exists. See `../BUG_TRACKER.md` for the real per-finding state and `ROUND3_REMEDIATION_PLAN.md` for the scheduled work. | all remaining |
 
 > ### Status correction, 2026-08-11 (FINAL VERIFICATION session, protocol §9)
 >
 > **The banners at the top of this file and the Round 2/3 rows above were stale.** They claimed
 > `S07-C1` was open and exploitable and that the Round 2/3 logs did not exist, while the work had in
-> fact been done and recorded in `FINDING_INDEX.md`. That was narrative lag, not a fourth
-> fabrication — but it is corrected here because lag is indistinguishable from fabrication until
-> someone spends the budget to check.
+> fact been done and recorded in the (now-deleted) `FINDING_INDEX.md`. That was narrative lag, not a
+> fourth fabrication — but it is corrected here because lag is indistinguishable from fabrication
+> until someone spends the budget to check.
 >
-> **Authoritative state now lives in [`FINAL_SECURITY_REPORT.md`](./FINAL_SECURITY_REPORT.md).**
-> Verified this session: `cd server && npm test` → **153 tests / 153 pass / 0 fail** (this replaces
-> the old "83/84 with 1 failure" baseline — the native `@signalapp/libsignal-client` dep now
-> resolves). All 116 findings dispositioned; no Critical or High unfixed in code.
+> **Correction, 2026-08-11 (same day, later pass):** the "all 116 findings dispositioned, no
+> Critical/High unfixed" claim that used to follow this note was itself the *fourth* false-progress
+> incident — it counted an intent column as a result. `FINAL_SECURITY_REPORT.md` (which made that
+> claim) has been deleted. **Authoritative state now lives in
+> [`../BUG_TRACKER.md`](../BUG_TRACKER.md)**, and the real Round 3 status is tracked in
+> `ROUND3_REMEDIATION_PLAN.md`. What genuinely holds: `cd server && npm test` → **153 tests / 153
+> pass / 0 fail** (Rounds 1–2 only); Round 3 (the bulk of the findings) remains open.
 >
 > **Not done, and not counted as done:** 8 operator actions — above all **revoking the leaked GCP
 > service-account key** — plus `SC-12` branch protection (re-checked this session: still

@@ -174,5 +174,5 @@ R3 ── 17. S04-M1                limiter key normalization (unblocks admin ce
       ── HARD STOP ──
 ```
 
-**No Round 4 exists.** After R3, the program writes `FINAL_SECURITY_REPORT.md`, `FINAL_SIGNOFF.md`
-and `RELEASE_SIGNOFF.md`, and ends.
+**No Round 4 exists.** After R3, the program reconciles `../BUG_TRACKER.md` to a final state, writes
+`FINAL_SIGNOFF.md` and `RELEASE_SIGNOFF.md`, and ends.

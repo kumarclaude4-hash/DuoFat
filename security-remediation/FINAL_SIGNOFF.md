@@ -3,15 +3,17 @@
 > Status: **PENDING** — this document is completed and signed only after Round 3
 > (the final planned round) exits. It is the hard stop of the program.
 
-Sign-off criteria — status as **re-assessed and corrected 2026-08-11** against `FINDING_INDEX.md`
-and source. The four boxes below were previously checked `[x]`; that was false (see the correction
-note) and they are now unchecked:
+Sign-off criteria — status as **re-assessed and corrected 2026-08-11** against
+[`../BUG_TRACKER.md`](../BUG_TRACKER.md) (the successor to the deleted `FINDING_INDEX.md`) and source.
+The four boxes below were previously checked `[x]`; that was false (see the correction note) and they
+are now unchecked. **Updated same day, tracker consolidation pass:** `../BUG_TRACKER.md` now records
+real, re-verified-from-source dispositions — **25 fixed, 6 partial, 12 accepted, 73 still open** —
+which is real progress over the "0 dispositions" state below, but still far short of sign-off.
 
-- [ ] **Every audit finding has exactly one final disposition.** **NOT MET.** `FINDING_INDEX.md`
-      records **0** final dispositions — its `Verify` column is `pending` for all 116 rows, and the
-      frozen `Status` snapshot shows **103 open**. The earlier "116/116, 0 open" was produced by
-      miscounting the `Planned Disp` (intent) column, which the index says carries no evidentiary
-      weight.
+- [ ] **Every audit finding has exactly one final disposition.** **NOT MET.** `../BUG_TRACKER.md`
+      records 25 `fixed`, 6 `partial`, 12 `accepted`, and **73 still `open`** out of 116. The earlier
+      "116/116, 0 open" claim in a now-deleted report was produced by miscounting an intent column,
+      which carried no evidentiary weight.
 - [ ] **Every Critical finding is fixed or accepted-with-justification.** **PARTIAL.** `S07-C1` is
       genuinely fixed and verified (Round 1). Remaining Criticals depend on Round 3, which is not
       implemented.

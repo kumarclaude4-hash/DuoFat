@@ -79,7 +79,7 @@ credential-rotation + branch-protection runbook with checkboxes.
 5. Runbook for credential rotation + branch protection is written with explicit operator steps.
 
 **Done condition:** the five exit criteria are verified from source and recorded in
-`sessions/SESSION-01.md`; the four P0 code findings are marked `fixed` in FINDING_INDEX; the two
+`sessions/SESSION-01.md`; the four P0 code findings are marked `fixed` in `../BUG_TRACKER.md`; the two
 `+runbook` items have their console steps enumerated in MIGRATION_PLAN.
 
 ---
@@ -177,13 +177,13 @@ the backup-digest deprecation, which is read-compatible with legacy docs.
 **Verification strategy:** re-read each changed rule/endpoint against its finding's exploit path;
 run `firestore-tests/` (now including `_duressNonces`); grep for each residual pattern the audit named
 (raw uid logs, `clearFlags`, unbounded `.get()`); confirm every remaining finding has exactly one
-disposition in FINDING_INDEX.
+disposition in `../BUG_TRACKER.md`.
 
 **Evidence expected:** `evidence/R3-*` diffs and verification notes; updated folder checklists;
 `firestore-tests` result note.
 
 **Exit criteria (HARD STOP):**
-1. Every one of the 116 findings has exactly one final disposition in FINDING_INDEX.
+1. Every one of the 116 findings has exactly one final disposition in `../BUG_TRACKER.md`.
 2. No Critical or High remains open (all `fixed` or `accepted`-with-justification).
 3. Every trust boundary in `architecture/TRUST_BOUNDARIES.md` is marked verified, accepted, or
    runbook — none `blocked`.

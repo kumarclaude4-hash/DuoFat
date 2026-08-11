@@ -1,5 +1,12 @@
 # DuoShield Security Remediation Program
 
+> **Live disposition tracking now lives in one place: [`../BUG_TRACKER.md`](../BUG_TRACKER.md).**
+> `FINDING_INDEX.md`, `MASTER_CHECKLIST.md`, `RISK_REGISTER.md`, and `REMEDIATION_PROGRESS.md`
+> (previously in this directory) and `../audit/AUDIT_PROGRESS.md` were retired because they had
+> drifted out of sync with each other and with the code — see `BUG_TRACKER.md`'s "Corrections vs.
+> the old trackers" section for specific examples. Everything else in this directory (plan,
+> session logs, decision log, evidence, sign-off) remains as historical record.
+
 This directory is the **record of what was done** to remediate the completed DuoShield security
 audit. It is a companion to — never a replacement for — the audit in [`../audit/`](../audit/),
 which remains the immutable **record of what was found**.
@@ -40,11 +47,8 @@ Session 09 labels its findings `SC-01 … SC-12` rather than `S09-*`; that schem
 | File / dir | Purpose |
 |---|---|
 | `README.md` | This file — the program contract and map. |
-| `REMEDIATION_PROGRESS.md` | Live status tracker (the counterpart to the audit's `AUDIT_PROGRESS.md`). |
+| `../BUG_TRACKER.md` | **Live status tracker** — one row per finding, current disposition re-verified against source. Supersedes `REMEDIATION_PROGRESS.md`, `MASTER_CHECKLIST.md`, `FINDING_INDEX.md`, and `RISK_REGISTER.md` (all retired). |
 | `REMEDIATION_PLAN.md` | The fixed round plan: goals, scope, dependencies, rollback, verification, exit criteria. |
-| `MASTER_CHECKLIST.md` | One checkbox per finding, grouped by severity, mechanically traceable to the audit. |
-| `FINDING_INDEX.md` | Every finding once: file, ID, severity, files, boundary, root cause, status, priority, dependencies, planned session, verification, disposition. |
-| `RISK_REGISTER.md` | Residual-risk register for accepted / deferred items and for out-of-band (console) actions. |
 | `SESSION_INDEX.md` | Index of the remediation rounds and their session logs. |
 | `FINAL_SECURITY_REPORT.md` | Final consolidated report (written at the hard stop). |
 | `FINAL_SIGNOFF.md` | The sign-off that closes the program. |
@@ -76,4 +80,4 @@ finding can be closed, and the disposition vocabulary reflects it:
   justification and a residual-risk entry.
 
 Every disposition, including the runbook split, is recorded once per finding in
-[`FINDING_INDEX.md`](./FINDING_INDEX.md).
+[`../BUG_TRACKER.md`](../BUG_TRACKER.md).

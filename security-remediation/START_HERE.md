@@ -41,7 +41,7 @@ bottom of the plan and verify operator items instead.
    and exit criteria are your entire scope. **Do not pull work forward from a later session.**
 3. **Recover state (SESSION_PROTOCOL §3 + §7).** Run:
    - `git status --short` and `git log -3 --oneline --stat`
-   - For each finding ID in this session, read its row in [`FINDING_INDEX.md`](./FINDING_INDEX.md) and
+   - For each finding ID in this session, read its row in [`../BUG_TRACKER.md`](../BUG_TRACKER.md) and
      run the smallest check that would falsify its current status (`grep` the vulnerable pattern; if a
      commit is cited, `git show --stat <hash>`). If source already satisfies it, record that and skip.
 4. **Implement the smallest fix** for this session's findings only. Keep existing guards; add beside
@@ -56,7 +56,7 @@ bottom of the plan and verify operator items instead.
    - `CI` → YAML lint + `git`/`gh` inspection + hash recompute; actual CI run is operator.
    - **If a toolchain is missing, mark BLOCKED and fall back to source review. Never invent a PASS.**
 6. **Document + checkpoint** (mandatory before stopping):
-   - Update each finding's `Status`/`Verify` in [`FINDING_INDEX.md`](./FINDING_INDEX.md) with real
+   - Update each finding's status in [`../BUG_TRACKER.md`](../BUG_TRACKER.md) with real
      evidence (a command you ran this session, or a commit hash from `git log -1 --format=%H` **after**
      committing). Only write `fixed` if the lane's verification actually ran and passed.
    - Write `sessions/SESSION-<n>.md` with the end-of-session record block (format in
@@ -82,5 +82,5 @@ evidence. Tracked in the plan's sign-off gate and `SESSION_PROTOCOL.md §6`.
 ## Reading order summary
 
 `START_HERE.md` (this file, for `NEXT SESSION`) → `SESSION_PROTOCOL.md` (rules) →
-`ROUND3_REMEDIATION_PLAN.md` (the session's scope) → `FINDING_INDEX.md` (per-row truth) →
+`ROUND3_REMEDIATION_PLAN.md` (the session's scope) → `../BUG_TRACKER.md` (per-row truth) →
 previous `sessions/SESSION-*.md` (inherited evidence). Then work.
