@@ -811,8 +811,26 @@ function auditAdminEvent(action, req, extra = {}) {
   db.collection("adminAuditLog")
     .add({
       action,
-      adminIp: getClientIp(req),
-      // Retained because a rotating IP with a constant user-agent (or vice
+      // S05-M1: this used to be `getClientIp(req)` — the raw IP — written to
+      // a permanent, no-TTL Firestore collection. adminAuditLog is worse than
+      // a console log in exactly the way SEC-L01 (above) was written to
+      // prevent: console output on Render rotates, this collection does not,
+      // and the record is a join (IP + timestamp + action), not an isolated
+      // value. `ipTag()` keeps the "same operator across two rows?"
+      // correlation the finding asked to preserve, while an adversary who
+      // reaches this collection (Firestore access or a legal order) no
+      // longer gets a directly-identifying, resolvable IP for free.
+      //
+      // Caveat, documented rather than hidden: LOG_PEPPER is per-process and
+      // never persisted (see its own comment above), so a server restart
+      // makes pre-restart and post-restart tags uncorrelatable — acceptable
+      // for "was this the same operator in one incident window?", not
+      // sufficient for "was this the same operator six months apart?". That
+      // tradeoff is the durable-audit vs. non-identifying tension the
+      // finding calls out explicitly; this fix takes the non-identifying
+      // side, matching its prescribed resolution.
+      adminIp: ipTag(getClientIp(req)),
+      // Retained because a rotating tag with a constant user-agent (or vice
       // versa) is the signal that distinguishes one operator on mobile data
       // from a distributed guessing attempt.
       userAgent: String(req.headers["user-agent"] || "").slice(0, 200),
