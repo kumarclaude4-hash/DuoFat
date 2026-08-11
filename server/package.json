@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@signalapp/libsignal-client": "^0.54.1",
+    "@upstash/redis": "^1.38.2",
     "firebase-admin": "^13.6.0"
   },
   "description": "Node.js server deployed on Render.com. It watches Firestore with `onSnapshot()` and sends FCM pushes through the Firebase Admin SDK. Keep the Render service awake with UptimeRobot by polling `/status`.",
