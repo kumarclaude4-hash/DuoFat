@@ -21,8 +21,9 @@ way until every session and both catch-up gates (S3-15b, S3-19b) have actually r
 <!-- Update ONLY this block at the end of each session. It is the single source of truth for "next". -->
 
 ```
-NEXT SESSION: S3-02  (Supply-chain integrity — PARTIAL: SC-05 fixed; SC-01 (JAR hash gate) + SC-04 (checksums/provenance) still open — lane CI)
-LAST DONE:    S3-02 partial (SC-05: release workflow no longer wipes all releases/tags on every push; now clears only the rolling tag) — commit 8508746
+NEXT SESSION: S3-03  (Dependency pinning & scanning — SC-03, SC-06, SC-07, SC-08, SC-09, SC-10 — lane CI)
+LAST DONE:    S3-02  COMPLETE (all 3 findings fixed & CI-lane verified): SC-05 scoped tag-clear (commit 8508746); SC-01 reproducible/hash-gated libsignal JAR + verify-libsignal-jar CI gate; SC-04 SHA256SUMS + signing-cert digest + attest-build-provenance on release (commit dcf85c5). Session log + chain state reconciled to committed source.
+              S3-02 partial (SC-05: release workflow no longer wipes all releases/tags on every push; now clears only the rolling tag) — commit 8508746
               S3-01  (APK/CI secrets: S08-C1, SC-02, S08-H1, S03-L1 code-fixed & verified; SC-12 re-checked live, still open/operator) — commit 60c8cde
 BLOCKED GATES PENDING: S3-15b (RULES emulator), S3-19b (Android build) — need operator toolchains
 OPERATOR RUNBOOK (S3-01): revoke leaked GCP SA key; rotate WORKER_SECRET + baked B2 creds; enable branch protection on main (SC-12)
