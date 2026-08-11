@@ -117,6 +117,43 @@ jobs:
           echo "push.server.url=${PUSH_SERVER_URL:-https://duofat.onrender.com}"              >> local.properties
           echo "worker.url=${WORKER_URL:-https://duoshield-storage.kumarclaude4.workers.dev}" >> local.properties
 
+      # S08-C1 / SC-02 / S08-H1: enforce the same "no packaged secret" guarantee
+      # here that release.yml enforces. This job runs on every pull request and
+      # uploads the resulting debug APK as an artifact, so a secret smuggled
+      # into local.properties (and thence BuildConfig/the APK) would leak just
+      # as surely as from a release. Comments in build.gradle/local.properties
+      # do not stop a future edit from re-adding an injection step — a failing
+      # build does. Mirror of release.yml's guard step; keep both in sync.
+      - name: Assert no secrets in packaged build inputs
+        run: |
+          set -u
+          fail=0
+          # `set -e` is deliberately NOT used: under -e a missing
+          # local.properties would abort before any check ran, skipping the
+          # guard entirely — the one failure mode a secret check must not have.
+          if [ ! -f local.properties ]; then
+            echo "::error::local.properties is missing — cannot verify the build carries no secrets."
+            exit 1
+          fi
+          if [ -f app/src/main/assets/service-account.json ]; then
+            echo "::error::app/src/main/assets/service-account.json exists — admin credentials must never be packaged (S08-C1)."
+            fail=1
+          fi
+          # `=.` requires at least one character after `=`, so an empty value
+          # (the ${VAR:-} default) is allowed while any real value trips it.
+          for key in b2.key.id b2.application.key worker.secret; do
+            if grep -q "^${key}=." local.properties; then
+              echo "::error::local.properties sets ${key} — client builds must not carry shared secrets (SC-02/S08-H1)."
+              fail=1
+            fi
+          done
+          if grep -qi "BEGIN [A-Z ]*PRIVATE KEY" local.properties; then
+            echo "::error::local.properties contains a private key block."
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "OK: no packaged secret material detected."
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
 
