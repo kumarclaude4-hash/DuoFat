@@ -206,7 +206,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ──────────────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -497,6 +497,38 @@ setInterval(() => {
     if (rec.windowStart < cutoff) authRateLimits.delete(uid);
   }
 }, 5 * 60 * 1000);
+
+// ── /turnCredentials daily aggregate cap (S04-M2) ─────────────────────────────
+// The per-minute bucket above (turnCredentials: 20) still allows ~28,800 mints
+// per day from a single account. Each mint is a plain bearer username/password
+// that works from anywhere — unbound to the account, device, or a specific
+// call — so bulk minting is a resale/redistribution vector and direct
+// bandwidth theft billed to this project via Cloudflare's metered TURN relay.
+// This is a SEPARATE, longer window layered on top of the per-minute one, not
+// a replacement for it: it reuses the same pure fixed-window evaluator with a
+// 24h window instead of 60s. The default (100/day) comfortably covers even
+// heavy legitimate use (dozens of calls a day between two people) while
+// cutting the worst case by ~2-3 orders of magnitude.
+const TURN_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TURN_DAILY_CAP = Number(process.env.TURN_CRED_DAILY_CAP) || 100;
+const turnDailyMints = new Map(); // uid → { count, windowStart }
+
+function checkTurnDailyCap(uid) {
+  const now = Date.now();
+  const rec = turnDailyMints.get(uid);
+  const { allowed, record } = pure.evaluateFixedWindow(rec, now, TURN_DAILY_WINDOW_MS, TURN_DAILY_CAP);
+  turnDailyMints.set(uid, record);
+  return allowed;
+}
+
+// Purge stale daily-cap entries once an hour — mirrors the per-minute purge
+// above (S02-L3 precedent: every limiter Map needs one or it grows forever).
+setInterval(() => {
+  const cutoff = Date.now() - TURN_DAILY_WINDOW_MS;
+  for (const [uid, rec] of turnDailyMints) {
+    if (rec.windowStart < cutoff) turnDailyMints.delete(uid);
+  }
+}, 60 * 60 * 1000);
 
 // ── Scoped media capability tokens (SEC-A01) ──────────────────────────────────
 // Shared with the Cloudflare Worker ONLY. Set the identical value in both places:
@@ -2805,6 +2837,17 @@ http.createServer((req, res) => {
           return;
         }
 
+        // ── S04-M2: per-account daily aggregate cap ───────────────────────────
+        // Layered on top of the per-minute limiter above — see
+        // checkTurnDailyCap's doc comment for why the per-minute bucket alone
+        // (~28,800 mints/day) was not enough.
+        if (!checkTurnDailyCap(turnUid)) {
+          console.warn(`[turnCredentials] daily cap hit uid=${uidTag(turnUid)}`);
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Daily TURN credential limit exceeded");
+          return;
+        }
+
         // ── Cloudflare credentials ───────────────────────────────────────────
         const tokenId  = process.env.TURN_TOKEN_ID  || "";
         const apiToken = process.env.TURN_API_TOKEN || "";
@@ -2815,15 +2858,50 @@ http.createServer((req, res) => {
           return;
         }
 
-        const cfUrl = `https://rtc.live.cloudflare.com/v1/turn/keys/${tokenId}/credentials/generate`;
-        const cfRes = await fetch(cfUrl, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ ttl: 86400 }),
-        });
+        // ── S04-M2: TTL clamped, never the old 24h default ────────────────────
+        // See clampTurnCredentialTtlSeconds's doc comment: the ceiling (1h)
+        // matches what the Android client already assumes
+        // (TurnCredentialCache.TTL_MS), so this changes nothing about how long
+        // a credential stays USEFUL to the app, only how long a stolen one
+        // stays valid to anyone else.
+        const ttlSeconds = pure.clampTurnCredentialTtlSeconds(
+          process.env.TURN_CRED_TTL_SECONDS,
+          60,    // floor: short enough to matter, long enough not to break slow ICE negotiation
+          3600,  // ceiling: matches the client's own 1h refresh assumption
+        );
+
+        // ── S04-M2: outbound timeout ───────────────────────────────────────────
+        // Node's fetch has no default timeout. Without this, a stalling
+        // Cloudflare connection holds the inbound socket (and this outbound
+        // one) open indefinitely — 20/min/account of deliberately-stalled
+        // upstreams is an unbounded resource leak. Mirrors /linkPreview's
+        // existing AbortController pattern (timeoutMs: 6000 there).
+        const cfCtrl = new AbortController();
+        const cfTimeout = setTimeout(() => cfCtrl.abort(), 8000);
+        let cfRes;
+        try {
+          const cfUrl = `https://rtc.live.cloudflare.com/v1/turn/keys/${tokenId}/credentials/generate`;
+          cfRes = await fetch(cfUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ttl: ttlSeconds }),
+            signal: cfCtrl.signal,
+          });
+        } catch (fetchErr) {
+          const timedOut = fetchErr.name === "AbortError";
+          console.error(
+            `turnCredentials: Cloudflare fetch ${timedOut ? "timed out" : "failed"}:`,
+            fetchErr.message
+          );
+          res.writeHead(504, { "Content-Type": "text/plain" });
+          res.end(timedOut ? "Cloudflare TURN request timed out" : "Cloudflare TURN error");
+          return;
+        } finally {
+          clearTimeout(cfTimeout);
+        }
 
         if (!cfRes.ok) {
           const text = await cfRes.text().catch(() => "");
@@ -2834,6 +2912,17 @@ http.createServer((req, res) => {
         }
 
         const data = await cfRes.json();
+        // ── S04-M2: validate shape before responding 200 ──────────────────────
+        // A 200 with an unexpected/missing iceServers shape used to send
+        // JSON.stringify(undefined) — an empty 200 body the client cannot
+        // distinguish from a valid response. Fail loudly (502) instead of
+        // silently handing the caller nothing.
+        if (!data || !data.iceServers || typeof data.iceServers !== "object") {
+          console.error("turnCredentials: Cloudflare response missing iceServers:", JSON.stringify(data));
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Cloudflare TURN error");
+          return;
+        }
         // data.iceServers = { urls: [...], username: "...", credential: "..." }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(data.iceServers));
@@ -3084,7 +3173,14 @@ http.createServer((req, res) => {
             headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
             timeoutMs: 6000,
           });
-          const preview = { url: targetUrl, domain: parsed.hostname.replace(/^www\./, "") };
+          // S04-I3: label the preview with the domain content actually came
+          // from (the final hop of the redirect chain), not the originally
+          // submitted host — see pure.previewDomainFromUrl's doc comment for
+          // the phishing scenario this closes. `url` stays the
+          // originally-submitted address (what the sender actually typed/
+          // pasted into the chat), only `domain` — the field the UI renders
+          // as the card's identity — changes.
+          const preview = { url: targetUrl, domain: pure.previewDomainFromUrl(finalUrl, parsed.hostname) };
           if (r.ok && (r.headers.get("content-type") || "").includes("text/html")) {
             // S04-H2: `await r.text()` buffered the ENTIRE body before this
             // `.slice()` could bound it, so a host that streams gigabytes (or
