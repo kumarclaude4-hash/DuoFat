@@ -95,6 +95,48 @@ describe('/users/{uid}', () => {
       asAnon().doc('users/alice').set({ displayName: 'X' })
     );
   });
+
+  // ── S01-L2 regression tests ────────────────────────────────────────────────
+  // `write` (create+update) had no field/shape validation, so the owner could
+  // publish arbitrary content into this world-readable doc (same content-injection
+  // class as S01-M2 on identities/{userId}, but here on users/{uid}).
+  test('S01-L2: owner can write all allow-listed fields with valid shapes', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        fcmToken: 'tok_abc',
+        platform: 'android',
+        photoUrl: 'https://example.com/a.jpg',
+        updatedAt: Date.now(),
+      })
+    );
+  });
+
+  test('S01-L2: owner cannot write a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        payload: '<img src=x onerror=alert(1)>',
+      })
+    );
+  });
+
+  test('S01-L2: owner cannot write an oversized displayName', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'x'.repeat(500),
+      })
+    );
+  });
+
+  test('S01-L2: owner cannot write a non-string fcmToken', async () => {
+    await assertFails(
+      asUser('alice').doc('users/alice').set({
+        displayName: 'Alice',
+        fcmToken: { evil: true },
+      })
+    );
+  });
 });
 
 describe('/users/{uid}/public_keys/{doc}', () => {
@@ -497,6 +539,53 @@ describe('/groups/{groupId}', () => {
     );
   });
 
+  // ── S01-L1 regression tests ────────────────────────────────────────────────
+  // "full shape validation still absent" per BUG_TRACKER — the ID-squatting half
+  // was already closed by S03-H1 above.
+
+  test('S01-L1: cannot create a group with a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_6').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: 'New Group',
+        adminOnly: true,
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with an empty name', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_7').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: '',
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with a non-string name', async () => {
+    await assertFails(
+      asUser('carol').doc('groups/group_8').set({
+        members: ['carol'],
+        createdBy: 'carol',
+        name: { evil: true },
+      })
+    );
+  });
+
+  test('S01-L1: cannot create a group with more than 256 members', async () => {
+    const members = Array.from({ length: 257 }, (_, i) => `u${i}`);
+    members[0] = 'carol';
+    await assertFails(
+      asUser('carol').doc('groups/group_9').set({
+        members,
+        createdBy: 'carol',
+        name: 'Huge Group',
+      })
+    );
+  });
+
   test('member can update the group', async () => {
     await assertSucceeds(
       asUser('bob').doc(`groups/${GROUP_ID}`).update({ name: 'Renamed' })
@@ -560,6 +649,64 @@ describe('/groups/{groupId}/messages/{msgId}', () => {
         text: 'reply',
         isEncrypted: true,  // required by rules (F28 fix)
       })
+    );
+  });
+
+  // ── S01-M1 regression tests ────────────────────────────────────────────────
+  // No cap previously existed on message document size — a member could
+  // bulk-write oversized documents (cost/DoS). The membership TOCTOU itself is
+  // accepted per the audit's own recommendation and is not testable as a
+  // single-rule-evaluation unit test.
+
+  test('S01-M1: member cannot write an oversized group message', async () => {
+    await assertFails(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_toolong`).set({
+        sender: 'bob',
+        text: 'x'.repeat(100000),
+        isEncrypted: true,
+      })
+    );
+  });
+
+  test('S01-M1: member can still write an empty-text media message', async () => {
+    await assertSucceeds(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_media`).set({
+        sender: 'bob',
+        text: '',
+        isEncrypted: true,
+        type: 'image',
+      })
+    );
+  });
+
+  // ── S01-M4 regression tests ────────────────────────────────────────────────
+  // delete previously checked only `sender == auth.uid`, with no re-check of
+  // current membership (unlike read/create, which both call get() on the group).
+
+  test('S01-M4: sender who is still a member can delete their own message', async () => {
+    await assertSucceeds(
+      asUser('alice').doc(`groups/${GROUP_ID}/messages/msg_1`).delete()
+    );
+  });
+
+  test('S01-M4: removed ex-member cannot delete their own historical message', async () => {
+    // Carol sent msg_carol while a member, then was removed from the group.
+    await seed(`groups/${GROUP_ID}/messages/msg_carol`, {
+      sender: 'carol',
+      text: 'about to leave',
+    });
+    await seed(`groups/${GROUP_ID}`, {
+      members: ['alice', 'bob'], // carol no longer present
+      createdBy: 'alice',
+    });
+    await assertFails(
+      asUser('carol').doc(`groups/${GROUP_ID}/messages/msg_carol`).delete()
+    );
+  });
+
+  test('non-sender member cannot delete another member message', async () => {
+    await assertFails(
+      asUser('bob').doc(`groups/${GROUP_ID}/messages/msg_1`).delete()
     );
   });
 });
@@ -816,7 +963,7 @@ describe('/calls/{callId}/watch/state', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────�����──────────────────────────────────────────
 // IDENTITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -838,9 +985,33 @@ describe('/identities/{userId}', () => {
     await assertFails(asAnon().doc(`identities/${USER_ID}`).get());
   });
 
-  test('owner can update their identity without changing its public-key hash', async () => {
+  test('owner can re-write their identity with the same uid/hash (no-op merge)', async () => {
     await assertSucceeds(
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({
+        uid: USER_ID,
+        identityPubKeyHash: 'hash_abc',
+      })
+    );
+  });
+
+  // S01-M2 regression test: identities/{userId} is world-readable (see the
+  // "any signed-in user can read" test above), so an unconstrained update let the
+  // owner publish arbitrary content into a globally-readable doc. No client write
+  // path ever sets a field other than uid/identityPubKeyHash, so this previously
+  // succeeding write (formerly `.update({ label: 'legacy' })`) must now be
+  // rejected — 'label' was never a real field the app writes, it's standing in for
+  // any attacker-chosen key.
+  test('S01-M2: owner cannot add a field outside the uid/hash allow-list', async () => {
+    await assertFails(
       asUser(USER_ID).doc(`identities/${USER_ID}`).update({ label: 'legacy' })
+    );
+  });
+
+  test('S01-M2: owner cannot inject arbitrary content via an unexpected field', async () => {
+    await assertFails(
+      asUser(USER_ID).doc(`identities/${USER_ID}`).update({
+        bio: '<script>alert(1)</script>',
+      })
     );
   });
 
@@ -948,7 +1119,7 @@ describe('/conversations/{convId} (retired)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────���───────────────────
 // RECOVERY
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1101,12 +1272,27 @@ describe('/backups/{userId}/groups/{groupId}', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('/backup_logs/{logId}', () => {
-  test('owner can create a backup log entry', async () => {
+  // Matches the exact shape BackupManager.logEvent always writes:
+  // {uid, event, ts, count, error?} — see BackupManager.java:1090-1108.
+  test('owner can create a backup log entry with the real logEvent shape', async () => {
     await assertSucceeds(
       asUser('alice').doc('backup_logs/log_1').set({
         uid: 'alice',
         event: 'backup_complete',
         ts: 1000,
+        count: 42,
+      })
+    );
+  });
+
+  test('owner can create a backup log entry that includes the optional error field', async () => {
+    await assertSucceeds(
+      asUser('alice').doc('backup_logs/log_1b').set({
+        uid: 'alice',
+        event: 'backup_failed',
+        ts: 1000,
+        count: 0,
+        error: 'network timeout',
       })
     );
   });
@@ -1117,6 +1303,68 @@ describe('/backup_logs/{logId}', () => {
         uid: 'bob',
         event: 'backup_complete',
         ts: 1000,
+        count: 0,
+      })
+    );
+  });
+
+  // ── S01-M3 regression tests ──────────────────────────────────────────────
+  // Previously only `uid` ownership was checked — no shape/size validation at
+  // all, so an authenticated caller could write arbitrary fields/values into
+  // unbounded backup_logs/* documents (write-amplification / storage-cost DoS
+  // and a stored-content-injection primitive for any downstream log consumer).
+
+  test('S01-M3: cannot create a log entry with a field outside the allow-list', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_3').set({
+        uid: 'alice',
+        event: 'backup_complete',
+        ts: 1000,
+        count: 0,
+        payload: '<script>alert(1)</script>',
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with an event outside the known set', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_4').set({
+        uid: 'alice',
+        event: 'totally_made_up_event',
+        ts: 1000,
+        count: 0,
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry missing required fields', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_5').set({
+        uid: 'alice',
+        event: 'backup_complete',
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with an oversized error message', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_6').set({
+        uid: 'alice',
+        event: 'backup_failed',
+        ts: 1000,
+        count: 0,
+        error: 'x'.repeat(2001),
+      })
+    );
+  });
+
+  test('S01-M3: cannot create a log entry with a non-numeric count', async () => {
+    await assertFails(
+      asUser('alice').doc('backup_logs/log_7').set({
+        uid: 'alice',
+        event: 'backup_complete',
+        ts: 1000,
+        count: 'not-a-number',
       })
     );
   });
@@ -1161,7 +1409,7 @@ describe('/_server_health/{doc}', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNT LOCK  (Issue 1 — one-way latch enforcement)
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────��──────────────────────────
 
 describe('/accountLock/{accountId}', () => {
   // Client create now additionally requires duressEligibility/{uid}.eligible.
@@ -1342,7 +1590,7 @@ describe('/duressEligibility/{accountId}', () => {
 // The nonce doc also holds {uid, expiresAt}, so client read access would let any
 // authenticated user enumerate which accounts have a duress trigger in flight —
 // the exact event the feature exists to make undetectable.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────��───────────────────
 
 describe('/_duressNonces/{nonce}', () => {
   const NONCE = 'a'.repeat(64);

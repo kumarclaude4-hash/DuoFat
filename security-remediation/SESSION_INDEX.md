@@ -25,7 +25,7 @@ guidance) — the table below tracks the round, not a session count.
 |---|---|---|---|---|---|
 | 01 | Stop the bleeding | P0 | [`sessions/SESSION-01.md`](./sessions/SESSION-01.md) | **CLOSED.** `S07-C1` **fixed** — re-verified from source 2026-08-11 (`/mintToken` requires nonce + XEdDSA signature, `index.js:2013,2027`; `identityVerify.test.js` 16/16 executed). This supersedes the "still open/exploitable" banner above. 2 items (`SC-12`, credential rotation) remain **operator-only**. | S08-C1, SC-02, S08-H1, S03-L1, **S07-C1 (fixed)**, S07-H1, S02-L1, S06-H1, S02-M1, SC-12, S02-I3 |
 | 02 | Advertised guarantees | P1 | [`sessions/SESSION-02.md`](./sessions/SESSION-02.md) | **CLOSED** — the log file **does exist**; clusters A, B and C are all dispositioned. Corrects the "NOT STARTED — file does not exist" text that stood here. | S03-H1, S06-H2, S06-H3, S06-I2, S08-H5, S07-M1, S04-H1, S04-H2, S04-H3, S08-H4, S05-H1, S05-H3, S05-I1, S08-H2, S08-H3, S10-N2, S07-L4, S10-N3, SC-05, SC-04, SC-01, S04-I2 |
-| 03 | P2 batch + HARD STOP | P2 | scheduled in `ROUND3_REMEDIATION_PLAN.md` (20 sessions); per-session logs `sessions/SESSION-S3-*.md` | **IN PROGRESS — 3 of 20 sessions complete** (was "NOT STARTED"; the earlier "DISPOSITIONED, 0 open" claim was the false one caught 2026-08-11). Done: **S3-01** (APK/CI secrets), **S3-02** (supply-chain integrity + release provenance — SC-01/04/05 fixed), **S3-03** (dependency pinning & scanning — SC-06/07/08/09/10 fixed; **SC-03 partial**, hash population BLOCKED on Gradle+Android SDK+network). **Next: S3-04** (Firestore cross-user write protection), consistent with `START_HERE.md`'s chain state. All remaining findings still `open`; `../BUG_TRACKER.md` holds per-finding truth. | all remaining |
+| 03 | P2 batch + HARD STOP | P2 | scheduled in `ROUND3_REMEDIATION_PLAN.md` (20 sessions); per-session logs `sessions/SESSION-S3-*.md` | **IN PROGRESS — 5 of 20 sessions complete** (was "NOT STARTED"; the earlier "DISPOSITIONED, 0 open" claim was the false one caught 2026-08-11). Done: **S3-01** (APK/CI secrets), **S3-02** (supply-chain integrity + release provenance — SC-01/04/05 fixed), **S3-03** (dependency pinning & scanning — SC-06/07/08/09/10 fixed; **SC-03 partial**, hash population BLOCKED on Gradle+Android SDK+network), **S3-04** (Firestore cross-user write protection — S01-H1/H2/H3 **partial**, RULES verify BLOCKED → S3-15b; commit 812813d — chain state was not advanced when this landed, corrected in S3-05), **S3-05** (Firestore field validation & abuse caps — S01-M1/M2/M3/M4/L1/L2 **partial**, RULES verify BLOCKED → S3-15b; commit 3070b0b + test corrections in ec8a919; see `sessions/SESSION-S3-05.md`). **Next: S3-06** (Server auth & identity), consistent with `START_HERE.md`'s chain state. All remaining findings still `open`; `../BUG_TRACKER.md` holds per-finding truth. | all remaining |
 
 > ### Status correction, 2026-08-11 (FINAL VERIFICATION session, protocol §9)
 >
@@ -51,13 +51,14 @@ guidance) — the table below tracks the round, not a session count.
 >
 > ### Progress update, 2026-08-11 (Round 3 execution — see `START_HERE.md` chain state)
 >
-> Round 3 implementation has since **begun**: sessions **S3-01, S3-02, S3-03 are complete** (Round 03
-> row above; `sessions/SESSION-S3-*.md`). The "Round 3 was never implemented / remains open"
+> Round 3 implementation has since **begun**: sessions **S3-01 through S3-05 are complete**
+> (Round 03 row above; `sessions/SESSION-S3-*.md`). The "Round 3 was never implemented / remains open"
 > statements above are the frozen 2026-08-11 verification-pass record and are **superseded for those
-> three sessions only** — the other 17 sessions and both catch-up gates (S3-15b RULES, S3-19b Android)
+> five sessions only** — the other 15 sessions and both catch-up gates (S3-15b RULES, S3-19b Android)
 > are still open, and `SC-03` is **partial** (Gradle dependency-verification scaffold committed; hash
-> population BLOCKED on toolchain), not fixed. For "what's next," trust `START_HERE.md`'s `NEXT SESSION`
-> line (currently **S3-04**) and `../BUG_TRACKER.md` for per-finding truth. The program is still **NOT
+> population BLOCKED on toolchain), same as S3-04/S3-05 (RULES lane, verify BLOCKED — no `java`/
+> `firebase` CLI this session), not fixed. For "what's next," trust `START_HERE.md`'s `NEXT SESSION`
+> line (currently **S3-06**) and `../BUG_TRACKER.md` for per-finding truth. The program is still **NOT
 > signed off**.
 
 Relationship to audit sessions: the audit's `SESSION-00…10` are **discovery** sessions (frozen,
