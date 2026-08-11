@@ -397,6 +397,59 @@ test("pickClientIp defaults to 1 hop when trustedHops is not an integer", () => 
   );
 });
 
+// ── normalizeIpForRateLimit (S04-M1) ──────────────────────────────────────────
+
+test("normalizeIpForRateLimit leaves an IPv4 address unchanged", () => {
+  assert.equal(pure.normalizeIpForRateLimit("203.0.113.7"), "203.0.113.7");
+});
+
+test("normalizeIpForRateLimit collapses two addresses in the same /64 to the same key", () => {
+  const a = pure.normalizeIpForRateLimit("2001:db8:1234:5678:aaaa:bbbb:cccc:dddd");
+  const b = pure.normalizeIpForRateLimit("2001:db8:1234:5678:1111:2222:3333:4444");
+  assert.equal(a, b);
+});
+
+test("normalizeIpForRateLimit gives different keys for different /64 blocks", () => {
+  const a = pure.normalizeIpForRateLimit("2001:db8:1234:5678::1");
+  const b = pure.normalizeIpForRateLimit("2001:db8:9999:5678::1");
+  assert.notEqual(a, b);
+});
+
+test("normalizeIpForRateLimit expands '::' shorthand consistently regardless of where it falls", () => {
+  // Both represent the same /64 prefix (2001:db8:0:0) via different shorthand.
+  const a = pure.normalizeIpForRateLimit("2001:db8::1");
+  const b = pure.normalizeIpForRateLimit("2001:db8:0:0:0:0:0:1");
+  assert.equal(a, b);
+});
+
+test("normalizeIpForRateLimit unwraps an IPv4-mapped IPv6 address to its IPv4 form", () => {
+  assert.equal(pure.normalizeIpForRateLimit("::ffff:203.0.113.7"), "203.0.113.7");
+});
+
+test("normalizeIpForRateLimit strips an IPv6 zone index before normalizing", () => {
+  assert.equal(
+    pure.normalizeIpForRateLimit("fe80::1%eth0"),
+    pure.normalizeIpForRateLimit("fe80::1")
+  );
+});
+
+test("normalizeIpForRateLimit strips enclosing brackets", () => {
+  assert.equal(
+    pure.normalizeIpForRateLimit("[2001:db8::1]"),
+    pure.normalizeIpForRateLimit("2001:db8::1")
+  );
+});
+
+test("normalizeIpForRateLimit returns malformed input unchanged rather than guessing", () => {
+  assert.equal(pure.normalizeIpForRateLimit("2001:db8::1::2"), "2001:db8::1::2");
+  assert.equal(pure.normalizeIpForRateLimit("not:an:ip:at:all:but:has:colons:here"), "not:an:ip:at:all:but:has:colons:here");
+});
+
+test("normalizeIpForRateLimit passes through non-string / empty input unchanged", () => {
+  assert.equal(pure.normalizeIpForRateLimit(""), "");
+  assert.equal(pure.normalizeIpForRateLimit("unknown"), "unknown");
+});
+
 test("getCookie returns empty string when name is not present but header is non-empty", () => {
   const header = "a=1; b=2; c=3";
   assert.equal(pure.getCookie(header, "d"), "");

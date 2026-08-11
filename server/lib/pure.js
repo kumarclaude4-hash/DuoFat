@@ -155,6 +155,56 @@ function pickClientIp(forwardedHeader, remoteAddress, trustedHops) {
   return picked || fallback;
 }
 
+// ── IPv6 /64-aware rate-limit key normalization (pure) ────────────────────────
+// S04-M1: every IP-keyed limiter (waitlistIpHits, waitlistPollHits, ipHits,
+// adminIpFails) used the raw client IP string as its Map key. A residential
+// ISP delegates a whole /64 (2^64 addresses) to a single customer, and an
+// attacker on that customer's own connection can rotate the last 64 bits of
+// their address per request (many OSes do this automatically for privacy —
+// "privacy extensions" / RFC 4941) at zero cost, so keying by the full 128-bit
+// address makes the limiter's actual granularity "one bucket per request" for
+// any IPv6 attacker — the limit is defeated entirely, not just weakened.
+// IPv4 has no such delegated-block problem (a /32 *is* the single address)
+// and is returned unchanged. IPv4-mapped IPv6 addresses (::ffff:a.b.c.d, used
+// by some dual-stack proxies) are unwrapped to their IPv4 form for the same
+// reason. Malformed input is returned unchanged rather than guessed at, so a
+// parse failure fails toward "no worse than pre-fix", not toward silently
+// merging unrelated clients into one bucket.
+function normalizeIpForRateLimit(ip) {
+  if (typeof ip !== "string" || ip.length === 0) return ip;
+
+  // Strip an IPv6 zone index (fe80::1%eth0) and enclosing brackets ([::1]),
+  // both of which can appear on remoteAddress/XFF values but are irrelevant
+  // to which /64 an address belongs to.
+  let addr = ip.split("%")[0];
+  if (addr.startsWith("[") && addr.endsWith("]")) addr = addr.slice(1, -1);
+
+  if (!addr.includes(":")) return ip; // IPv4, or already-unparseable — leave as-is
+
+  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (mapped) return mapped[1];
+
+  // Expand "::" (at most one occurrence in a valid address) into explicit
+  // zero groups so the /64 prefix (first 4 of 8 groups) is unambiguous
+  // regardless of where the shorthand run of zeros falls.
+  const halves = addr.split("::");
+  if (halves.length > 2) return ip; // malformed (multiple "::") — don't guess
+
+  let groups;
+  if (halves.length === 2) {
+    const left  = halves[0] ? halves[0].split(":") : [];
+    const right = halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - left.length - right.length;
+    if (missing < 0) return ip; // malformed — too many groups already
+    groups = [...left, ...Array(missing).fill("0"), ...right];
+  } else {
+    groups = addr.split(":");
+    if (groups.length !== 8) return ip; // malformed — not a full address
+  }
+
+  return groups.slice(0, 4).join(":");
+}
+
 // ── YouTube search: query validation (pure) ───────────────────────────────────
 // Watch Together lets a user search YouTube through the server so the API key
 // never ships in the APK. Every input constraint below exists to bound YouTube
@@ -409,6 +459,7 @@ module.exports = {
   evaluateFixedWindow,
   collectStaleKeys,
   pickClientIp,
+  normalizeIpForRateLimit,
   b2HmacKey,
   buildB2PresignUrl,
   // YouTube search (Watch Together)

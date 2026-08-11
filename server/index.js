@@ -387,11 +387,16 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
+// S04-M1: key by pure.normalizeIpForRateLimit(ip), not the raw ip, so every
+// address within an attacker's own delegated IPv6 /64 shares one bucket
+// instead of each rotated address getting its own. See the helper's comment
+// in lib/pure.js for the full rationale. IPv4 keys pass through unchanged.
 function checkWaitlistIpRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = waitlistIpHits.get(ip);
+  const rec = waitlistIpHits.get(key);
   if (!rec || now - rec.windowStart >= WAITLIST_IP_WINDOW_MS) {
-    waitlistIpHits.set(ip, { count: 1, windowStart: now });
+    waitlistIpHits.set(key, { count: 1, windowStart: now });
     return true;
   }
   if (rec.count >= WAITLIST_IP_MAX_HITS) return false;
@@ -400,10 +405,11 @@ function checkWaitlistIpRateLimit(ip) {
 }
 
 function checkWaitlistPollRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = waitlistPollHits.get(ip);
+  const rec = waitlistPollHits.get(key);
   if (!rec || now - rec.windowStart >= WAITLIST_POLL_WINDOW_MS) {
-    waitlistPollHits.set(ip, { count: 1, windowStart: now });
+    waitlistPollHits.set(key, { count: 1, windowStart: now });
     return true;
   }
   if (rec.count >= WAITLIST_POLL_MAX_HITS) return false;
@@ -411,7 +417,7 @@ function checkWaitlistPollRateLimit(ip) {
   return true;
 }
 
-// ── Per-IP rate limit ─────────────────────────────────────────────────────────
+// ── Per-IP rate limit ────────────────────────���────────────────────────────────
 // Max 5 /mintToken attempts per IP in any rolling 15-minute window.
 // Render appends its own entry to X-Forwarded-For; we use the RIGHTMOST value
 // (proxy-appended, not client-controlled) via getClientIp(). See CRIT-1 fix.
@@ -692,18 +698,24 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix. The
+// admin lockout is the highest-value target of this class of bypass (it
+// gates the operator panel), so it must not be left keyed by raw IPv6
+// address while the lower-stakes limiters get the fix.
 function adminIpLocked(ip) {
-  const rec = adminIpFails.get(ip);
+  const key = pure.normalizeIpForRateLimit(ip);
+  const rec = adminIpFails.get(key);
   if (!rec) return false;
   if (Date.now() - rec.windowStart >= ADMIN_IP_WINDOW_MS) return false;
   return rec.count >= ADMIN_IP_MAX_FAILS;
 }
 
 function recordAdminAuthFailure(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = adminIpFails.get(ip);
+  const rec = adminIpFails.get(key);
   if (!rec || now - rec.windowStart >= ADMIN_IP_WINDOW_MS) {
-    adminIpFails.set(ip, { count: 1, windowStart: now });
+    adminIpFails.set(key, { count: 1, windowStart: now });
   } else {
     rec.count++;
   }
@@ -915,11 +927,13 @@ function sendServerError(res, tag, err, status = 500) {
   res.end(`Server error (ref: ${ref})`);
 }
 
+// S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix.
 function checkIpRateLimit(ip) {
+  const key = pure.normalizeIpForRateLimit(ip);
   const now = Date.now();
-  const rec = ipHits.get(ip);
+  const rec = ipHits.get(key);
   if (!rec || now - rec.windowStart >= IP_WINDOW_MS) {
-    ipHits.set(ip, { count: 1, windowStart: now });
+    ipHits.set(key, { count: 1, windowStart: now });
     return true; // allowed
   }
   if (rec.count >= IP_MAX_HITS) return false; // blocked
