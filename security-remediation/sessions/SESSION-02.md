@@ -14,9 +14,12 @@ media-scope isolation, duress lock durability, egress containment, and admin acc
 |---|---|---|
 | A | `S03-H1`, `S06-H2`, `S06-H3`, `S06-I2` | **CODE COMPLETE + RECORDED** (2026-08-10; recording finished by recovery session S02b). Server layer test-verified. **Java and Firestore-rules layers source-reviewed only — compilation and emulator BLOCKED (`PR-4`).** Do not re-implement. |
 | B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` (+ `S08-H4`) | **COMPLETE + RECORDED** (2026-08-10). Code `48a3f7e`/`f636d8b` (PR #57); half-fix completion + recording `7653515`. **All seven rows server-side and test-verified — 153/153.** `S05-H1` is `fixed+runbook` (rotation is an operator action). `S08-H4` closed with no Java change. |
-| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, ~~`S08-H4`~~, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | not started in this log. `S08-H4` was pulled forward into cluster B — it is the client half of `S04-H3` and closed with the same server-side fix. |
+| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, ~~`S08-H4`~~, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | **DISPOSITIONED** — all rows carry a final disposition in `../FINDING_INDEX.md` (several `fixed+runbook`, i.e. code done + operator action pending). `S08-H4` was pulled forward into cluster B — it is the client half of `S04-H3` and closed with the same server-side fix. |
 
-Round 2 is **NOT closed.** Clusters A and B are complete; **cluster C has not started.**
+**Round 2 is closed** (all three clusters dispositioned), as verified by the FINAL VERIFICATION
+session on 2026-08-11 — see the record at the end of this file and
+[`../FINAL_SECURITY_REPORT.md`](../FINAL_SECURITY_REPORT.md). The line that previously stood here
+("Round 2 is NOT closed... cluster C has not started") was stale.
 
 ---
 
@@ -205,7 +208,13 @@ unreproducible green number silently converts the next session's real regression
 
 ## Next
 
-**Round 2 Cluster B** is the next unfinished unit: `S04-H1`, `S04-H2`, `S04-H3` (SSRF predicate,
+> **Superseded 2026-08-11.** This section was written at the end of cluster A. Cluster B was
+> subsequently completed (and did reach genuine test-backed closure, as predicted), then cluster C.
+> **There is no next remediation cluster** — all 116 findings are dispositioned. What remains is
+> operator-only: see [`../FINAL_SECURITY_REPORT.md`](../FINAL_SECURITY_REPORT.md) §3–§4. The original
+> text is kept below for the record.
+
+~~**Round 2 Cluster B** is the next unfinished unit:~~ `S04-H1`, `S04-H2`, `S04-H3` (SSRF predicate,
 `/linkPreview` size/timeout cap, `og:image` IP-beacon), `S05-H1`, `S05-H3`, `S05-I1` (admin token
 entropy floor, durable admin audit, operator-secret docs). Per `../SESSION_PROTOCOL.md` §8. Cluster B
 is **entirely server-side JavaScript**, which is the one layer this environment can actually verify —
@@ -328,6 +337,9 @@ VERIFICATION: PASS: cd server && npm test -> 153 tests / 153 pass / 0 fail (run 
               NOT RUN: runtime/integration testing of the deployed server
               OPERATOR-PENDING: gh api .../branches/main/protection -> 404 "Branch not protected"
                        (SC-12 re-checked, still not done by a human); GCP key still un-revoked
+COMMIT: 542f98f05dc3c9cbfff93bca36e595ce19d19b0b   WORKTREE: clean
+              (read from `git log -1 --format=%H` AFTER committing, per §4 — never typed from
+               memory; that is exactly how fabrication #2 produced two hashes that never existed)
 NEXT SESSION: NONE for remediation. There is no next cluster - all 116 findings dispositioned.
               Remaining work is operator-only: FINAL_SECURITY_REPORT.md §3 (revoke the leaked GCP
               service-account key FIRST), then build + release the APK together with the server
