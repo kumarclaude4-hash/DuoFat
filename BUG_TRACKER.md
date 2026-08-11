@@ -55,15 +55,15 @@ match what the old index already claimed, re-confirmed against source.
 | ID | Status | Confidence | Issue | Evidence |
 |---|---|---|---|---|
 | S07-C1 | Fixed | Verified | `/mintToken` accepted a public value as ownership proof | `server/lib/identityVerify.js` + `challengeStore.js` exist; `index.js:1867` verifies signature, `:1853` consumes nonce; Android sends full `IdentityKeyPair` (`DisplayNameActivity.java:126`, `RestoreFromSeedActivity.java:226`). Android compile unverifiable (no JDK/SDK in this env) — treat as source-verified only. |
-| S08-C1 | **Fixed** (corrected) | Verified | Admin Firebase service-account key packaged into every APK | `.github/workflows/release.yml` no longer writes `app/src/main/assets/service-account.json`; CI asserts its absence. |
+| S08-C1 | **Fixed** (S3-01) | Verified | Admin Firebase service-account key packaged into every APK | Re-verified from source this session (S3-01): no `service-account.json` write step in `release.yml`, `build-release.sh`, or `build-apks.sh`; all three fail the build if the file reappears. `find . -name service-account.json` → none; `assets/` holds only `README.txt`/`brand`/`watch_together`. Code half done; operator must still **revoke the leaked GCP SA key** (runbook). |
 | SC-01 | Open | Verified | Vendored `libsignal-client-*-stripped.jar` not reproducible/hashed/validated in CI | `app/libs/libsignal-client-0.54.1-stripped.jar` present; no hash-assertion step found in `.github/workflows/ci.yml`. |
-| SC-02 | **Fixed** (corrected) | Verified | Release workflow baked full backend secret set into shipped APK | Same fix as S08-C1; `local.properties` write step only carries non-secret endpoints, enforced by a dedicated CI guard step. |
+| SC-02 | **Fixed** (S3-01) | Verified | Release workflow baked full backend secret set into shipped APK | `release.yml` and `ci.yml` write `local.properties` with non-secret routing values only (`b2.bucket`/`b2.region`/`push.server.url`/`worker.url`); `app/build.gradle` no longer reads the B2 credential pair (`B2_KEY_ID`/`B2_APPLICATION_KEY` emitted as `""`). `release.yml` "Assert no secrets in packaged build inputs" guard blocks `b2.key.id`/`b2.application.key`/`worker.secret`/private-key blocks. This session (S3-01) added the **same guard to `ci.yml`'s `build-debug` job**, which also uploads an APK artifact — closing the enforcement gap on the PR-facing job. Guard logic functionally tested: passes clean/empty-value, fails on real `worker.secret` value and on a private-key block. |
 
 ## High (30)
 
 | ID | Status | Confidence | Issue | Evidence |
 |---|---|---|---|---|
-| S08-H1 | **Fixed** (corrected) | Verified | `WORKER_SECRET` in `BuildConfig`, accepted on Worker `/stats` | `app/build.gradle` comment + grep confirms no `WORKER_SECRET` field; `worker/src/index.js` `/stats` now gated on `STATS_SECRET`. |
+| S08-H1 | **Fixed** (S3-01) | Verified | `WORKER_SECRET` in `BuildConfig`, accepted on Worker `/stats` | Re-verified this session (S3-01): no `buildConfigField ... WORKER_SECRET` in `app/build.gradle`; grep of `.github/workflows/`, `build-*.sh`, `app/build.gradle` finds **no live WORKER_SECRET value injection** (all references are historical comments). `worker/src/index.js` `/stats` gate reads `env.STATS_SECRET` only, fail-closed if unset (`isStatsAuthorized`, `:88-99`), and `grep "env.WORKER_SECRET" worker/src/index.js` → **none**: the Worker has no WORKER_SECRET acceptance path. Operator must still rotate the leaked `WORKER_SECRET` (runbook), but it authorizes nothing now. |
 | S07-H1 | Open | Carried | Mint key-check fails open when stored hash absent | Not re-read this pass; original defect is at `server/index.js:1514-1517` per audit. |
 | S06-H1 | Fixed | Verified | `accountLock` not enforced server-side | `server/index.js:2053-2062` checks `accountLock` inside the mint transaction before issuing a token. |
 | S03-H1 | Fixed | Verified | Media scope confusion via client-created `groups/{chatId}` | `server/lib/mediaScope.js` exists; `firestore.rules` `groups` create now requires `!exists(chats/{groupId})` + `createdBy` checks. |
@@ -134,7 +134,7 @@ match what the old index already claimed, re-confirmed against source.
 | S02-L2 | Open | Carried | `createChat` stores unbounded/unsanitized display names |
 | S02-L3 | Open | Verified | `mintCooldown` map only purges an entry once a request lands with `last === 0`; otherwise grows per active user |
 | S02-L4 | Open | Verified | `collectBody` counts chars (`body.length`), not bytes — no `setEncoding` call |
-| S03-L1 | **Fixed** | Verified | `WORKER_SECRET` compiled into APK (= S08-H1) |
+| S03-L1 | **Fixed** (S3-01) | Verified | `WORKER_SECRET` compiled into APK (= S08-H1) — closed with S08-H1 this session; duplicate finding, same evidence |
 | S03-L2 | Open | Carried | Unguarded `decodeURIComponent` |
 | S03-L3 | Open | Carried | Dead B2 presign code (= S04-I2) |
 | S03-L4 | Partial | Verified | Rejections without CORS headers — global CORS headers are applied via a shared helper, but not confirmed on every quota-rejection path |
@@ -160,7 +160,7 @@ match what the old index already claimed, re-confirmed against source.
 | S10-N2 | Open | Carried | Peer uid in release logcat |
 | S10-N3 | Partial | Verified | Deleted media survives B2 cold tier on race — a race guard now exists (`worker/src/index.js:553-574`, "Race guard: the nightly migration PUTs to B2 and THEN deletes from R2"); confirm end-to-end before closing |
 | SC-11 | Accepted | Carried | Production crypto on alpha library — no stable release exists |
-| SC-12 | Open | Verified | Branch protection unverified — `.github/CODEOWNERS` exists (with a likely typo, `appfirestore.rules`), but branch-protection state requires the GitHub API, not visible from source |
+| SC-12 | Open (operator) | Verified | Branch protection — **still unprotected.** Re-checked live this session (S3-01): `gh api repos/kumarclaude4-hash/DuoFatass/branches/main/protection` → `404 Branch not protected`. Not closable from source; operator must enable branch protection on `main`. Runbook item. |
 
 ## Informational (23)
 

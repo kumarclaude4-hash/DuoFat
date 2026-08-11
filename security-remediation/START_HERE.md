@@ -21,9 +21,10 @@ way until every session and both catch-up gates (S3-15b, S3-19b) have actually r
 <!-- Update ONLY this block at the end of each session. It is the single source of truth for "next". -->
 
 ```
-NEXT SESSION: S3-01  (Get secrets out of the APK and CI — P0)
-LAST DONE:    none (Round 3 not started; Rounds 1–2 complete)
+NEXT SESSION: S3-02  (Supply-chain integrity, release provenance — SC-01, SC-04, SC-05 — lane CI)
+LAST DONE:    S3-01  (APK/CI secrets: S08-C1, SC-02, S08-H1, S03-L1 code-fixed & verified; SC-12 re-checked live, still open/operator) — commit 60c8cde
 BLOCKED GATES PENDING: S3-15b (RULES emulator), S3-19b (Android build) — need operator toolchains
+OPERATOR RUNBOOK (S3-01): revoke leaked GCP SA key; rotate WORKER_SECRET + baked B2 creds; enable branch protection on main (SC-12)
 ```
 
 If `NEXT SESSION` above is `S3-20 complete`, do **not** start coding — go to the sign-off gate at the
