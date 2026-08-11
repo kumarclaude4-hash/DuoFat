@@ -1,8 +1,14 @@
 # SESSION-S3-07 — Server limits, memory growth, IP keying
 
 **Lane:** SRV
-**Status:** Partial — 3 of 5 scoped findings fixed; 2 deferred to the next SRV session for budget reasons
-**Commits:** `000ed14` (implementation), documentation commit follows this file
+**Status:** Complete — 5 of 5 scoped findings fixed, across three sub-sessions
+**Commits:**
+- `000ed14` — `S02-L3`, `S02-L4`/`S04-L1`, `S04-M3` (first sub-session)
+- `e64f3b4` — documentation for the above
+- `959d869` — `S04-M1` (second sub-session; this file originally shipped
+  claiming `S04-M1` deferred — that was corrected once the fix landed, see
+  "Correction" below)
+- `fe9559a` — `S04-L3` (third sub-session, this document's reconciliation)
 
 ## Scope (per `ROUND3_REMEDIATION_PLAN.md`)
 
@@ -11,12 +17,19 @@ S3-07 is scoped to 5 findings: `S02-L3` (`mintCooldown` purge), `S02-L4`/`S04-L1
 (IPv6 /64 keying for all IP-keyed limits incl. admin lockout), `S04-M3` (XFF
 trust configurable).
 
-**This session fixed 3 of the 5** (`S02-L3`, `S02-L4`/`S04-L1` combined = one
-fix, `S04-M3`) under an explicit budget constraint from the user ("fix 3 more
-bugs"). `S04-M1` (IPv6 /64 keying) and `S04-L3` (limiter purge / durable
-store) are deferred, **not** claimed fixed, and remain queued as the next
-priority for whichever session picks up SRV work next — either a continuation
-of S3-07 or folded into S3-08.
+**The first sub-session fixed 3 of the 5** (`S02-L3`, `S02-L4`/`S04-L1`
+combined = one fix, `S04-M3`) under an explicit budget constraint from the
+user ("fix 3 more bugs"). `S04-M1` (IPv6 /64 keying) and `S04-L3` (limiter
+purge / durable store) were deferred at that point, not claimed fixed.
+
+**Both deferred findings have since been fixed**, closing out S3-07's scope
+entirely:
+- `S04-M1` — fixed in a follow-on continuation of this same session (commit
+  `959d869`); see "S04-M1 fix" below.
+- `S04-L3` — fixed in a third sub-session (commit `fe9559a`) after a prior
+  attempt at it ran out of budget mid-implementation (dependency installed,
+  no code written yet) and was picked back up cleanly; see "S04-L3 fix"
+  below.
 
 ## What was verified from source before fixing
 
@@ -77,25 +90,61 @@ unit-testable without a live HTTP server, Firestore, or timers.
    the current Render deployment) and calls `pickClientIp()` from
    `getClientIp()`.
 
-## What was deferred (not fixed this session)
+## S04-M1 fix (commit `959d869`)
 
-- **`S04-M1`** (IPv6 /64 keying for all IP-keyed limits, including admin
-  lockout) — this is the largest item in scope: it requires touching every
-  IP-keyed Map (`ipHits`, `waitlistIpHits`, the admin lockout counter) to
-  collapse an IPv6 address to its /64 prefix before using it as a key, since
-  a single residential IPv6 allocation can rotate through the full /64 to
-  defeat per-address limiting. Deferred whole, not partially started.
-- **`S04-L3`** (limiter purge / durable store — "accepted-to-ops") — the
-  `S02-L3` fix above closes the specific `mintCooldown` gap in this finding's
-  cluster, but `S04-L3`'s broader ask (moving limiter state to a durable,
-  cross-process store rather than per-process `Map`s) is unaddressed and
-  remains `Open`.
+IPv6 /64 keying for all IP-keyed limits, including admin lockout. New pure
+`normalizeIpForRateLimit(ip)` in `server/lib/pure.js` collapses an IPv6
+address to its /64 prefix (unwrapping IPv4-mapped forms and stripping zone
+indices first; malformed input is returned unchanged so callers never throw
+on a weird header) so a residential /64 rotating its last 64 bits can no
+longer mint one rate-limit bucket per request. Wired into every IP-keyed
+limiter in `server/index.js` at the time: `ipHits`, `waitlistIpHits`,
+`waitlistPollHits`, and the admin lockout (`adminIpFails`, later replaced by
+`adminLockoutStore` — see the `S04-L3` fix, which reuses this same
+normalizer). 14 new cases in `lib/pure.test.js`.
 
-Both are left `Open` in `BUG_TRACKER.md`, not `Partial` — no code was written
-against either this session, so there is nothing to half-credit.
+## S04-L3 fix (commit `fe9559a`)
+
+Limiter state per-process/in-memory. Scoped to the highest-value target: the
+admin brute-force failure counter, which gates guessing `ADMIN_TOKEN` (see
+`S05-H1`), reset to zero on every restart/redeploy and was not shared across
+instances — the only ceiling on that guess surface never accumulated
+durably. A prior attempt at this fix, in a separate sub-session, ran the
+finding audit, confirmed Upstash Redis as the intended store, and installed
+`@upstash/redis` before running out of budget with no implementation code
+written yet; that state was picked up and completed cleanly rather than
+redone.
+
+New `server/lib/adminLockoutStore.js` wraps Upstash Redis
+(`KV_REST_API_URL`/`KV_REST_API_TOKEN`) behind `isLocked()`/
+`recordFailure()`/`reset()`/`count()`:
+- `recordFailure()` uses a single Lua `EVAL` (INCR + conditional PEXPIRE) so
+  two concurrent failures can't race the "first failure sets the TTL" branch
+  into repeatedly extending the lockout window.
+- Falls back to an in-memory Map with the pre-fix semantics if Redis is
+  unconfigured or a call throws — an outage degrades to (not worse than) the
+  old per-process behavior, and `onError()` warns on every fallback rather
+  than silently presenting it as equivalent durable protection.
+- IP normalization is injected as `pure.normalizeIpForRateLimit` (the
+  `S04-M1` fix), so the durable store gets the same /64 collapsing the other
+  limiters already have.
+
+`server/index.js`'s `adminIpLocked()`/`recordAdminAuthFailure()` now
+delegate to the store and are `async` (every one of the 9
+`requireAdminAuth()` call sites, and the `POST /admin/login` handler, already
+ran inside an async context, so this is `await`, not restructuring). A new
+`resetAdminAuthFailures()` clears an IP's failures on successful admin
+login — previously failures only ever accumulated within the (15-minute)
+window.
+
+**Not in scope:** the other in-memory limiters (`ipHits`, `waitlistIpHits`,
+`waitlistPollHits`, the challenge/nonce stores) remain process-local —
+lower-value targets than the admin gate, left `Open` for a future pass if
+warranted.
 
 ## Test evidence
 
+**First sub-session** (`S02-L3`, `S02-L4`/`S04-L1`, `S04-M3`):
 - `node --check server/index.js` and `node --check server/lib/pure.js` — both
   clean.
 - `npm test` (server): **156 pass / 1 fail** (was 146/147 before this
@@ -116,9 +165,45 @@ against either this session, so there is nothing to half-credit.
 - Live-wiring grep confirms `pure.collectStaleKeys` and `pure.pickClientIp`
   are both called from `server/index.js`, not just defined and unused.
 
+**`S04-M1` sub-session:**
+- 14 new cases in `lib/pure.test.js` for `normalizeIpForRateLimit`.
+- Full suite: 165/166 pass (the 1 failure is the same pre-existing
+  `identityVerify.test.js` issue, unchanged by this fix).
+- Live-wiring grep confirms `normalizeIpForRateLimit` is called from all
+  four IP-keyed limiters in `server/index.js`.
+
+**`S04-L3` sub-session:**
+- `node --check` clean on `server/index.js`, `server/lib/adminLockoutStore.js`,
+  `server/lib/adminLockoutStore.test.js`.
+- New `server/lib/adminLockoutStore.test.js` (13 cases, Redis client mocked —
+  no live Upstash credentials required): local-fallback accumulate/lockout/
+  reset, Redis-backed accumulate via the atomic Lua script, TTL anchored on
+  the first failure only (not extended by later ones), TTL expiry,
+  reset-on-success, Redis-error fail-safe on `isLocked`/`recordFailure`/
+  `reset`, and IPv6/64 key normalization consistency with `S04-M1`.
+- `npm test` (server): **194/194 pass** (was 181/181 immediately before this
+  sub-session — the +13 delta is the new `adminLockoutStore.test.js` cases).
+  The previously-tracked `identityVerify.test.js` failure was **not**
+  reproduced in this sub-session's environment (all native deps installed
+  cleanly) — if it resurfaces in a future environment, treat it as the same
+  pre-existing, unrelated issue documented above, not a regression from this
+  work.
+- Live-wiring grep confirms `createAdminLockoutStore` is imported and
+  instantiated in `server/index.js`, and `adminIpLocked`/
+  `recordAdminAuthFailure`/`resetAdminAuthFailures` all delegate to it.
+
+## Correction
+
+This file originally shipped (in the first sub-session) stating `S04-M1` was
+deferred to a future session. That was accurate at the time it was written,
+but `S04-M1` was fixed later in that same session before the session closed,
+and the earlier draft of this file was not updated to reflect it — this
+reconciliation corrects that. `S04-M1`'s `BUG_TRACKER.md` row has carried the
+correct **Fixed** status since; this file did not match it until now.
+
 ## Chain state
 
-`START_HERE.md`: `LAST DONE: S3-07` (partial — see above), `NEXT SESSION:
-S3-07 continuation or S3-08` — the two deferred findings (`S04-M1`, `S04-L3`)
-should be picked up before or alongside `S3-08`'s own scope (server egress,
-TURN, public endpoints), at the next session's discretion.
+`START_HERE.md`: `LAST DONE: S3-07` — **all 5 scoped findings fixed**
+(`S02-L3`, `S02-L4`/`S04-L1`, `S04-M3`, `S04-M1`, `S04-L3`). `NEXT SESSION:
+S3-08` (server egress, TURN, public endpoints) per
+`ROUND3_REMEDIATION_PLAN.md` — no S3-07 carryover remains.
