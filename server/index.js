@@ -344,7 +344,22 @@ db.collection("calls").onSnapshot(
 
 // ── Per-userId mint cooldown (in-memory rate limit) ───────────────────────────
 // Allows at most one token mint per userId per 60 seconds.
+const MINT_COOLDOWN_MS = 60_000;
 const mintCooldown = new Map();
+
+// S02-L3: unlike every sibling limiter Map below (ipHits, waitlistIpHits,
+// authRateLimits), this one had no purge job — one entry accumulates per
+// distinct userId ever seen (successful or merely attempted) and is never
+// removed, so a long-lived Render instance grows this Map forever. userId is
+// not a secret (see the S02-M1 comment further down), so an attacker can grow
+// it arbitrarily just by POSTing distinct userIds. Purge on the same cadence
+// as the other per-key limiters.
+setInterval(() => {
+  const now = Date.now();
+  for (const key of pure.collectStaleKeys(mintCooldown, now, MINT_COOLDOWN_MS)) {
+    mintCooldown.delete(key);
+  }
+}, 5 * 60 * 1000);
 
 // S07-C1 remediation, part 1 of 2: single-use nonce issuance for /mintChallenge.
 // NOT YET enforced by /mintToken — see that handler's comment. This store only
@@ -816,18 +831,30 @@ process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err.message, "\n", err.stack);
 });
 
+// S04-M3: how many trusted proxy hops sit in front of this server and are
+// expected to have appended their own entry to X-Forwarded-For. Render's edge
+// is exactly one hop, so the default (1) reproduces the original hardcoded
+// "always trust the rightmost entry" behavior for the deployment this server
+// actually runs on. Set to 0 to disable XFF trust entirely (bare socket
+// address only — e.g. local dev, or a topology with no trusted proxy at all),
+// or higher if another trusted proxy/CDN is added in front of Render later.
+// See pickClientIp() in lib/pure.js for the resolution logic this configures.
+const TRUSTED_PROXY_HOPS = (() => {
+  const raw = parseInt(process.env.TRUSTED_PROXY_HOPS, 10);
+  return Number.isInteger(raw) && raw >= 0 ? raw : 1;
+})();
+
 function getClientIp(req) {
-  // Use the RIGHTMOST entry in X-Forwarded-For — the one appended by the
-  // trusted terminating proxy (Render). The leftmost entries are client-
-  // controlled and trivially spoofable; trusting them would let any attacker
-  // bypass every IP-based rate limit and the admin lockout by forging:
-  //   X-Forwarded-For: 1.2.3.4
-  const forwarded = req.headers["x-forwarded-for"];
-  if (forwarded) {
-    const entries = forwarded.split(",");
-    return entries[entries.length - 1].trim() || req.socket.remoteAddress || "unknown";
-  }
-  return req.socket.remoteAddress || "unknown";
+  // The leftmost X-Forwarded-For entries are client-controlled and trivially
+  // spoofable; trusting them would let any attacker bypass every IP-based
+  // rate limit and the admin lockout by forging: X-Forwarded-For: 1.2.3.4
+  // pickClientIp() only trusts the entries appended by TRUSTED_PROXY_HOPS
+  // trusted proxies, counted from the right.
+  return pure.pickClientIp(
+    req.headers["x-forwarded-for"],
+    req.socket.remoteAddress,
+    TRUSTED_PROXY_HOPS
+  );
 }
 
 // ── Log hygiene ───────────────────────────────────────────────────────────────
@@ -1055,11 +1082,22 @@ function readBody(req, res) {
 // otherwise the 413 response is already sent and onComplete is not called.
 function collectBody(req, res, onComplete) {
   let body = "";
+  // S02-L4/S04-L1: the cap was `body.length > MAX_BODY_BYTES`, i.e. the JS
+  // string's UTF-16 code-unit count, not the wire byte count. `chunk` arrives
+  // as a Buffer (no setEncoding() is ever called on `req`, deliberately — see
+  // note below), and `body += chunk` coerces it via `chunk.toString("utf8")`.
+  // A 4-byte UTF-8 sequence (e.g. many emoji) decodes to 2 UTF-16 code units,
+  // so `body.length` undercounts true bytes by up to 2x — an attacker sending
+  // such bodies could push roughly double MAX_BODY_BYTES onto the heap before
+  // this check ever tripped. Track true byte length from the Buffer directly,
+  // matching the (already-correct) pattern in readBody() above.
+  let bytes = 0;
   let tooLarge = false;
   req.on("data", (chunk) => {
     if (tooLarge) return;
+    bytes += chunk.length;
     body += chunk;
-    if (body.length > MAX_BODY_BYTES) {
+    if (bytes > MAX_BODY_BYTES) {
       tooLarge = true;
       res.writeHead(413, { "Content-Type": "text/plain" });
       res.end("Request body too large");
@@ -1786,7 +1824,7 @@ document.getElementById("duressUidInput").addEventListener("keydown", (event) =>
 </html>
 `;
 
-// ── Security response headers ───────────────────────────────────────��─────────
+// ── Security response headers ───────���───────────────────────────────��─────────
 // Baseline defense-in-depth headers applied to *every* response via setHeader()
 // at the top of the request handler. Node merges these with the object passed to
 // res.writeHead(), and writeHead values take precedence — so the two HTML routes
@@ -1984,7 +2022,7 @@ http.createServer((req, res) => {
         // guesses cost the attacker nothing they can inflict on the victim.
         const now  = Date.now();
         const last = mintCooldown.get(userId) || 0;
-        if (now - last < 60_000) {
+        if (now - last < MINT_COOLDOWN_MS) {
           res.writeHead(429, { "Content-Type": "text/plain" });
           res.end("Too many requests — wait 60 s and retry");
           return;
@@ -2238,7 +2276,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /migrateUid ─────────────────────────────────────────────────────────
+  // ── POST /migrateUid ──────────────────────��──────────────────────────────────
   //
   // Body (JSON): { userId, oldUid }
   // Auth: Firebase ID token in Authorization: Bearer <token> header.

@@ -319,6 +319,84 @@ test("evaluateFixedWindow treats now exactly at windowStart + windowMs as a new 
   assert.deepEqual(boundary.record, { count: 1, windowStart: windowMs });
 });
 
+// ── collectStaleKeys (S02-L3) ─────────────────────────────────────────────────
+
+test("collectStaleKeys returns keys older than the TTL", () => {
+  const now = 100_000;
+  const ttlMs = 60_000;
+  const entries = [
+    ["fresh", now - 1_000],   // well within TTL
+    ["stale1", now - 61_000], // just past TTL
+    ["stale2", now - 500_000],
+  ];
+  assert.deepEqual(pure.collectStaleKeys(entries, now, ttlMs), ["stale1", "stale2"]);
+});
+
+test("collectStaleKeys treats exactly-at-TTL as not yet stale", () => {
+  const now = 100_000;
+  const ttlMs = 60_000;
+  const entries = [["boundary", now - ttlMs]];
+  assert.deepEqual(pure.collectStaleKeys(entries, now, ttlMs), []);
+});
+
+test("collectStaleKeys works directly against a live Map (no copy needed)", () => {
+  const now = 100_000;
+  const ttlMs = 60_000;
+  const map = new Map([
+    ["a", now - 10],
+    ["b", now - 999_999],
+  ]);
+  assert.deepEqual(pure.collectStaleKeys(map, now, ttlMs), ["b"]);
+});
+
+test("collectStaleKeys returns an empty array for an empty input", () => {
+  assert.deepEqual(pure.collectStaleKeys([], 100_000, 60_000), []);
+});
+
+// ── pickClientIp (S04-M3) ──────────────────────────────────────────────────────
+
+test("pickClientIp with the default 1 trusted hop reproduces the original rightmost-entry behavior", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.1, 10.0.0.5", "10.0.0.5", 1),
+    "10.0.0.5"
+  );
+});
+
+test("pickClientIp with 0 trusted hops ignores X-Forwarded-For entirely", () => {
+  assert.equal(
+    pure.pickClientIp("1.2.3.4", "10.0.0.5", 0),
+    "10.0.0.5"
+  );
+});
+
+test("pickClientIp with 2 trusted hops picks the second-from-right entry", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.1, 198.51.100.9, 10.0.0.5", "10.0.0.5", 2),
+    "198.51.100.9"
+  );
+});
+
+test("pickClientIp falls back to the socket address when there are fewer entries than trusted hops", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.1", "10.0.0.5", 2),
+    "10.0.0.5"
+  );
+});
+
+test("pickClientIp falls back to the socket address when X-Forwarded-For is absent", () => {
+  assert.equal(
+    pure.pickClientIp(undefined, "10.0.0.5", 1),
+    "10.0.0.5"
+  );
+});
+
+test("pickClientIp defaults to 1 hop when trustedHops is not an integer", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.1, 10.0.0.5", "10.0.0.5", undefined),
+    "10.0.0.5"
+  );
+});
+
 test("getCookie returns empty string when name is not present but header is non-empty", () => {
   const header = "a=1; b=2; c=3";
   assert.equal(pure.getCookie(header, "d"), "");
