@@ -51,13 +51,14 @@ guidance) — the table below tracks the round, not a session count.
 >
 > ### Progress update, 2026-08-11 (Round 3 execution — see `START_HERE.md` chain state)
 >
-> Round 3 implementation has since **begun**: sessions **S3-01, S3-02, S3-03 are complete** (Round 03
-> row above; `sessions/SESSION-S3-*.md`). The "Round 3 was never implemented / remains open"
+> Round 3 implementation has since **begun**: sessions **S3-01 through S3-05 are complete**
+> (Round 03 row above; `sessions/SESSION-S3-*.md`). The "Round 3 was never implemented / remains open"
 > statements above are the frozen 2026-08-11 verification-pass record and are **superseded for those
-> three sessions only** — the other 17 sessions and both catch-up gates (S3-15b RULES, S3-19b Android)
+> five sessions only** — the other 15 sessions and both catch-up gates (S3-15b RULES, S3-19b Android)
 > are still open, and `SC-03` is **partial** (Gradle dependency-verification scaffold committed; hash
-> population BLOCKED on toolchain), not fixed. For "what's next," trust `START_HERE.md`'s `NEXT SESSION`
-> line (currently **S3-04**) and `../BUG_TRACKER.md` for per-finding truth. The program is still **NOT
+> population BLOCKED on toolchain), same as S3-04/S3-05 (RULES lane, verify BLOCKED — no `java`/
+> `firebase` CLI this session), not fixed. For "what's next," trust `START_HERE.md`'s `NEXT SESSION`
+> line (currently **S3-06**) and `../BUG_TRACKER.md` for per-finding truth. The program is still **NOT
 > signed off**.
 
 Relationship to audit sessions: the audit's `SESSION-00…10` are **discovery** sessions (frozen,
