@@ -14,9 +14,12 @@ media-scope isolation, duress lock durability, egress containment, and admin acc
 |---|---|---|
 | A | `S03-H1`, `S06-H2`, `S06-H3`, `S06-I2` | **CODE COMPLETE + RECORDED** (2026-08-10; recording finished by recovery session S02b). Server layer test-verified. **Java and Firestore-rules layers source-reviewed only — compilation and emulator BLOCKED (`PR-4`).** Do not re-implement. |
 | B | `S04-H1`, `S04-H2`, `S04-H3`, `S05-H1`, `S05-H3`, `S05-I1` (+ `S08-H4`) | **COMPLETE + RECORDED** (2026-08-10). Code `48a3f7e`/`f636d8b` (PR #57); half-fix completion + recording `7653515`. **All seven rows server-side and test-verified — 153/153.** `S05-H1` is `fixed+runbook` (rotation is an operator action). `S08-H4` closed with no Java change. |
-| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, ~~`S08-H4`~~, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | not started in this log. `S08-H4` was pulled forward into cluster B — it is the client half of `S04-H3` and closed with the same server-side fix. |
+| C | `S08-H5`/`S07-M1`, `S08-H2`, `S08-H3`, ~~`S08-H4`~~, `S10-N2`, `S10-N3`, `S07-L4`, `SC-01`, `SC-04`, `SC-05`, `S04-I2` | **DISPOSITIONED** — all rows carry a final disposition in `../FINDING_INDEX.md` (several `fixed+runbook`, i.e. code done + operator action pending). `S08-H4` was pulled forward into cluster B — it is the client half of `S04-H3` and closed with the same server-side fix. |
 
-Round 2 is **NOT closed.** Clusters A and B are complete; **cluster C has not started.**
+**Round 2 is closed** (all three clusters dispositioned), as verified by the FINAL VERIFICATION
+session on 2026-08-11 — see the record at the end of this file and
+[`../FINAL_SECURITY_REPORT.md`](../FINAL_SECURITY_REPORT.md). The line that previously stood here
+("Round 2 is NOT closed... cluster C has not started") was stale.
 
 ---
 
@@ -205,7 +208,13 @@ unreproducible green number silently converts the next session's real regression
 
 ## Next
 
-**Round 2 Cluster B** is the next unfinished unit: `S04-H1`, `S04-H2`, `S04-H3` (SSRF predicate,
+> **Superseded 2026-08-11.** This section was written at the end of cluster A. Cluster B was
+> subsequently completed (and did reach genuine test-backed closure, as predicted), then cluster C.
+> **There is no next remediation cluster** — all 116 findings are dispositioned. What remains is
+> operator-only: see [`../FINAL_SECURITY_REPORT.md`](../FINAL_SECURITY_REPORT.md) §3–§4. The original
+> text is kept below for the record.
+
+~~**Round 2 Cluster B** is the next unfinished unit:~~ `S04-H1`, `S04-H2`, `S04-H3` (SSRF predicate,
 `/linkPreview` size/timeout cap, `og:image` IP-beacon), `S05-H1`, `S05-H3`, `S05-I1` (admin token
 entropy floor, durable admin audit, operator-secret docs). Per `../SESSION_PROTOCOL.md` §8. Cluster B
 is **entirely server-side JavaScript**, which is the one layer this environment can actually verify —
@@ -272,4 +281,69 @@ NEXT SESSION: Round 2 cluster B — S04-H1/H2/H3 (SSRF predicate, /linkPreview c
               + S05-H1/H3/I1 (admin token entropy, durable admin audit, operator-secret docs).
               Ready-to-paste prompt persisted in SESSION_PROTOCOL.md §8.
               MUST NOT REDO: any cluster A code — all four rows hold final dispositions.
+```
+
+---
+
+## FINAL VERIFICATION session — 2026-08-11 (protocol §9)
+
+This session fixed **no findings** and wrote **no application code** — that separation is required by
+§9, which forbids declaring the chain complete in the same session that closes the last finding.
+Its only job was to verify every disposition against current source and produce the final report.
+
+**What it found.** The remediation work is real: all seven security modules are required *and* have
+live call sites in the request path (the anti-dead-code check that cluster A's inert
+`maintainLockCredential()` made mandatory). `S07-C1` — the finding that was falsely reported fixed
+once on the strength of a fabricated `xed25519.js` — is genuinely closed: `/mintToken` rejects a
+missing nonce/signature at `index.js:1957`, consumes the nonce single-use *before* verifying at
+`:2013`, and verifies an XEdDSA signature at `:2027`, with its 16 tests now actually executing.
+
+**What it corrected.** Three trackers were badly stale — `REMEDIATION_PROGRESS.md` and
+`SESSION_INDEX.md` still said `S07-C1` was open and exploitable and that Rounds 2–3 had never
+started, and `SESSION_PROTOCOL.md` §8 still handed the next session a cluster-B prompt for work
+already done. This was narrative lag rather than a fourth fabrication — the underlying work existed
+and was recorded in `FINDING_INDEX.md` — but it was corrected anyway, because a stale document is
+indistinguishable from a fabricated one until someone spends budget checking.
+
+**The baseline improved on its own.** The documented "expect 84 tests / 83 pass / 1 fail" caveat is
+obsolete: `@signalapp/libsignal-client@0.54.2` now resolves in `server/pnpm-lock.yaml`, so the suite
+is **153/153**. That lockfile change was the one uncommitted diff in the worktree; it is committed
+with this record.
+
+```
+SESSION:  FINAL VERIFICATION   MODEL: Opus 5   BUDGET: $5 max
+CLUSTER:  none — verification + reporting only   STATUS: program code-complete, NOT signed off
+CHANGES:      - FINAL_SECURITY_REPORT.md: NEW. Written from source per §4. Tallies, per-severity
+                disposition table, anti-dead-code wiring table, 8 operator actions, 3 BLOCKED
+                verification gaps, program-integrity assessment.
+              - REMEDIATION_PROGRESS.md: status block replaced — "S07-C1 open/exploitable,
+                Rounds 2-3 not started" was false; new baseline recorded.
+              - SESSION_INDEX.md: Round 2/3 rows corrected ("NOT STARTED - file does not exist"
+                was false); 2026-08-11 correction notice added.
+              - SESSION_PROTOCOL.md: §8 superseded (cluster B prompt folded into <details> as
+                historical); §9 records that the final verification ran and its verdict.
+              - server/pnpm-lock.yaml: commits the @signalapp/libsignal-client@0.54.2 resolution
+                that makes identityVerify.test.js executable.
+              - NO application code changed. NO finding disposition changed.
+VERIFICATION: PASS: cd server && npm test -> 153 tests / 153 pass / 0 fail (run this session)
+              PASS: per-suite cross-check sums to 153 (27+15+7+5+16+9+16+32+26) - two independent
+                    derivations of the same number, not one asserted twice
+              PASS: node --test lib/identityVerify.test.js -> 16 pass / 0 fail (previously ABORTED)
+              PASS: node --check server/index.js -> clean
+              PASS: wiring grep - all 7 modules have live call sites; none inert
+              FAIL: none
+              BLOCKED: Android compilation (which java/javac/gradle -> all absent);
+                       firestore-tests/rules.test.js (no firebase CLI) - still never executed
+              NOT RUN: runtime/integration testing of the deployed server
+              OPERATOR-PENDING: gh api .../branches/main/protection -> 404 "Branch not protected"
+                       (SC-12 re-checked, still not done by a human); GCP key still un-revoked
+COMMIT: 542f98f05dc3c9cbfff93bca36e595ce19d19b0b   WORKTREE: clean
+              (read from `git log -1 --format=%H` AFTER committing, per §4 — never typed from
+               memory; that is exactly how fabrication #2 produced two hashes that never existed)
+NEXT SESSION: NONE for remediation. There is no next cluster - all 116 findings dispositioned.
+              Remaining work is operator-only: FINAL_SECURITY_REPORT.md §3 (revoke the leaked GCP
+              service-account key FIRST), then build + release the APK together with the server
+              (/mintToken hard-requires nonce+signatureHex; do NOT make them optional).
+              A future session may only re-check whether an operator finished a §3 item, or fix a
+              newly discovered defect. Do not re-litigate any row recorded `fixed`.
 ```
