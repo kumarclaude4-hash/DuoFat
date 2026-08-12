@@ -207,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
+      // ─�� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -1271,6 +1271,29 @@ function collectBody(req, res, onComplete) {
     if (tooLarge) return;
     onComplete(body);
   });
+}
+
+// S05-L2: every admin POST route used to call collectBody() FIRST and run
+// requireAdminAuth() only inside the "end" callback — the exact inverse of
+// what the comment on collectBody() above claims. requireAdminAuth() reads
+// only headers and the session cookie, so nothing about it requires waiting
+// for the body; running it here means an unauthenticated caller is rejected
+// (401/429/503) before the server buffers a single byte of body or holds the
+// socket open trickling toward MAX_BODY_BYTES for as long as Node's default
+// requestTimeout allows — previously free for an attacker to do repeatedly
+// against a single-process server that also carries FCM delivery. On
+// rejection the request is explicitly destroyed rather than left to drain on
+// its own, so an unauthenticated caller cannot hold the connection open past
+// its own 401/429/503 by continuing to trickle bytes it knows will never be
+// read.
+function requireAdminAuthThenBody(req, res, onBody) {
+  (async () => {
+    if (!(await requireAdminAuth(req, res))) {
+      req.destroy();
+      return;
+    }
+    collectBody(req, res, onBody);
+  })();
 }
 
 // ── Admin panel HTML shell ─────────────────────────────────────────────────────
@@ -2986,7 +3009,7 @@ http.createServer((req, res) => {
           return;
         }
 
-        // ── Cloudflare credentials ───────────────────────────────────────────
+        // ── Cloudflare credentials ─────────��─────────────────────────────────
         const tokenId  = process.env.TURN_TOKEN_ID  || "";
         const apiToken = process.env.TURN_API_TOKEN || "";
         if (!tokenId || !apiToken) {
@@ -4015,8 +4038,7 @@ http.createServer((req, res) => {
   // Flips a pending waitlist doc to status: "approved" so the requester's
   // next /waitlistStatus poll lets them proceed to account creation.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4031,18 +4053,35 @@ http.createServer((req, res) => {
           return;
         }
         const ref = db.collection("waitlist").doc(requestId);
-        const snap = await ref.get();
-        if (!snap.exists) {
+        // S05-L4: this used to be a plain get()-then-update() outside any
+        // transaction. Two concurrent approvals of the same requestId both
+        // observed status === "pending" and both wrote "approved" — harmless
+        // to the waitlist doc itself (idempotent, and /mintToken's own
+        // transaction is the real single-use gate), but it produced TWO
+        // audit_approved rows for one effective action, corrupting the
+        // record S05-H3 made authoritative. db.runTransaction() serializes
+        // concurrent callers on this doc: only the first to commit observes
+        // "pending" and writes; a retried/losing transaction re-reads the
+        // now-"approved" doc and takes the already-handled branch below
+        // instead of writing or auditing again.
+        let notFound = false;
+        let alreadyStatus = null;
+        await db.runTransaction(async (txn) => {
+          const snap = await txn.get(ref);
+          if (!snap.exists) { notFound = true; return; }
+          if (snap.data().status !== "pending") { alreadyStatus = snap.data().status; return; }
+          txn.update(ref, { status: "approved", approvedAt: FieldValue.serverTimestamp() });
+        });
+        if (notFound) {
           res.writeHead(404, { "Content-Type": "text/plain" });
           res.end("Request not found");
           return;
         }
-        if (snap.data().status !== "pending") {
+        if (alreadyStatus) {
           res.writeHead(409, { "Content-Type": "text/plain" });
-          res.end(`Request is already "${snap.data().status}", not pending`);
+          res.end(`Request is already "${alreadyStatus}", not pending`);
           return;
         }
-        await ref.update({ status: "approved", approvedAt: FieldValue.serverTimestamp() });
         console.log(`[admin] waitlist request approved: requestId=${reqTag(requestId)}`);
 
         // S05-M1: this used to write directly to adminAuditLog with a raw
@@ -4074,8 +4113,7 @@ http.createServer((req, res) => {
   // payload, no expiry on approved-but-unused invites, no pagination) — it
   // closes the specific "no deny path" gap that S3-13's exit criteria names.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/deny") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4123,8 +4161,18 @@ http.createServer((req, res) => {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
+        // S05-L4: this query had no limit(), unlike the waitlist query
+        // (limit(200)) and the audit log (limit(100)) elsewhere in this file.
+        // Clients can create their own accountLock doc (firestore.rules), so
+        // the locked set grows with the user base and with any attacker
+        // holding multiple accounts, and the whole result set was previously
+        // materialized into one JSON response on a single-process server.
+        // limit(500) bounds that; the panel is not paginated beyond this cap,
+        // which is an accepted, documented degradation, not a fix of the
+        // finding's full ask.
         const snap = await db.collection("accountLock")
           .where("locked", "==", true)
+          .limit(500)
           .get();
         const accounts = snap.docs.map((d) => {
           const data = d.data();
@@ -4146,8 +4194,7 @@ http.createServer((req, res) => {
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be
   // removed, per firestore.rules (clients get `allow delete: if false`).
   if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4162,12 +4209,6 @@ http.createServer((req, res) => {
           return;
         }
         const ref = db.collection("accountLock").doc(uid);
-        const snap = await ref.get();
-        if (!snap.exists) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          res.end("No lock found for this uid");
-          return;
-        }
         // ── §8 / S06-M6: unfreeze must hand back a RE-ARMABLE state ───────────
         // A plain delete used to leave the account in the promote-and-rotate
         // "duress fired" state permanently: the duress code D is now the primary
@@ -4184,12 +4225,41 @@ http.createServer((req, res) => {
         // This lives server-side rather than in SecurePrefs specifically so it
         // survives a reinstall — a local flag would be dropped by exactly the
         // wipe that necessitated the unfreeze.
-        await ref.set({
-          locked:           false,
-          rotationRequired: true,
-          unfrozenAt:       FieldValue.serverTimestamp(),
-          lockedAt:         snap.data().lockedAt || null,  // preserve trigger time (S06-L6)
+        //
+        // S05-L4: this used to be a plain get()-then-set() outside any
+        // transaction, and it unconditionally wrote regardless of the doc's
+        // current `locked` value. Two concurrent unfreeze calls both observed
+        // the doc existed and both wrote — idempotent in the sense that the
+        // final state was the same, but each write re-stamped unfrozenAt and
+        // each was audited separately, producing two account_unfrozen rows
+        // for one effective action. db.runTransaction() plus a `locked ===
+        // true` guard closes both: only a doc that is actually currently
+        // locked gets unfrozen and audited; a retried/losing transaction (or
+        // a call against an already-unfrozen doc) takes the already-handled
+        // branch below instead.
+        let notFound = false;
+        let alreadyUnlocked = false;
+        await db.runTransaction(async (txn) => {
+          const snap = await txn.get(ref);
+          if (!snap.exists) { notFound = true; return; }
+          if (snap.data().locked !== true) { alreadyUnlocked = true; return; }
+          txn.set(ref, {
+            locked:           false,
+            rotationRequired: true,
+            unfrozenAt:       FieldValue.serverTimestamp(),
+            lockedAt:         snap.data().lockedAt || null,  // preserve trigger time (S06-L6)
+          });
         });
+        if (notFound) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("No lock found for this uid");
+          return;
+        }
+        if (alreadyUnlocked) {
+          res.writeHead(409, { "Content-Type": "text/plain" });
+          res.end("Account is not currently locked");
+          return;
+        }
         // S06-M3: pseudonymise. GET /admin/api/locked is the operator's view of
         // real uids; the log does not need to hold a duress-linked cleartext id.
         console.log(`[admin] account unfrozen, rotation required: uid=${uidTag(uid)}`);
@@ -4224,8 +4294,7 @@ http.createServer((req, res) => {
   // everywhere" action that quietly spared the button-presser's own session
   // would not be a credible incident-response tool.
   if (req.method === "POST" && req.url === "/admin/api/sessions/revoke-all") {
-    collectBody(req, res, async () => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async () => {
       try {
         const revokedCount = adminSessionStore.revokeAll();
         auditAdminEvent("admin_sessions_revoked_all", req, { revokedCount });
@@ -4253,8 +4322,12 @@ http.createServer((req, res) => {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
+        // S05-L4: same unbounded-.get() gap as GET /admin/api/locked above —
+        // limit(500) bounds it; see that route's comment for the full
+        // rationale.
         const snap = await db.collection("duressEligibility")
           .where("eligible", "==", true)
+          .limit(500)
           .get();
         const accounts = snap.docs.map((d) => {
           const data = d.data();
@@ -4277,13 +4350,21 @@ http.createServer((req, res) => {
   // actually exists (identities/{uid}) and its current duress-PIN eligibility
   // status. Used by the admin panel's "search by UID" step before enabling —
   // enrollment must never be granted blind to a UID that isn't a real account.
-  if (req.method === "GET" && req.url.startsWith("/admin/api/account/lookup")) {
+  if (req.method === "GET" && new URL(req.url, "http://localhost").pathname === "/admin/api/account/lookup") {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
         const requestUrl = new URL(req.url, "http://localhost");
         const uid = requestUrl.searchParams.get("uid") || "";
-        if (!uid || uid.length > 128) {
+        // S05-L1: this used to check only `!uid || uid.length > 128` — the one
+        // uid-taking admin route that skipped validAdminUid(), which the other
+        // three already use. `.doc()` accepts a slash-separated path, so
+        // `?uid=a/b/c` resolved to `identities/a/b/c`, an existence oracle over
+        // arbitrary nested document paths (plus a second one via
+        // duressEligibility below). validAdminUid() also now rejects the
+        // Firestore-reserved "."/".."/"__…__" shapes, so a malformed id yields
+        // this 400 instead of an uncaught 500 from `.doc()`.
+        if (!validAdminUid(uid)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
           return;
@@ -4311,8 +4392,7 @@ http.createServer((req, res) => {
   // Requires the UID to correspond to a real account (identities/{uid}) —
   // enrollment is never granted blind to an unverified/nonexistent UID.
   if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4369,8 +4449,7 @@ http.createServer((req, res) => {
   // Sets eligible:false on duressEligibility/{uid} — the client's cached flag
   // is updated on the next eligibility refresh (sign-in or foreground).
   if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {

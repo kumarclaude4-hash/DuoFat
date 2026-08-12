@@ -19,13 +19,23 @@ function notificationBody(data) {
 }
 
 // Constant-time token comparison so an attacker cannot learn the admin token
-// byte-by-byte through response-timing differences. Returns false for any
-// length mismatch (timingSafeEqual throws on unequal lengths).
+// byte-by-byte through response-timing differences.
+//
+// S05-I3: the original implementation returned early — before ever calling
+// timingSafeEqual — on a raw length mismatch. That branch is not itself a
+// timing side-channel on the token's CONTENT, but it does make the supplied
+// token's LENGTH a (very noisy, many-samples-needed) timing oracle, and
+// S05-H1 means an attacker's sample budget against this comparison is not
+// otherwise bounded. Hashing both sides to a fixed-width digest FIRST removes
+// the length branch entirely: every comparison, regardless of the original
+// input lengths, compares two 32-byte SHA-256 digests, so there is no
+// length-dependent code path left to time. This does not weaken the
+// comparison — two different inputs still compare unequal with cryptographic
+// certainty — it only removes the earlier short-circuit.
 function safeTokenEqual(a, b) {
-  const bufA = Buffer.from(String(a));
-  const bufB = Buffer.from(String(b));
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
+  const digestA = crypto.createHash("sha256").update(String(a)).digest();
+  const digestB = crypto.createHash("sha256").update(String(b)).digest();
+  return crypto.timingSafeEqual(digestA, digestB);
 }
 
 /**
@@ -56,14 +66,24 @@ function timingSafeEqualHex(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-// Whitelist for admin-supplied UIDs: printable, bounded length, and free of path
+// Whitelist for admin-supplied UIDs: printable, bounded length, free of path
 // separators / control characters that could be used to traverse Firestore
-// document paths or smuggle control bytes.
+// document paths or smuggle control bytes, and free of the document-id shapes
+// Firestore itself treats specially.
+//
+// S05-L1: "." and ".." and any id matching /^__.*__$/ are reserved by Firestore
+// (single-segment names, so the earlier slash/backslash check does not catch
+// them) — passing one to `.doc(uid)` throws instead of returning a normal
+// not-found result, which previously surfaced as an uncaught 500 rather than a
+// 400 on every route that already called this whitelist. Rejecting them here
+// makes that failure mode a deliberate, documented 400 everywhere this
+// function gates a Firestore document id.
 function validAdminUid(uid) {
-  return typeof uid === "string"
-    && uid.length >= 1
-    && uid.length <= 128
-    && !/[\/\\\u0000-\u001f]/.test(uid);
+  if (typeof uid !== "string" || uid.length < 1 || uid.length > 128) return false;
+  if (/[\/\\\u0000-\u001f]/.test(uid)) return false;
+  if (uid === "." || uid === "..") return false;
+  if (/^__.*__$/.test(uid)) return false;
+  return true;
 }
 
 // Parse a single cookie value out of a Cookie header string. Accepts either a
