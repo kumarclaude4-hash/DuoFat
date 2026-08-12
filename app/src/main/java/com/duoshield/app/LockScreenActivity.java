@@ -5,7 +5,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
-import android.view.WindowManager;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.Button;
@@ -65,7 +64,9 @@ public class LockScreenActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        // S08-H2: honor the "Allow screenshots" preference (secure by default) on the
+        // PIN-entry screen instead of unconditionally allowing screenshots here too.
+        BaseActivity.applyScreenshotSecurity(this);
 
         setContentView(R.layout.activity_lock_screen);
 

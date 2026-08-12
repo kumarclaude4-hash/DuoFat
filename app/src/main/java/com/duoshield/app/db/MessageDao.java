@@ -72,8 +72,12 @@ public interface MessageDao {
 
     // Bug 16 fix: renamed parameter from :now to :currentTime to make the intent
     // explicit — callers must pass System.currentTimeMillis(), not an age-based cutoff.
+    //
+    // S08-H3: returns the number of rows actually deleted (Room supports this for
+    // @Query DELETE) so SelfDestructWorker can tell whether anything expired this
+    // pass and only pay the cost of purging Glide's disk cache when it did.
     @Query("DELETE FROM messages WHERE expiresAt > 0 AND expiresAt < :currentTime")
-    void deleteExpired(long currentTime);
+    int deleteExpired(long currentTime);
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     void deleteAll(String conversationId);

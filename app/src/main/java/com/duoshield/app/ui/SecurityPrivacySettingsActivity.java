@@ -135,7 +135,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
     }
 
-    // ── App PIN logic ────────────────────────────────────────────────────────
+    // ── App PIN logic ────────────────���───────────────────────────────────────
 
     @Override
     protected void onResume() {
@@ -356,9 +356,20 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         });
     }
 
+    /**
+     * S08-H2 fix: this previously ignored {@code allow} entirely and always cleared
+     * FLAG_SECURE, so toggling the switch off did nothing on this screen (and, before
+     * BaseActivity's matching fix, anywhere else either). Now applies the requested
+     * state to this activity's own window immediately, for instant feedback in this
+     * screen; BaseActivity.onCreate() re-reads the persisted preference and applies it
+     * app-wide on every other screen, including this one on its next recreation.
+     */
     private void applyScreenshotFlag(boolean allow) {
-        // Screenshots are always enabled app-wide; FLAG_SECURE is never applied.
-        getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        if (allow) {
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+        }
     }
 
     // ── Lock timeout ──────────────────────────────────────────────────────────

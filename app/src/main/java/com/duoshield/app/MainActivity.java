@@ -8,7 +8,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import androidx.appcompat.app.AppCompatActivity;
@@ -37,8 +36,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Screenshots are always allowed.
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        // S08-H2: honor the "Allow screenshots" preference (secure by default)
+        // instead of unconditionally allowing screenshots on this screen.
+        BaseActivity.applyScreenshotSecurity(this);
 
         FrameLayout splash = new FrameLayout(this);
         splash.setBackgroundColor(0xFF191620);
