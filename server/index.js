@@ -206,7 +206,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ──────────────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -994,6 +994,18 @@ function uidTag(uid) {
   return crypto.createHmac("sha256", LOG_PEPPER).update(String(uid)).digest("hex").slice(0, 12);
 }
 
+// S05-M1: waitlist requestIds are opaque 128-bit tokens, not directly
+// identifying on their own — but a stdout `console.log` line naming one in
+// full still lets anyone with log access join "this token was created/
+// approved at time T" to the same token if it leaks from any other channel
+// (a crash report, a proxy log, the client itself echoing it back). Same
+// pepper/HMAC scheme as ipTag/uidTag, so a log line alone can no longer be
+// replayed against a captured requestId to prove correlation.
+function reqTag(id) {
+  if (!id) return "none";
+  return crypto.createHmac("sha256", LOG_PEPPER).update(String(id)).digest("hex").slice(0, 12);
+}
+
 // ── Duress latch enforcement (S06-H1 / S06-C2) ────────────────────────────────
 // `accountLock/{uid}` is a one-way latch written by /duress-lock. It used to be
 // consulted in exactly one place in the whole system: a client-side `if` in the
@@ -1587,11 +1599,21 @@ async function loadWaitlist() {
       tr.appendChild(dateTd);
 
       const actionTd = document.createElement("td");
-      const btn = document.createElement("button");
-      btn.className = "action";
-      btn.textContent = "Approve";
-      btn.onclick = () => approve(r.requestId, btn);
-      actionTd.appendChild(btn);
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "action";
+      approveBtn.textContent = "Approve";
+      approveBtn.onclick = () => approve(r.requestId, approveBtn, denyBtn);
+      actionTd.appendChild(approveBtn);
+
+      // S05-H2: pending -> approved used to be the only mutation available —
+      // a flood/junk request could never be rejected, so the queue only ever
+      // grew. Deny gives the operator a way to clear it out.
+      const denyBtn = document.createElement("button");
+      denyBtn.className = "action danger";
+      denyBtn.textContent = "Deny";
+      denyBtn.onclick = () => deny(r.requestId, denyBtn, approveBtn);
+      actionTd.appendChild(denyBtn);
+
       tr.appendChild(actionTd);
 
       body.appendChild(tr);
@@ -1603,8 +1625,9 @@ async function loadWaitlist() {
   }
 }
 
-async function approve(requestId, btn) {
+async function approve(requestId, btn, siblingBtn) {
   btn.disabled = true;
+  if (siblingBtn) siblingBtn.disabled = true;
   btn.textContent = "Approving…";
   try {
     await api("/admin/api/waitlist/approve", { method: "POST", body: JSON.stringify({ requestId }) });
@@ -1612,7 +1635,31 @@ async function approve(requestId, btn) {
     loadWaitlist();
     loadAuditLog();
   } catch (e) {
-    if (e.message !== "unauthorized") { toast("Approve failed: " + e.message); btn.disabled = false; btn.textContent = "Approve"; }
+    if (e.message !== "unauthorized") {
+      toast("Approve failed: " + e.message);
+      btn.disabled = false;
+      btn.textContent = "Approve";
+      if (siblingBtn) siblingBtn.disabled = false;
+    }
+  }
+}
+
+async function deny(requestId, btn, siblingBtn) {
+  btn.disabled = true;
+  if (siblingBtn) siblingBtn.disabled = true;
+  btn.textContent = "Denying…";
+  try {
+    await api("/admin/api/waitlist/deny", { method: "POST", body: JSON.stringify({ requestId }) });
+    toast("Denied " + requestId.slice(0, 8) + "…");
+    loadWaitlist();
+    loadAuditLog();
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      toast("Deny failed: " + e.message);
+      btn.disabled = false;
+      btn.textContent = "Deny";
+      if (siblingBtn) siblingBtn.disabled = false;
+    }
   }
 }
 
@@ -1794,6 +1841,7 @@ async function loadAuditLog() {
 
       const actionTd = document.createElement("td");
       actionTd.textContent = e.action === "waitlist_approved" ? "✅ Waitlist approved"
+                           : e.action === "waitlist_denied"   ? "🚫 Waitlist denied"
                            : e.action === "account_unfrozen"  ? "🔓 Account unfrozen"
                            : e.action === "duress_enrolled"   ? "🔐 Duress enrolled"
                            : e.action === "duress_revoked"    ? "❌ Duress revoked"
@@ -2342,7 +2390,9 @@ http.createServer((req, res) => {
           createdAt: FieldValue.serverTimestamp(),
         });
 
-        console.log(`requestAccess: new waitlist entry requestId=${requestId}`);
+        // S05-M1: uidTag-style pseudonymisation for the same reason as every
+        // other log line this control touches — see reqTag()'s comment.
+        console.log(`requestAccess: new waitlist entry requestId=${reqTag(requestId)}`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ requestId }));
       } catch (e) {
@@ -3568,7 +3618,7 @@ http.createServer((req, res) => {
         // S06-M3: uidTag, never the raw uid. A log line pairing a cleartext uid
         // with a duress tag is a durable, timestamped record that this specific
         // account triggered a duress wipe, sitting in whatever aggregator the
-        // server ships to — outside Firestore's access controls and outside the
+        // server ships to ��� outside Firestore's access controls and outside the
         // operator's deletion workflow.
         console.log(`[requestLockNonce] nonce issued for uid=${uidTag(uid)}`);
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -3930,20 +3980,73 @@ http.createServer((req, res) => {
           return;
         }
         await ref.update({ status: "approved", approvedAt: FieldValue.serverTimestamp() });
-        console.log(`[admin] waitlist request approved: requestId=${requestId}`);
+        console.log(`[admin] waitlist request approved: requestId=${reqTag(requestId)}`);
 
-        // Audit log — non-fatal; never block the response on this write
-        db.collection("adminAuditLog").add({
-          action:    "waitlist_approved",
-          requestId,
-          adminIp:   getClientIp(req),
-          at:        FieldValue.serverTimestamp(),
-        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+        // S05-M1: this used to write directly to adminAuditLog with a raw
+        // `adminIp: getClientIp(req)` — bypassing auditAdminEvent() entirely
+        // (which pseudonymises the IP), even though the sink already existed
+        // and every OTHER admin-audit call site used it. Routing through it
+        // here closes that gap without changing the record's shape (requestId
+        // is still the queryable field auditlog consumers expect).
+        auditAdminEvent("waitlist_approved", req, { requestId });
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         sendServerError(res, "admin/api/waitlist/approve", e);
+      }
+    });
+    return;
+  }
+
+  // ── POST /admin/api/waitlist/deny ─────────────────────────────────────────
+  //
+  // Body: { requestId }. Auth: x-admin-token header.
+  // S05-H2: prior to this endpoint the ONLY mutation available on a waitlist
+  // doc was pending -> approved — a junk/flood request could never be
+  // rejected, so the queue grew forever and a sustained trickle of garbage
+  // requests could permanently push legitimate ones out of the operator's
+  // `orderBy(desc).limit(200)` view (see GET /admin/api/waitlist below).
+  // This does not fix the full design finding (no requester-identifying
+  // payload, no expiry on approved-but-unused invites, no pagination) — it
+  // closes the specific "no deny path" gap that S3-13's exit criteria names.
+  if (req.method === "POST" && req.url === "/admin/api/waitlist/deny") {
+    collectBody(req, res, async (body) => {
+      if (!(await requireAdminAuth(req, res))) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(body); } catch (_) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Invalid JSON");
+          return;
+        }
+        const { requestId } = parsed;
+        if (typeof requestId !== "string" || !/^[0-9a-f]{32}$/.test(requestId)) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid requestId");
+          return;
+        }
+        const ref = db.collection("waitlist").doc(requestId);
+        const snap = await ref.get();
+        if (!snap.exists) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Request not found");
+          return;
+        }
+        if (snap.data().status !== "pending") {
+          res.writeHead(409, { "Content-Type": "text/plain" });
+          res.end(`Request is already "${snap.data().status}", not pending`);
+          return;
+        }
+        await ref.update({ status: "denied", deniedAt: FieldValue.serverTimestamp() });
+        console.log(`[admin] waitlist request denied: requestId=${reqTag(requestId)}`);
+
+        auditAdminEvent("waitlist_denied", req, { requestId });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        sendServerError(res, "admin/api/waitlist/deny", e);
       }
     });
     return;
@@ -4028,16 +4131,14 @@ http.createServer((req, res) => {
         // real uids; the log does not need to hold a duress-linked cleartext id.
         console.log(`[admin] account unfrozen, rotation required: uid=${uidTag(uid)}`);
 
-        // Audit log — non-fatal; never block the response on this write.
-        // The audit log intentionally keeps the real uid: it is the operator's
-        // accountable record, inside Firestore's access controls and inside the
-        // deletion workflow, unlike the server's stdout.
-        db.collection("adminAuditLog").add({
-          action:  "account_unfrozen",
-          uid,
-          adminIp: getClientIp(req),
-          at:      FieldValue.serverTimestamp(),
-        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+        // S05-M1: was a direct db.collection("adminAuditLog").add() with a raw
+        // `adminIp: getClientIp(req)` — bypassing auditAdminEvent()'s ipTag().
+        // The audit log intentionally KEEPS the real uid here (unlike the
+        // duress writes below): it is the operator's accountable record,
+        // inside Firestore's access controls and inside the deletion
+        // workflow, unlike the server's stdout. Only the adminIp/userAgent
+        // shape changes by routing through the shared sink.
+        auditAdminEvent("account_unfrozen", req, { uid });
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
@@ -4147,12 +4248,15 @@ http.createServer((req, res) => {
         // whatever log aggregator the server ships to.
         console.log(`[admin] duress enrollment granted: uid=${uidTag(uid)}`);
 
-        db.collection("adminAuditLog").add({
-          action:  "duress_enrolled",
-          uid,
-          adminIp: getClientIp(req),
-          at:      FieldValue.serverTimestamp(),
-        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+        // S05-M1 (the finding's own "most sensitive" callout): this used to
+        // write the RAW uid, plus a raw adminIp bypassing auditAdminEvent(),
+        // into the permanent adminAuditLog — "action: duress_enrolled, uid:
+        // <raw uid>" is a durable, plaintext, timestamped record of exactly
+        // which account has the duress feature enrolled, i.e. the single
+        // most dangerous fact in this system to disclose to a coercive
+        // adversary who later reaches this collection. uidTag(uid) here
+        // matches the redaction already applied to the console.log above.
+        auditAdminEvent("duress_enrolled", req, { uid: uidTag(uid) });
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
@@ -4195,12 +4299,9 @@ http.createServer((req, res) => {
         // S06-M3/S05-M1: same redaction as the grant path above.
         console.log(`[admin] duress enrollment revoked: uid=${uidTag(uid)}`);
 
-        db.collection("adminAuditLog").add({
-          action:  "duress_revoked",
-          uid,
-          adminIp: getClientIp(req),
-          at:      FieldValue.serverTimestamp(),
-        }).catch((auditErr) => console.warn("[admin] audit log write failed:", auditErr.message));
+        // S05-M1: same fix as the grant path above — route through the
+        // shared sink (fixes the raw adminIp) and pseudonymise the uid.
+        auditAdminEvent("duress_revoked", req, { uid: uidTag(uid) });
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
