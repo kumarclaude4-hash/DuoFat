@@ -1,15 +1,26 @@
 # SESSION-S3-12 (continuation) — Worker per-object hardening: S03-M1, S03-M3, S03-L2 + S03-H3 follow-up
 
-**Status:** Partial (S3-12 overall). This session continues from
-`SESSION-S3-12-partial.md`, which fixed `S03-M2` only. This session fixes
-three more of the six bundled findings — `S03-M1`, `S03-M3` (partially —
-see below), `S03-L2` — plus a separate, previously-flagged latent bug
-(`S03-H3` follow-up: same-holder overwrite quota double-counting). Two
-findings from the original six-finding bundle remain **Open**:
-`S03-L3`/`S04-I2` (dead B2 presign surface — has a manual runbook step) and
-`S10-N3` (cold-tier migration race). Per this session's own batch cap ("3
-findings maximum"), these are deliberately deferred to a future
-continuation rather than picked up opportunistically.
+**Status (updated, continuation 2 — see bottom of file):** all six findings
+in the original S3-12 bundle are now closed from source: `S03-M2` (fixed in
+`SESSION-S3-12-partial.md`), `S03-M1`/`S03-M3`/`S03-L2`/`S03-H3` follow-up
+(fixed below in this file's original body), `S03-L3`/`S04-I2` (dead B2
+presign surface — **Fixed**, see "Continuation 2"), and `S10-N3` (cold-tier
+migration race guard — **Partial**, code/tests verified, production
+runtime **BLOCKED**, see "Continuation 2"). The section below this line is
+the **original**, unmodified record of this session's first pass; it is
+kept as-is for history. Do not re-read its "remaining findings" list as
+current — see "Continuation 2" at the bottom for the up-to-date state.
+
+**Status (original, first pass):** Partial (S3-12 overall). This session
+continues from `SESSION-S3-12-partial.md`, which fixed `S03-M2` only. This
+session fixes three more of the six bundled findings — `S03-M1`, `S03-M3`
+(partially — see below), `S03-L2` — plus a separate, previously-flagged
+latent bug (`S03-H3` follow-up: same-holder overwrite quota
+double-counting). Two findings from the original six-finding bundle remain
+**Open**: `S03-L3`/`S04-I2` (dead B2 presign surface — has a manual
+runbook step) and `S10-N3` (cold-tier migration race). Per this session's
+own batch cap ("3 findings maximum"), these are deliberately deferred to a
+future continuation rather than picked up opportunistically.
 
 Plan scope for reference (`ROUND3_REMEDIATION_PLAN.md`):
 > Findings: `S03-M1` (`nosniff` + `Content-Disposition` + validated
@@ -400,9 +411,162 @@ dependencies — `package.json`/lockfile were not modified.
   (a race guard exists at `worker/src/index.js:553-574`, not yet confirmed
   end-to-end).
 
-## Next remediation session
+## Next remediation session (superseded — see "Continuation 2" below)
 
 Continue **S3-12** with the remaining two findings (`S03-L3`/`S04-I2`,
 `S10-N3`), or proceed to **S3-13** (Admin surface, part 1) if S3-12's
 remainder is deferred — `START_HERE.md` and `SESSION_INDEX.md` point to
 finishing S3-12 next since it remains only partially done.
+
+---
+
+## Continuation 2 — closing S03-L3/S04-I2 and verifying S10-N3
+
+This section covers two separate pieces of work that landed after the
+first pass above, neither of which was previously documented in this file.
+
+### What an earlier, undocumented pass already did (commit `e366730`)
+
+Before this continuation started, commit `e366730`
+("refactor: remove unused authenticated rate limiters and B2 presign
+helpers") had already:
+
+- removed `b2PresignUrl` and `b2PresignUrlForUid` from `server/index.js`;
+- removed the SigV4 signing helpers behind them (`buildB2PresignUrl`,
+  `b2HmacKey`) from `server/lib/pure.js`, along with their exports;
+- removed the dead `b2PresignedPut`/`b2PresignedGet`/`b2Delete` entries
+  from `AUTH_RATE_LIMITS` in `server/index.js` (those routes never
+  existed in the router table — the limiter entries were pure dead
+  weight);
+- added the `worker/src/index.js` cold-tier migration race guard
+  (`S10-N3`) and its two regression tests in `worker/src/index.test.js`
+  (`"a client DELETE that removes R2 during the migration PUT fires a
+  compensating B2 delete..."` and the paired "normal migration does NOT
+  fire a compensating delete" negative case), bringing the worker suite
+  from 27/27 to **29/29**.
+
+That commit was not accompanied by a documentation update, which is why
+this file's original "Remaining S3-12 findings" section above still lists
+both as open — the tracker/session docs had not caught up with the code.
+
+### What this continuation verified and finished
+
+**Repo-wide grep audit** for `b2PresignUrl`, `b2PresignUrlForUid`,
+`buildB2PresignUrl`, and `b2HmacKey` found no live code references left —
+only comments in `server/index.js` documenting the removal, historical
+audit docs (`audit/SESSION-0{3,4,6}-*.md`), and the Android client's own
+`B2StorageHelper.java` (a distinct, still-live client-side upload path,
+out of scope for this server-side finding).
+
+**Cleanup of leftovers from `e366730` that were genuinely dead but not yet
+removed:**
+
+- `server/lib/pure.test.js` — deleted 8 tests that called
+  `pure.buildB2PresignUrl(...)` and `pure.b2HmacKey(...)`. Both functions
+  no longer exist on the `pure` export, so these tests would throw
+  (`TypeError: pure.buildB2PresignUrl is not a function`), not just fail,
+  the next time the suite ran. Left a one-line comment pointing at why
+  they're gone instead of silently deleting them.
+- `server/README.md` — removed the env-var doc row for `B2_KEY_ID`,
+  `B2_APPLICATION_KEY`, `B2_BUCKET`, `B2_REGION`. Confirmed by grep that
+  `server/index.js` no longer reads any of the four names — the row was
+  describing config the server no longer consults.
+- `server/index.js` — fixed a stray two-space indentation artifact on the
+  `AUTH_RATE_LIMITS` block and the B2-removal explanatory comment above
+  it, left over from `e366730`'s edit. Cosmetic only, confirmed with
+  `node --check` before and after.
+
+**What was deliberately left alone:**
+
+- The worker's own B2 credentials (`B2_ACCESS_KEY_ID`,
+  `B2_SECRET_ACCESS_KEY`, `B2_ENDPOINT`, `B2_BUCKET`, `B2_REGION` in
+  `worker/wrangler.toml`/Worker secrets) are a separate, still-required
+  credential set — the nightly migration job and the B2 GET/PUT/DELETE
+  branches in `worker/src/index.js` actively use them. Only the
+  *server's* dead presign-only B2 env reads were in scope for
+  `S03-L3`/`S04-I2`.
+- The S10-N3 race guard itself (`worker/src/index.js`, the
+  "Race guard: the nightly migration PUTs to B2 and THEN deletes from R2"
+  block) was re-read end-to-end and confirmed correctly scoped — it only
+  fires on the `current === null` branch (R2 re-HEAD comes back empty
+  after the B2 PUT, meaning a concurrent client DELETE won the race) and
+  does not touch the two other, unrelated race guards already present in
+  the same function. No changes made to it.
+- `Android app/src/main/java/com/duoshield/app/util/B2StorageHelper.java`
+  — untouched. It's a client-side upload helper, not part of the
+  server-side presign surface this finding covers.
+
+### Test results (this continuation)
+
+```
+cd worker && node --test src/index.test.js   # 29/29 pass
+cd server && node --test lib/pure.test.js    # 60/60 pass
+node --check server/index.js                 # clean
+node --check server/lib/pure.js              # clean
+node --check worker/src/index.js             # clean
+```
+
+The worker's 29/29 includes the 2 `S10-N3` migration-race tests added in
+`e366730` — re-run this continuation, not re-implemented, confirming they
+still pass unchanged.
+
+`server/` also has other test files (e.g. `lib/identityVerify.test.js`)
+that depend on native modules (`@signalapp/libsignal-client`) not
+installed in this environment; that's a pre-existing environment gap
+unrelated to this continuation's changes, not a regression — it was not
+introduced or touched here.
+
+### Production runtime verification — still BLOCKED
+
+`S10-N3`'s code and unit-test evidence is now as strong as this
+environment can produce. Verifying the actual nightly migration against a
+**live Cloudflare Worker + R2 + B2 deployment** — the only way to fully
+close `S10-N3` to `Fixed` rather than `Partial` — remains **BLOCKED** in
+this environment: there is no `wrangler` login, no live Cloudflare
+account, and no real R2/B2 buckets reachable from this sandbox. This
+matches the environment limitation already noted elsewhere in this
+session's history (`worker/node_modules` fetch issues, see above) — it is
+an environment constraint, not a code defect.
+
+### Files changed (this continuation)
+
+- `server/lib/pure.test.js` — removed 8 obsolete tests for the deleted
+  `buildB2PresignUrl`/`b2HmacKey` exports.
+- `server/index.js` — cosmetic indentation fix only (`AUTH_RATE_LIMITS`
+  block and its preceding comment).
+- `server/README.md` — removed the stale B2 env-var doc row.
+- `BUG_TRACKER.md` — `S03-L3`/`S04-I2` moved `Open` → `Fixed`; `S10-N3`
+  row expanded with this continuation's re-verification evidence and an
+  explicit BLOCKED runtime note (status remains `Partial`).
+- This file, `START_HERE.md`, `SESSION_INDEX.md` — documentation only.
+
+### Commits (this continuation)
+
+- Implementation: see commit message beginning `S3-12: finish
+  S03-L3/S04-I2 — remove last B2 presign leftovers` for the exact hash —
+  covers `server/index.js`, `server/lib/pure.test.js`,
+  `server/README.md`.
+- Documentation: this file + `BUG_TRACKER.md` + `START_HERE.md` +
+  `SESSION_INDEX.md`, committed separately.
+
+### S3-12 final status
+
+**All six original S3-12 findings are now closed from source**:
+`S03-M2`, `S03-M1`, `S03-M3`, `S03-L2`, `S03-H3` follow-up, and
+`S03-L3`/`S04-I2` are `Fixed`; `S10-N3` is `Partial` (code/tests verified,
+production runtime verification blocked by environment). S3-12 as a whole
+is **done** for what this environment can verify — the only remaining
+work on `S10-N3` is an operator-side live-deployment confirmation, not
+further code.
+
+### Next remediation session
+
+`S3-13` already ran once, **out-of-order and partial**
+(`SESSION-S3-13.md`): it picked up only `S05-M1`'s clear-text-IP item
+early, ahead of the plan's numeric sequence, and explicitly left `S05-H2`
+(waitlist deny/expire/revoke), the rest of `S05-M1` (requestId clear-text
+log lines), and `S05-M3` (admin session lifetime/binding/bulk-revoke)
+untouched. With `S3-12` now finished, the correct next session is
+finishing **S3-13's remaining scope** (`S05-H2`, `S05-M3`, and the rest of
+`S05-M1`) per `ROUND3_REMEDIATION_PLAN.md`. Not started as part of this
+continuation — out of scope here.
