@@ -19,6 +19,10 @@ import java.util.concurrent.TimeUnit;
 
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.util.B2StorageHelper;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.appcheck.FirebaseAppCheck;
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory;
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreSettings;
 import com.google.firebase.firestore.PersistentCacheSettings;
@@ -31,6 +35,58 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
     @Override
     public void onCreate() {
         super.onCreate();
+
+        // ── S10-N1: App Check provider registration ────────────────────────────
+        // Registers the attestation provider that lets Firestore/Storage tell a
+        // genuine build of this app apart from a scripted client presenting a
+        // valid Firebase Auth session (audit/SESSION-10-SYNTHESIS.md §S10-N1 —
+        // grepping the whole repo for "appcheck"/"App Check" previously returned
+        // nothing at all). Must run before FirebaseApp.getInstance() is used by
+        // any other Firebase SDK call in this method (Firestore settings, below),
+        // because the attestation provider has to be installed before the first
+        // App Check token is requested — installing it later can race the first
+        // network call and silently ship that call with no token attached.
+        //
+        // Play Integrity (release/debug builds alike) is the real-device
+        // attestor; BuildConfig.DEBUG additionally layers in the Debug provider,
+        // which mints a per-install debug token instead of requiring a real
+        // Play Integrity verdict, so debug/CI/emulator builds are never blocked
+        // by an attestation check they cannot pass. Registering DebugAppCheck-
+        // ProviderFactory does nothing unless the resulting token is added as a
+        // "debug token" for this app in the Firebase console — until then it
+        // just fails open exactly like the Play Integrity factory does below.
+        //
+        // NOTE — this call alone does not enforce anything. Enforcement is a
+        // two-part operator step, deliberately NOT flipped on by this change:
+        //   1. Firebase console → App Check → Firestore/Storage → "Enforce"
+        //      (roll out in monitoring/metrics mode first, per the audit's own
+        //      recommendation, before switching to Enforce — flipping this
+        //      blind risks locking out real traffic).
+        //   2. firestore.rules' appCheckVerified() helper (see that file) is
+        //      written but deliberately not yet added to any `allow` clause,
+        //      for the same monitoring-first reason.
+        // Sideloaded/rooted-device installs can still pass Play Integrity
+        // verdicts on some devices and are accepted as a residual gap per the
+        // audit (App Check raises attacker cost, it is not a control of record
+        // for a compromised client — see README.md's threat model).
+        try {
+            FirebaseAppCheck appCheck = FirebaseAppCheck.getInstance(FirebaseApp.getInstance());
+            appCheck.installAppCheckProviderFactory(
+                    PlayIntegrityAppCheckProviderFactory.getInstance());
+            if (BuildConfig.DEBUG) {
+                appCheck.installAppCheckProviderFactory(
+                        DebugAppCheckProviderFactory.getInstance());
+            }
+            Log.i(TAG, "App Check provider factory installed ("
+                    + (BuildConfig.DEBUG ? "Debug+PlayIntegrity" : "PlayIntegrity") + ").");
+        } catch (Exception e) {
+            // Fail open, deliberately: App Check is a cost-raising attestation
+            // layer, not the app's only line of defense (Firestore/Storage rules
+            // and server-side auth still apply). A provider-install failure must
+            // not crash app startup for every user on a device/Play Services
+            // combination that cannot attest.
+            Log.w(TAG, "App Check provider install failed (non-fatal): " + e.getMessage());
+        }
 
         // ── libsignal native library explicit load ────────────────────────────
         // libsignal-android 0.54.x removed the automatic System.loadLibrary()
