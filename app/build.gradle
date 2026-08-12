@@ -228,6 +228,19 @@ dependencies {
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-messaging'
 
+    // S10-N1: App Check — attests that Firestore/Storage requests come from a
+    // genuine build of this app, not a scripted client holding a stolen/authed
+    // session (audit/SESSION-10-SYNTHESIS.md §S10-N1). Play Integrity is the
+    // real-device attestor used in release builds; the Debug provider issues a
+    // per-install debug token (logged once at first launch, then registered in
+    // the Firebase console) so debug/CI builds are never blocked by an
+    // attestation check they cannot pass. Neither line enforces anything by
+    // itself — see DuoShieldApp.onCreate() for provider registration and
+    // firestore.rules' appCheckVerified() for the (currently unwired,
+    // monitoring-first) rules-side half.
+    implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+    debugImplementation 'com.google.firebase:firebase-appcheck-debug'
+
 
 
     // WorkManager for self-destruct scheduler

@@ -2,6 +2,39 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── S10-N1: App Check verification scaffold ─────────────────────────────
+    // Without App Check, every rule below is reachable by any script holding a
+    // valid Firebase Auth session — no app install required at all
+    // (audit/SESSION-10-SYNTHESIS.md §S10-N1). `request.app` is populated by
+    // Firestore whenever the caller attached an App Check token, independently
+    // of whether "Enforce" is turned on for this project in the Firebase
+    // console App Check settings — so this helper can be evaluated the moment
+    // the client-side provider (DuoShieldApp.onCreate(), app/build.gradle) is
+    // rolled out, without waiting on that console toggle.
+    //
+    // Deliberately NOT added to any `allow` clause below yet. The audit's own
+    // recommendation is to roll out in monitoring mode first and read the
+    // App Check metrics before gating real traffic, because:
+    //   - every existing Android install needs to receive the App-Check-aware
+    //     APK before this could require request.app without breaking them;
+    //   - firestore-tests/rules.test.js's emulator suite does not currently
+    //     mint App Check tokens, so wiring this into `allow` would fail every
+    //     existing rules test until that harness is updated too (tracked for
+    //     S3-15b, which is also where this rule change gets its first real
+    //     execution — this environment has no `firebase` CLI/emulator);
+    //   - a sideloaded/rooted-device install is accepted as a residual gap
+    //     regardless (README.md's threat model: a compromised client bypasses
+    //     client-side/attestation checks by definition), so gating on this
+    //     changes attacker *cost*, not the trust boundary itself, and is not
+    //     urgent enough to risk a blind production lockout.
+    // Enabling this for real is the tracked next step: add `&& appCheckVerified()`
+    // to the `allow` clauses this finding calls out (users, chats, groups,
+    // messages, accountLock, _duressNonces) once the console is in monitoring
+    // mode and the metrics show real traffic is actually attaching tokens.
+    function appCheckVerified() {
+      return request.app != null;
+    }
+
     // Users: anyone authenticated can read (needed for ECDH key exchange,
     // partner display info, FCM token delivery). Only the owner can write.
     match /users/{uid} {
