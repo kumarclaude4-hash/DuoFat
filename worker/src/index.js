@@ -43,6 +43,38 @@ function b2Url(env, key) {
   return `${env.B2_ENDPOINT}/${env.B2_BUCKET}/${encoded}`;
 }
 
+// ─── Object key format allow-list ─────────────────────────────────────────────
+// DuoShield paths: media/<chatId|groupId>/<uuid>.<ext> | voice/<chatId|groupId>/<uuid>.<ext>
+// Must stay byte-identical to MEDIA_KEY_FORMAT in server/index.js.
+const KEY_FORMAT = /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
+
+// ─── S03-M1: response Content-Type is derived from the key, never trusted ────
+// The key extension is already tightly allow-listed by KEY_FORMAT, but before
+// this fix the *declared* Content-Type header (fully attacker-controlled —
+// nothing validates it against the extension) was stored verbatim at PUT time
+// and replayed unmodified on every GET, with no `X-Content-Type-Options` and
+// no `Content-Disposition`. A `write`-token holder could store an object at
+// `…/x.jpg` served as `text/html` or `image/svg+xml` with attacker-chosen
+// bytes; combined with permissive CORS and any future browser/WebView
+// consumer of these URLs, that is a stored-content-type confusion, not just
+// a cosmetic mismatch. Deriving the served type purely from the (immutable,
+// allow-listed) extension — for both storage and serving, on both tiers —
+// removes the client header from the trust boundary entirely, including for
+// objects that were already stored with an attacker-chosen type before this
+// fix shipped, since GET no longer reads the stored value.
+const CONTENT_TYPE_BY_EXT = {
+  jpg: 'image/jpeg',
+  mp4: 'video/mp4',
+  m4a: 'audio/mp4',
+  '3gp': 'video/3gpp',
+};
+
+function contentTypeForKey(key) {
+  const match = KEY_FORMAT.exec(key);
+  const ext = match?.[2];
+  return CONTENT_TYPE_BY_EXT[ext] || 'application/octet-stream';
+}
+
 // ─── Response helpers ─────────────────────────────────────────────────────────
 // S03-L4 fix: json() always merges in whatever CORS headers apply to this
 // request, so quota/rate-limit rejections (429/507/etc.) are just as
@@ -146,8 +178,16 @@ async function isStatsAuthorized(request, env) {
 // Set the same value here and on the push server:
 //   npx wrangler secret put MEDIA_TOKEN_SECRET
 //
-// Wire format: v1.<op>.<expiresAt>.<uidTag>.<base64url-hmac-sha256>
-// Signed payload: `v1|<op>|<expiresAt>|<uidTag>|<key>`
+// Wire format: v1.<op>.<expiresAt>.<uidTag>.<jti>.<base64url-hmac-sha256>
+// Signed payload: `v1|<op>|<expiresAt>|<uidTag>|<jti>|<key>`
+//
+// S03-M3: `jti` (added alongside the pre-existing fields, not replacing any
+// of them) is a random per-mint identifier. It exists so `delete` tokens —
+// the one verb with no undo — can be marked single-use in KV once consumed
+// (see isTokenAlreadyUsed/markTokenUsed below); `read`/`write` tokens still
+// carry a jti for wire-format uniformity but are not tracked for reuse,
+// since re-fetching or re-uploading the same object within a short TTL is
+// normal client behavior, not something to block.
 const METHOD_TO_OP = { GET: 'read', PUT: 'write', DELETE: 'delete' };
 
 function b64urlToBytes(s) {
@@ -187,11 +227,16 @@ async function verifyMediaToken(request, env, key) {
   }
   const token = header.slice(7).trim();
   const parts = token.split('.');
-  if (parts.length !== 5 || parts[0] !== 'v1') {
+  // S03-M3: wire format grew a 6th segment (jti). A 5-part token is the
+  // pre-fix shape — rejecting it as malformed (rather than tolerating both
+  // shapes) means a captured old-format token cannot be replayed forever;
+  // the server and Worker deploy together (same invariant already relied on
+  // for other wire-format fields here), so no legitimate client ever sends one.
+  if (parts.length !== 6 || parts[0] !== 'v1') {
     return { ok: false, status: 401, error: 'Malformed capability token' };
   }
 
-  const [, op, expRaw, holder, sig] = parts;
+  const [, op, expRaw, holder, jti, sig] = parts;
 
   // Bind the token to this verb. A read token must not be replayable as a delete.
   if (op !== expectedOp) {
@@ -203,9 +248,13 @@ async function verifyMediaToken(request, env, key) {
     return { ok: false, status: 401, error: 'Capability token expired' };
   }
 
+  if (!jti) {
+    return { ok: false, status: 401, error: 'Malformed capability token' };
+  }
+
   // Recompute over the key from the request path — this is what scopes the
   // token to a single object.
-  const payload  = `v1|${op}|${expiresAt}|${holder}|${key}`;
+  const payload  = `v1|${op}|${expiresAt}|${holder}|${jti}|${key}`;
   const expected = await hmacSha256(env.MEDIA_TOKEN_SECRET, payload);
 
   let supplied;
@@ -219,7 +268,32 @@ async function verifyMediaToken(request, env, key) {
     return { ok: false, status: 403, error: 'Invalid capability token' };
   }
 
-  return { ok: true, holder };
+  return { ok: true, holder, jti, expiresAt };
+}
+
+// ─── Single-use tracking for delete tokens (S03-M3) ───────────────────────────
+// A capability token is otherwise a stateless bearer credential valid for its
+// entire TTL — anything that observes one (a proxy log, a crash report) can
+// replay it for as long as it remains unexpired. That is tolerable for
+// `read`/`write` (re-fetching or re-uploading the same object is normal), but
+// not for `delete`, the one verb with no undo. Marking a delete token's `jti`
+// used in KV the first time it is actually consumed closes the replay window
+// without touching the read/write paths at all.
+//
+// Same best-effort characteristics as the rest of this file's KV-backed
+// counters (no Durable Objects on this project — see S03-I2): without
+// `RATE_KV` configured there is no way to remember a used token at all, so
+// this degrades to "not enforced" rather than failing closed. That mirrors
+// every other KV-gated control here (rate limiting, quotas) and is a known,
+// documented limitation of the dev/no-KV configuration, not a silent gap.
+async function isTokenAlreadyUsed(env, jti) {
+  if (!env.RATE_KV || !jti) return false;
+  return (await env.RATE_KV.get(`token:used:${jti}`)) !== null;
+}
+
+async function markTokenUsed(env, jti, ttlSeconds) {
+  if (!env.RATE_KV || !jti) return;
+  await kvSet(env, `token:used:${jti}`, '1', { expirationTtl: Math.max(60, ttlSeconds) });
 }
 
 // ─── KV helpers ───────────────────────────────────────────────────────────────
@@ -463,14 +537,26 @@ export default {
 
     // Object key: everything after the leading slash.
     // DuoShield paths: media/<chatId|groupId>/<uuid>.<ext> | voice/<chatId|groupId>/<uuid>.<ext>
-    const key = decodeURIComponent(url.pathname.slice(1));
+    //
+    // S03-L2: a malformed percent-escape (e.g. a lone `%` or `%zz`) makes
+    // `decodeURIComponent` throw `URIError` — previously uncaught, so a
+    // request like `GET /media/x/%zz.jpg` fell through to a generic
+    // 500/1101 instead of the normal 400 this file returns for every other
+    // malformed-input case. No state or information is at stake, but this
+    // was the one input-handling step that ran before every other control
+    // in this file, unguarded.
+    let key;
+    try {
+      key = decodeURIComponent(url.pathname.slice(1));
+    } catch {
+      return respond({ error: 'Invalid file key' }, 400);
+    }
     if (!key) return respond({ error: 'Missing file key' }, 400);
 
     // Strict key format allow-list. The Android client only ever generates keys
     // matching this shape (see B2StorageHelper / ChatMediaActivity / GroupChatActivity).
     // Rejecting anything else closes off path traversal ("../"), null bytes, and
     // arbitrary-prefix keys that the shared-secret auth alone does not constrain.
-    const KEY_FORMAT = /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
     if (!KEY_FORMAT.test(key)) {
       return respond({ error: 'Invalid file key format' }, 400);
     }
@@ -516,6 +602,27 @@ export default {
         return respond({ error: 'Only the original uploader may overwrite this object' }, 403);
       }
 
+      // S03-H3 follow-up: the only overwrite this handler allows is a
+      // same-holder overwrite (the check above already rejects anyone
+      // else's). Both the pre-check below and the post-upload credit at the
+      // bottom of this handler must treat that case as a DELTA — the new
+      // size minus the size of the object being replaced — not as if the
+      // old bytes never existed. Before this fix, a same-holder overwrite
+      // added the *entire* new size to both the global R2 counter and the
+      // holder's per-user counter every time, on top of whatever the old
+      // object had already contributed: N overwrites of a 10 MB file
+      // inflated the counters by 10*N MB while R2 itself only ever held
+      // 10 MB, permanently and cumulatively — the counter never converges
+      // back down on its own. That double-counting could make a holder's
+      // own quota (and, through the shared global counter, the whole
+      // deployment's free-tier budget) look exhausted without the data to
+      // show for it, and — read the other way — meant a *shrinking*
+      // replacement never gave back the headroom it should have, since the
+      // old, larger size was never subtracted either.
+      // `oldSize` is 0 for a brand-new key (no existing object — nothing to
+      // subtract, matching the pre-fix behavior for first uploads exactly).
+      const oldSize = existing?.size ?? 0;
+
       // Optimistic pre-check using the client-supplied Content-Length.
       // A spoofed or absent header is caught after the upload via R2 HEAD —
       // see the post-put size verification below.
@@ -526,7 +633,8 @@ export default {
       }
 
       const r2Bytes = await getR2Bytes(env);
-      if (r2Bytes + declaredBytes > MAX_R2_BYTES) {
+      const projectedR2Bytes = r2Bytes - oldSize + declaredBytes;
+      if (projectedR2Bytes > MAX_R2_BYTES) {
         return respond({
           error:           'Upload rejected — R2 storage limit (9.5 GB) reached. No new media accepted.',
           r2_used_bytes:   r2Bytes,
@@ -540,7 +648,8 @@ export default {
       // exhaust the entire 9.5 GB global cap and stop uploads platform-wide
       // for weeks (objects only leave R2 via the 30-day tiering cron).
       const userBytes = await getUserBytes(env, cap.holder);
-      if (userBytes + declaredBytes > maxUserBytes(env)) {
+      const projectedUserBytes = userBytes - oldSize + declaredBytes;
+      if (projectedUserBytes > maxUserBytes(env)) {
         return respond({
           error:            'Upload rejected — per-user storage quota reached.',
           user_used_bytes:  userBytes,
@@ -548,7 +657,12 @@ export default {
         }, 507);
       }
 
-      const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+      // S03-M1: the served/stored Content-Type is derived from the
+      // allow-listed key extension, never from the attacker-controllable
+      // client header — see contentTypeForKey() above for the full
+      // rationale. The client's Content-Type header is intentionally never
+      // read here.
+      const contentType = contentTypeForKey(key);
 
       await env.HOT_BUCKET.put(key, request.body, {
         httpMetadata:   { contentType },
@@ -582,9 +696,12 @@ export default {
       // its true size unaccounted for. Re-checking `actualBytes` against
       // both caps before crediting anything closes that bypass for the same
       // reason the file-size guard exists — the client header is never
-      // trusted for anything that gates a limit.
-      const r2AfterUpload = (await getR2Bytes(env)) + actualBytes;
-      const userAfterUpload = (await getUserBytes(env, cap.holder)) + actualBytes;
+      // trusted for anything that gates a limit. Same delta treatment as
+      // the pre-checks above: `oldSize` is subtracted here too, so a
+      // same-holder overwrite is re-verified against the same "new minus
+      // old" arithmetic, not the object's full new size on top of the old.
+      const r2AfterUpload = (await getR2Bytes(env)) - oldSize + actualBytes;
+      const userAfterUpload = (await getUserBytes(env, cap.holder)) - oldSize + actualBytes;
       if (r2AfterUpload > MAX_R2_BYTES || userAfterUpload > maxUserBytes(env)) {
         await env.HOT_BUCKET.delete(key).catch(() => {});
         return respond({
@@ -593,10 +710,31 @@ export default {
         }, 507);
       }
 
-      // Increment R2 counter and the uploader's per-user counter with the
-      // actual stored size, not the declared size.
-      ctx.waitUntil(adjustR2(env, actualBytes));
-      ctx.waitUntil(adjustUserBytes(env, cap.holder, actualBytes));
+      // Increment R2 counter and the uploader's per-user counter by the
+      // DELTA (actualBytes - oldSize), not the full actualBytes — a
+      // same-holder overwrite's old bytes are no longer double-counted.
+      // For a brand-new key oldSize is 0, so this is identical to crediting
+      // actualBytes outright, exactly as before this fix. adjustR2/
+      // adjustUserBytes already no-op on a zero delta and clamp at 0, so a
+      // same-size replacement (delta 0) and a shrinking one (negative
+      // delta) are both handled correctly.
+      //
+      // Residual limitation, not fixed here (documented, not hidden): this
+      // is still the same best-effort, non-atomic counter model as the rest
+      // of this file (no Durable Objects on this project — see S03-I2).
+      // Two concurrent overwrites of the same key can still race between
+      // the HEAD above and either write landing — the bound on that race is
+      // the same one `adjustR2`'s own comment already describes for
+      // concurrent fresh uploads, not a new gap this fix introduces. A
+      // rejected overwrite (413/507 above) also cannot roll back to the
+      // pre-overwrite bytes — `HOT_BUCKET.put` already replaced them by the
+      // time the post-upload checks run, and R2 has no object versioning
+      // configured here — so a same-holder overwrite that gets rejected
+      // loses the old content as a side effect of the destructive write,
+      // not of this accounting fix.
+      const deltaBytes = actualBytes - oldSize;
+      ctx.waitUntil(adjustR2(env, deltaBytes));
+      ctx.waitUntil(adjustUserBytes(env, cap.holder, deltaBytes));
 
       return respond({ status: 'stored', key, tier: 'hot', bytes: actualBytes });
     }
@@ -607,11 +745,23 @@ export default {
       const r2Object = await env.HOT_BUCKET.get(key);
       if (r2Object) {
         const headers = new Headers({
-          'Content-Type':   r2Object.httpMetadata?.contentType || 'application/octet-stream',
-          'Content-Length': String(r2Object.size),
-          'ETag':           r2Object.httpEtag ?? '',
-          'Cache-Control':  'private, max-age=3600',
-          'X-Storage-Tier': 'hot',
+          // S03-M1: derived from the key's allow-listed extension, not from
+          // whatever was stored in httpMetadata.contentType — an object PUT
+          // before this fix (or PUT by any client that spoofed the header
+          // when this check didn't exist) may still have an attacker-chosen
+          // stored value; reading it here would keep replaying that.
+          'Content-Type':           contentTypeForKey(key),
+          'Content-Length':         String(r2Object.size),
+          'ETag':                   r2Object.httpEtag ?? '',
+          'Cache-Control':          'private, max-age=3600',
+          'X-Storage-Tier':         'hot',
+          // S03-M1: a browser/WebView that ever opens this URL directly must
+          // not MIME-sniff the body into executing as HTML/SVG/JS, and must
+          // not render it inline — this is defense-in-depth today (the
+          // Android client only ever fetches-then-decrypts) but the file
+          // already ships permissive CORS anticipating a browser client.
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition':    'attachment',
           ...cors,
         });
         return new Response(r2Object.body, { headers });
@@ -631,11 +781,16 @@ export default {
         // Internal AWS/B2 headers (x-amz-request-id, x-amz-id-2, etc.) are
         // intentionally excluded — they reveal infrastructure details.
         const headers = new Headers({
-          'Content-Type':   b2Response.headers.get('Content-Type') || 'application/octet-stream',
-          'Content-Length': b2Response.headers.get('Content-Length') ?? '',
-          'ETag':           b2Response.headers.get('ETag') ?? '',
-          'Cache-Control':  'private, max-age=3600',
-          'X-Storage-Tier': 'cold',
+          // S03-M1: same reasoning as the R2 branch above — derive from the
+          // key, never trust the stored/upstream value (B2's own Content-Type
+          // ultimately traces back to the same client-controlled PUT header).
+          'Content-Type':           contentTypeForKey(key),
+          'Content-Length':         b2Response.headers.get('Content-Length') ?? '',
+          'ETag':                   b2Response.headers.get('ETag') ?? '',
+          'Cache-Control':          'private, max-age=3600',
+          'X-Storage-Tier':         'cold',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition':    'attachment',
           ...cors,
         });
         return new Response(b2Response.body, { status: 200, headers });
@@ -647,6 +802,18 @@ export default {
 
     // ── DELETE ────────────────────────────────────────────────────────────────
     if (request.method === 'DELETE') {
+      // S03-M3: `delete` is the one verb with no undo, so its token is
+      // single-use — replaying a captured delete token (a proxy log, a
+      // crash report, anything that observed the Authorization header)
+      // within its TTL must not be able to issue the same destructive
+      // operation twice. Checked before touching R2/B2 at all, so a replay
+      // never even reaches either tier's ownership check or delete call.
+      if (await isTokenAlreadyUsed(env, cap.jti)) {
+        return respond({ error: 'Capability token already used' }, 403);
+      }
+      const remainingTtlSeconds = Math.ceil(Math.max(0, cap.expiresAt - Date.now()) / 1000);
+      ctx.waitUntil(markTokenUsed(env, cap.jti, remainingTtlSeconds));
+
       // Check R2 first (files < 30 days old live only in R2).
       const r2Head = await env.HOT_BUCKET.head(key).catch(() => null);
 
