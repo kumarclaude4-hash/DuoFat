@@ -199,7 +199,11 @@ public final class ChatExportHelper {
         }
 
         progress.update("Compressing archive…", 0, 0);
-        File zipFile = new File(ctx.getCacheDir(), "DuoShield_Export_" + System.currentTimeMillis() + ".zip");
+        // S08-M2: write into the FileProvider-scoped shared/export/ subdir
+        // rather than the cache root, so the grant issued by shareZip() below
+        // is not scoped to the whole cache directory.
+        File zipFile = new File(SharedCacheDir.export(ctx),
+                "DuoShield_Export_" + System.currentTimeMillis() + ".zip");
         zipDirectory(workDir, zipFile, progress);
         deleteRecursive(workDir);
 

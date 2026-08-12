@@ -188,7 +188,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     private static final long[]   DISAPPEAR_OPTS_MS    = {0, 5_000L, 30_000L, 60_000L, 300_000L, 3_600_000L, 86_400_000L, 604_800_000L};
     private static final String[] DISAPPEAR_OPTS_LBL   = {"Off", "5 seconds", "30 seconds", "1 minute", "5 minutes", "1 hour", "1 day", "1 week"};
-    private static final String[] DISAPPEAR_OPTS_EMOJI  = {"🚫", "⚡", "⏱", "1️⃣", "5️⃣", "🕐", "📅", "📆"};
+    private static final String[] DISAPPEAR_OPTS_EMOJI  = {"🚫", "��", "⏱", "1️⃣", "5️⃣", "🕐", "📅", "📆"};
     private static final String   DESTRUCT_WORK_TAG  = "self_destruct_work";
 
     // Voice recording
@@ -464,7 +464,7 @@ public class ChatMediaActivity extends BaseActivity {
         cancelRecordingBtn = findViewById(R.id.cancelRecordingBtn);
         stopRecordingBtn   = findViewById(R.id.stopRecordingBtn);
 
-        // ── Critical-view null guard ─────────────────────────────────────────
+        // ── Critical-view null guard ───────────────────��─────────────────────
         // If the layout is missing any of these we cannot function — bail safely.
         if (recyclerView == null || messageInput == null
                 || sendButton == null || micButton == null) {
@@ -2456,7 +2456,11 @@ public class ChatMediaActivity extends BaseActivity {
             return;
         }
         try {
-            File photoFile = File.createTempFile("cam_", ".jpg", getCacheDir());
+            // S08-M2: write into the FileProvider-scoped shared/camera/ subdir
+            // rather than the cache root, so the grant below is not scoped to
+            // the whole cache directory.
+            File photoFile = File.createTempFile(
+                    "cam_", ".jpg", com.duoshield.app.util.SharedCacheDir.camera(this));
             cameraPhotoUri = FileProvider.getUriForFile(
                     this, getPackageName() + ".provider", photoFile);
             takePictureLauncher.launch(cameraPhotoUri);

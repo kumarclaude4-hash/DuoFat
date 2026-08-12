@@ -50,8 +50,7 @@
         android:localeConfig="@xml/locales_config"
         android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true"
-        android:extractNativeLibs="false"
-        android:allowNativeHeapPointerTagging="false">
+        android:extractNativeLibs="false">
 
         <!-- ── LAUNCHER ────────────────────────────────────── -->
         <activity

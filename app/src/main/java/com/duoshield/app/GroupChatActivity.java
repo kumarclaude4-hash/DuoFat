@@ -856,8 +856,11 @@ public class GroupChatActivity extends BaseActivity {
             return;
         }
         try {
+            // S08-M2: write into the FileProvider-scoped shared/camera/ subdir
+            // rather than the cache root, so the grant below is not scoped to
+            // the whole cache directory.
             java.io.File photoFile = java.io.File.createTempFile(
-                    "grp_cam_", ".jpg", getCacheDir());
+                    "grp_cam_", ".jpg", com.duoshield.app.util.SharedCacheDir.camera(this));
             cameraGroupPhotoUri = FileProvider.getUriForFile(
                     this, getPackageName() + ".provider", photoFile);
             takeGroupPictureLauncher.launch(cameraGroupPhotoUri);

@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    S08-M2 fix: the previous version declared four roots, each scoped to "."
+    (the whole directory) — including two external-storage roots the app
+    never writes to (grep confirms zero getExternalFilesDir/getExternalCacheDir
+    call sites) and an unscoped files-path root that is also never passed to
+    FileProvider (getFilesDir() is only used for the local avatar copy and
+    B2StorageHelper's disk cache — see util/SharedCacheDir.java for the full
+    audit). The only files ever shared via FileProvider live under
+    getCacheDir()/shared/ (see util/SharedCacheDir.java), so that is now the
+    only declared root. A Uri grant for any shared file is scoped to
+    "shared/" only, not the rest of the cache directory (which also holds
+    the plaintext Glide disk cache — S08-H3).
+-->
 <paths>
-    <cache-path          name="cache"          path="." />
-    <external-cache-path name="external-cache" path="." />
-    <files-path          name="files"          path="." />
-    <external-files-path name="external_files" path="." />
+    <cache-path name="shared" path="shared/" />
 </paths>
