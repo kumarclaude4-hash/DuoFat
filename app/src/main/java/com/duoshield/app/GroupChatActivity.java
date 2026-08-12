@@ -361,9 +361,21 @@ public class GroupChatActivity extends BaseActivity {
               // senderUid actually matches the locally-cached creatorUid before ever
               // decrypting/trusting it. This guards against a stale/misconfigured rule
               // or a future regression re-opening write access to other members.
-              if (creatorUid != null && !creatorUid.equals(sender)) {
+              //
+              // S07-L1 fix: this previously read `creatorUid != null && !creatorUid.equals(sender)`,
+              // which fails OPEN when creatorUid is null (a null/missing local
+              // creatorUid — e.g. a legacy Room row from before creatorUid was
+              // populated, or a sync gap — short-circuited the check to false and
+              // let ANY claimed sender through). A missing creatorUid means we have
+              // no basis to trust this key doc's sender at all, so it must fail
+              // CLOSED: null/missing creatorUid now denies unconditionally, exactly
+              // like a mismatched one.
+              if (creatorUid == null || !creatorUid.equals(sender)) {
+                  // S07-L4/S10-N2: creatorUid is a peer uid too — redact it, same as
+                  // sender, before logging at a level (Log.w) that survives release
+                  // builds (proguard-rules.pro keeps Log.w/Log.e deliberately).
                   Log.w(TAG, "Group key doc senderUid (" + LogRedact.uid(sender) + ") does not match "
-                          + "group creator (" + creatorUid + ") — refusing to trust it");
+                          + "group creator (" + LogRedact.uid(creatorUid) + ") — refusing to trust it");
                   Toast.makeText(this,
                           "Group key came from an unexpected sender — refusing for safety",
                           Toast.LENGTH_LONG).show();
@@ -479,11 +491,20 @@ public class GroupChatActivity extends BaseActivity {
                 String plain;
                 try {
                     Boolean isEncrypted = doc.getBoolean("isEncrypted");
+                    // S07-H3: reconstruct the exact AAD used at encrypt time.
+                    // Only messages written with the current, AAD-aware send
+                    // path carry "aadV1" — a legacy message (predating this
+                    // fix) has no bound context, so it must be decrypted with
+                    // no AAD or the GCM tag check fails.
+                    Boolean aadV1 = doc.getBoolean("aadV1");
+                    byte[] aad = Boolean.TRUE.equals(aadV1)
+                        ? GroupCipherHelper.buildAad(groupId, sender, id)
+                        : null;
                     // Media messages intentionally carry an empty text body.
                     // Captions and mediaItems are separate plaintext metadata,
                     // so do not attempt to decrypt an empty cipher.
                     plain = (Boolean.TRUE.equals(isEncrypted) && !cipher.isEmpty())
-                        ? GroupCipherHelper.decrypt(cipher, groupKey)
+                        ? GroupCipherHelper.decrypt(cipher, groupKey, aad)
                         : cipher;
                 } catch (Exception ex) {
                     Log.e(TAG, "Decrypt failed for msg " + id, ex);
@@ -561,7 +582,11 @@ public class GroupChatActivity extends BaseActivity {
         executor.execute(() -> {
             String cipher;
             try {
-                cipher = GroupCipherHelper.encrypt(text, groupKey);
+                // S07-H3: bind (groupId, sender, msgId) into the GCM tag so this
+                // ciphertext only decrypts under its own context — not just under
+                // whatever a Firestore rule currently allows.
+                byte[] aad = GroupCipherHelper.buildAad(groupId, myUid, msgId);
+                cipher = GroupCipherHelper.encrypt(text, groupKey, aad);
             } catch (Exception ex) {
                 Log.e(TAG, "Group encrypt failed", ex);
                 runOnUiThread(() -> {
@@ -581,6 +606,10 @@ public class GroupChatActivity extends BaseActivity {
             doc.put("type",        "text");
             doc.put("status",      "sent");
             doc.put("timestamp",   FieldValue.serverTimestamp());
+            // S07-H3: marks that "text" was encrypted with AAD bound to
+            // (groupId, sender, id) — lets readers reconstruct the exact
+            // same AAD instead of guessing whether one was used.
+            doc.put("aadV1",       true);
 
             FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
             if (!guard.canWrite(1)) {

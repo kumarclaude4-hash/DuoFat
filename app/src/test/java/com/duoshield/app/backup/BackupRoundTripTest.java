@@ -19,10 +19,18 @@ import static org.junit.Assert.*;
  *     (the caller treats null as "skip this doc").
  *  4. AES-256-GCM encrypt → decrypt round-trip (uncompressed path).
  *  5. AES-256-GCM + GZIP encryptCompressed → decryptCompressed round-trip.
- *  6. computeChecksum + verifyChecksum — match and mismatch cases.
+ *  6. computeChecksum + verifyChecksum (legacy, unkeyed) — match and mismatch cases.
  *  7. Full end-to-end: encrypt + checksum a message JSON, corrupt the checksum,
  *     verify that verifyChecksum catches the corruption.
  *  8. deriveBackupKey is deterministic — same mnemonic always yields the same key.
+ *  9. (S07-H2) computeHmac + verifyHmac — keyed HMAC replaces the unkeyed
+ *     checksum for new writes: match/mismatch/wrong-key/legacy-field-absent
+ *     cases, plus a check that the HMAC actually differs from the legacy
+ *     SHA-256 checksum of the same plaintext (proving it isn't just the old
+ *     digest renamed).
+ * 10. (S07-M3) buildAad + the encryptCompressed/decryptCompressed AAD overloads
+ *     — a matching AAD round-trips, a tampered/mismatched AAD fails decryption,
+ *     and the legacy no-AAD overloads still round-trip for old blobs.
  */
 public class BackupRoundTripTest {
 
@@ -347,5 +355,168 @@ public class BackupRoundTripTest {
         byte[] k2 = BackupCryptoHelper.deriveBackupKey(m2);
         assertFalse("different mnemonics must produce different keys",
                 java.util.Arrays.equals(k1, k2));
+    }
+
+    // ── BackupCryptoHelper — HMAC integrity (S07-H2) ──────────────────────────
+
+    @Test
+    public void hmac_verifyMatch() throws Exception {
+        byte[] key  = testKey();
+        String text = "message body for hmac";
+        String hmac = BackupCryptoHelper.computeHmac(key, text);
+        assertNotNull("hmac must not be null", hmac);
+        assertEquals("HMAC-SHA256 tag must be 64 hex chars", 64, hmac.length());
+        assertTrue("verifyHmac must return true for matching plaintext+key",
+                BackupCryptoHelper.verifyHmac(key, text, hmac));
+    }
+
+    @Test
+    public void hmac_verifyMismatch_tamperedPlaintext() throws Exception {
+        byte[] key  = testKey();
+        String hmac = BackupCryptoHelper.computeHmac(key, "original text");
+        assertFalse("verifyHmac must return false when text has been tampered",
+                BackupCryptoHelper.verifyHmac(key, "tampered text", hmac));
+    }
+
+    @Test
+    public void hmac_verifyMismatch_wrongKey() throws Exception {
+        byte[] key1 = testKey();
+        byte[] key2 = new byte[32]; // all zeros — different key
+        String text = "same plaintext, different key";
+        String hmac = BackupCryptoHelper.computeHmac(key1, text);
+        assertFalse("an HMAC computed with one key must not verify under a different key "
+                        + "(this is exactly the property the old unkeyed SHA-256 checksum lacked)",
+                BackupCryptoHelper.verifyHmac(key2, text, hmac));
+    }
+
+    @Test
+    public void hmac_nullOrEmptyExpected_returnsFalse_callerMustUseLegacyPath() {
+        // Unlike verifyChecksum's null/empty tolerance (legacy-doc default-true),
+        // verifyHmac must NOT default to true on a missing tag — an absent "hmac"
+        // field means the caller has to fall back to verifyChecksum explicitly
+        // (see BackupManager.restoreAllSync), not silently treat it as valid.
+        assertFalse("null expected hmac must return false, not true",
+                BackupCryptoHelper.verifyHmac(testKey(), "any text", null));
+        assertFalse("empty expected hmac must return false, not true",
+                BackupCryptoHelper.verifyHmac(testKey(), "any text", ""));
+    }
+
+    @Test
+    public void hmac_isDeterministic() throws Exception {
+        byte[] key  = testKey();
+        String text = "determinism check";
+        assertEquals("same key+text must always produce the same HMAC",
+                BackupCryptoHelper.computeHmac(key, text),
+                BackupCryptoHelper.computeHmac(key, text));
+    }
+
+    @Test
+    public void hmac_differsFromLegacyChecksum() throws Exception {
+        // Proves the fix is a real keyed primitive, not the old unkeyed digest
+        // renamed: for the same plaintext, the HMAC must not equal the plain
+        // SHA-256 checksum (their key material and inputs genuinely differ).
+        byte[] key       = testKey();
+        String text      = "same plaintext, two different integrity tags";
+        String hmac      = BackupCryptoHelper.computeHmac(key, text);
+        String checksum  = BackupCryptoHelper.computeChecksum(text);
+        assertNotEquals("HMAC-SHA256 (keyed) must differ from the legacy unkeyed SHA-256 checksum",
+                hmac, checksum);
+    }
+
+    @Test
+    public void hmac_differentKeysYieldDifferentTags() throws Exception {
+        byte[] key1 = testKey();
+        byte[] key2 = new byte[32];
+        key2[0] = 0x42;
+        String text = "same text, different keys";
+        assertNotEquals("different keys must yield different HMAC tags for the same plaintext",
+                BackupCryptoHelper.computeHmac(key1, text),
+                BackupCryptoHelper.computeHmac(key2, text));
+    }
+
+    // ── BackupCryptoHelper — associated data (S07-M3) ─────────────────────────
+
+    @Test
+    public void aad_matchingAad_roundTrips() throws Exception {
+        byte[] key  = testKey();
+        byte[] aad  = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        String text = "payload bound to doc-1/conv-1";
+
+        String blob      = BackupCryptoHelper.encryptCompressed(key, text, aad);
+        String recovered = BackupCryptoHelper.decryptCompressed(key, blob, aad);
+        assertEquals("decryption with the identical AAD must recover the original text",
+                text, recovered);
+    }
+
+    @Test
+    public void aad_mismatchedDocId_failsDecryption() throws Exception {
+        byte[] key = testKey();
+        byte[] writeAad = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        byte[] readAad  = BackupCryptoHelper.buildAad("doc-2", "conv-1", true); // different doc id
+        String blob = BackupCryptoHelper.encryptCompressed(key, "payload", writeAad);
+        try {
+            BackupCryptoHelper.decryptCompressed(key, blob, readAad);
+            fail("Decrypting with a different docId in the AAD must fail the GCM tag check");
+        } catch (Exception expected) {
+            // pass — AEAD authentication failure
+        }
+    }
+
+    @Test
+    public void aad_flippedCompressedFlag_failsDecryption() throws Exception {
+        // The exact tamper S07-M3 targets: flipping "compressed" outside the
+        // ciphertext must now be caught by the GCM tag, not silently accepted.
+        byte[] key = testKey();
+        byte[] writeAad = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        byte[] tamperedAad = BackupCryptoHelper.buildAad("doc-1", "conv-1", false); // flipped
+        String blob = BackupCryptoHelper.encryptCompressed(key, "payload", writeAad);
+        try {
+            BackupCryptoHelper.decryptCompressed(key, blob, tamperedAad);
+            fail("Decrypting after the 'compressed' flag was flipped must fail the GCM tag check");
+        } catch (Exception expected) {
+            // pass — AEAD authentication failure
+        }
+    }
+
+    @Test
+    public void aad_missingAadAtReadTime_failsWhenWrittenWithAad() throws Exception {
+        byte[] key = testKey();
+        byte[] aad = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        String blob = BackupCryptoHelper.encryptCompressed(key, "payload", aad);
+        try {
+            BackupCryptoHelper.decryptCompressed(key, blob); // no AAD supplied
+            fail("Decrypting with no AAD a blob that was written with AAD must fail");
+        } catch (Exception expected) {
+            // pass — AEAD authentication failure
+        }
+    }
+
+    @Test
+    public void aad_legacyNoAadOverloads_stillRoundTrip() throws Exception {
+        // Old call sites / old stored blobs (pre-S07-M3) never used AAD at all —
+        // the 2-arg overloads must keep working unchanged.
+        byte[] key  = testKey();
+        String text = "legacy blob, no AAD ever used";
+        String blob = BackupCryptoHelper.encryptCompressed(key, text);
+        assertEquals("legacy no-AAD round trip must still work",
+                text, BackupCryptoHelper.decryptCompressed(key, blob));
+    }
+
+    @Test
+    public void buildAad_isDeterministic() {
+        byte[] a1 = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        byte[] a2 = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        assertArrayEquals("buildAad must be deterministic for identical inputs", a1, a2);
+    }
+
+    @Test
+    public void buildAad_differsWhenAnyFieldChanges() {
+        byte[] base = BackupCryptoHelper.buildAad("doc-1", "conv-1", true);
+        assertFalse("changing docId must change the AAD bytes",
+                java.util.Arrays.equals(base, BackupCryptoHelper.buildAad("doc-2", "conv-1", true)));
+        assertFalse("changing conversationId must change the AAD bytes",
+                java.util.Arrays.equals(base, BackupCryptoHelper.buildAad("doc-1", "conv-2", true)));
+        assertFalse("changing the compressed flag must change the AAD bytes",
+                java.util.Arrays.equals(base, BackupCryptoHelper.buildAad("doc-1", "conv-1", false)));
     }
 }

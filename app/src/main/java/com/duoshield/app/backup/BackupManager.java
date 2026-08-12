@@ -32,12 +32,18 @@ import java.util.concurrent.Executors;
  *
  * Firestore layout:
  *   backups/{uid}                     → meta doc  {lastBackupTs, count}
- *   backups/{uid}/messages/{msgId}    → {enc, checksum, compressed, ts, conversationId}
+ *   backups/{uid}/messages/{msgId}    → {enc, hmac, compressed, ts, conversationId}
  *   backup_logs/{autoId}              → {uid, event, ts, count, error?}
  *
  * "enc" is an AES-256-GCM blob produced by BackupCryptoHelper (GZIP-compressed
  * for new writes, uncompressed for old docs — distinguished by the "compressed" field).
- * "checksum" is a SHA-256 hex digest of the plaintext JSON, verified on restore.
+ * The doc's own id + conversationId + compressed flag are bound into the GCM tag
+ * as associated data (S07-M3), so none of those fields can be tampered with
+ * independently of "enc".
+ * "hmac" is a keyed HMAC-SHA256 of the plaintext JSON, verified on restore
+ * (S07-H2 — replaces a legacy unkeyed "checksum" field still read for docs
+ * written before this fix; an unkeyed digest is an offline guess-confirmation
+ * oracle, which a keyed HMAC is not).
  *
  * The backup key is derived from the user's seed phrase and stored in SecurePrefs.
  * The server never sees plaintext.
@@ -98,9 +104,14 @@ public final class BackupManager {
     private static void backupWithRetry(Context ctx, Message msg, String uid,
                                         byte[] key, int attempt) {
         try {
-            String json     = toJson(msg);
-            String checksum = BackupCryptoHelper.computeChecksum(json);
-            String enc      = BackupCryptoHelper.encryptCompressed(key, json);
+            String json = toJson(msg);
+            // S07-M3: bind doc id + conversationId + the "compressed" flag itself
+            // into the GCM tag so none of them can be tampered with independently
+            // of the payload — see BackupCryptoHelper.buildAad().
+            byte[] aad  = BackupCryptoHelper.buildAad(msg.getId(), msg.getConversationId(), true);
+            // S07-H2: keyed HMAC replaces the legacy unkeyed SHA-256 checksum.
+            String hmac = BackupCryptoHelper.computeHmac(key, json);
+            String enc  = BackupCryptoHelper.encryptCompressed(key, json, aad);
 
             FirebaseFirestore db = FirebaseFirestore.getInstance();
 
@@ -108,7 +119,7 @@ public final class BackupManager {
             doc.put("enc",            enc);
             doc.put("ts",             msg.getTimestamp());
             doc.put("conversationId", msg.getConversationId());
-            doc.put("checksum",       checksum);
+            doc.put("hmac",           hmac);
             doc.put("compressed",     true);
 
             final boolean[] succeeded = {false};
@@ -210,24 +221,42 @@ public final class BackupManager {
                         Boolean deleted = docSnap.getBoolean("isDeleted");
                         if (Boolean.TRUE.equals(deleted)) continue;
 
-                        String  encBlob    = docSnap.getString("enc");
-                        String  checksum   = docSnap.getString("checksum");
-                        Boolean compressed = docSnap.getBoolean("compressed");
+                        String  encBlob        = docSnap.getString("enc");
+                        String  checksum       = docSnap.getString("checksum"); // legacy (S07-H2)
+                        String  hmac           = docSnap.getString("hmac");     // current (S07-H2)
+                        String  conversationId = docSnap.getString("conversationId");
+                        Boolean compressed     = docSnap.getBoolean("compressed");
                         if (encBlob == null) continue;
+
+                        // S07-M3: reconstruct the exact AAD used at write time. A doc
+                        // written before this fix has no bound AAD, so only apply one
+                        // when a "hmac" field is present (the marker for "written by
+                        // the current, AAD-aware path") — an old doc keeps decrypting
+                        // exactly as it always did.
+                        boolean isCurrentFormat = hmac != null && !hmac.isEmpty();
+                        byte[] aad = isCurrentFormat
+                                ? BackupCryptoHelper.buildAad(docSnap.getId(), conversationId,
+                                        Boolean.TRUE.equals(compressed))
+                                : null;
 
                         // Decrypt — choose path based on compression flag
                         String json;
                         if (Boolean.TRUE.equals(compressed)) {
-                            json = BackupCryptoHelper.decryptCompressed(backupKey, encBlob);
+                            json = BackupCryptoHelper.decryptCompressed(backupKey, encBlob, aad);
                         } else {
                             json = BackupCryptoHelper.decrypt(backupKey, encBlob);
                         }
 
-                        // Integrity check — skip corrupted docs rather than restoring bad data
-                        if (!BackupCryptoHelper.verifyChecksum(json, checksum)) {
+                        // Integrity check — skip corrupted/tampered docs rather than
+                        // restoring bad data. Prefer the keyed HMAC; only a doc that
+                        // predates this fix falls back to the legacy unkeyed checksum.
+                        boolean integrityOk = isCurrentFormat
+                                ? BackupCryptoHelper.verifyHmac(backupKey, json, hmac)
+                                : BackupCryptoHelper.verifyChecksum(json, checksum);
+                        if (!integrityOk) {
                             checksumFailures++;
-                            Log.e(TAG, "restoreAllSync: CHECKSUM MISMATCH for doc "
-                                    + docSnap.getId() + " — skipping (corruption detected)");
+                            Log.e(TAG, "restoreAllSync: INTEGRITY CHECK FAILED for doc "
+                                    + docSnap.getId() + " — skipping (corruption or tampering detected)");
                             continue;
                         }
 
@@ -344,14 +373,17 @@ public final class BackupManager {
                 for (Message msg : all) {
                     if (msg.getId() == null) { failed++; continue; }
                     try {
-                        String json     = toJson(msg);
-                        String checksum = BackupCryptoHelper.computeChecksum(json);
-                        String enc      = BackupCryptoHelper.encryptCompressed(key, json);
+                        String json = toJson(msg);
+                        // S07-M3/S07-H2: bind id+conversationId+compressed into the GCM
+                        // tag and replace the unkeyed checksum with a keyed HMAC.
+                        byte[] aad  = BackupCryptoHelper.buildAad(msg.getId(), msg.getConversationId(), true);
+                        String hmac = BackupCryptoHelper.computeHmac(key, json);
+                        String enc  = BackupCryptoHelper.encryptCompressed(key, json, aad);
                         Map<String, Object> doc = new HashMap<>();
                         doc.put("enc",            enc);
                         doc.put("ts",             msg.getTimestamp());
                         doc.put("conversationId", msg.getConversationId());
-                        doc.put("checksum",       checksum);
+                        doc.put("hmac",           hmac);
                         doc.put("compressed",     true);
                         encDocIds.add(msg.getId());
                         encDocs.add(doc);
@@ -508,14 +540,17 @@ public final class BackupManager {
                 for (Message msg : newMsgs) {
                     if (msg.getId() == null) { failed++; continue; }
                     try {
-                        String json     = toJson(msg);
-                        String checksum = BackupCryptoHelper.computeChecksum(json);
-                        String enc      = BackupCryptoHelper.encryptCompressed(key, json);
+                        String json = toJson(msg);
+                        // S07-M3/S07-H2: bind id+conversationId+compressed into the GCM
+                        // tag and replace the unkeyed checksum with a keyed HMAC.
+                        byte[] aad  = BackupCryptoHelper.buildAad(msg.getId(), msg.getConversationId(), true);
+                        String hmac = BackupCryptoHelper.computeHmac(key, json);
+                        String enc  = BackupCryptoHelper.encryptCompressed(key, json, aad);
                         Map<String, Object> doc = new HashMap<>();
                         doc.put("enc",            enc);
                         doc.put("ts",             msg.getTimestamp());
                         doc.put("conversationId", msg.getConversationId());
-                        doc.put("checksum",       checksum);
+                        doc.put("hmac",           hmac);
                         doc.put("compressed",     true);
                         encDocIds.add(msg.getId());
                         encDocs.add(doc);
@@ -665,15 +700,18 @@ public final class BackupManager {
                 }
 
                 try {
-                    String json     = toJson(msg);
-                    String checksum = BackupCryptoHelper.computeChecksum(json);
-                    String enc      = BackupCryptoHelper.encryptCompressed(key, json);
+                    String json = toJson(msg);
+                    // S07-M3/S07-H2: bind id+conversationId+compressed into the GCM
+                    // tag and replace the unkeyed checksum with a keyed HMAC.
+                    byte[] aad  = BackupCryptoHelper.buildAad(msg.getId(), msg.getConversationId(), true);
+                    String hmac = BackupCryptoHelper.computeHmac(key, json);
+                    String enc  = BackupCryptoHelper.encryptCompressed(key, json, aad);
 
                     Map<String, Object> doc = new HashMap<>();
                     doc.put("enc",            enc);
                     doc.put("ts",             msg.getTimestamp());
                     doc.put("conversationId", msg.getConversationId());
-                    doc.put("checksum",       checksum);
+                    doc.put("hmac",           hmac);
                     doc.put("compressed",     true);
 
                     final boolean[] success = {false};

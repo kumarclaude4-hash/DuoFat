@@ -15,6 +15,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -35,14 +36,31 @@ import javax.crypto.spec.SecretKeySpec;
  *   plaintext → GZIP → AES-256-GCM → same wire format
  *   Indicated by a "compressed:true" field stored alongside in Firestore.
  *
- * Integrity: SHA-256 checksum of plaintext stored as a separate Firestore field.
- *   Verified on restore; mismatch is logged and the document is skipped.
+ * <p><b>Associated data (S07-M3):</b> callers that also store metadata fields
+ * (doc id, conversationId, the "compressed" flag itself, …) outside the
+ * ciphertext should pass that metadata as {@code aad} to the {@code
+ * *(..., byte[] aad)} overloads below. AES-GCM authenticates AAD without
+ * encrypting it, so those fields become tamper-evident — flipping "compressed"
+ * or splicing one document's ciphertext under a different id/conversationId
+ * now fails the GCM tag check instead of silently succeeding. AAD-less callers
+ * (and old stored blobs) keep working: passing {@code null}/empty AAD is
+ * equivalent to the pre-existing behaviour.
+ *
+ * <p><b>Integrity (S07-H2):</b> new writes use {@link #computeHmac} — HMAC-SHA256
+ * keyed with a value derived from the backup key via HKDF, distinct from the
+ * AES-GCM key itself. {@link #computeChecksum}/{@link #verifyChecksum} (plain,
+ * unkeyed SHA-256) are kept ONLY to verify documents written before this fix;
+ * an unkeyed digest of plaintext is an offline oracle — anyone holding the
+ * digest and a guessed plaintext can confirm the guess with no key at all —
+ * so no new caller should compute one. New callers must use
+ * {@link #computeHmac}/{@link #verifyHmac} instead.
  */
 public final class BackupCryptoHelper {
 
     private static final String TAG          = "BackupCryptoHelper";
     public  static final String PREF_KEY     = "backup_key_b64";
     private static final String HKDF_INFO    = "DUOSHIELD_BACKUP_V1";
+    private static final String HMAC_INFO    = "DUOSHIELD_BACKUP_HMAC_V1";
     private static final int    GCM_TAG_BITS = 128;
     private static final int    IV_LEN       = 12;
 
@@ -94,29 +112,35 @@ public final class BackupCryptoHelper {
         }
     }
 
-    // ── Integrity checksum ────────────────────────────────────────────────────
+    // ── Integrity checksum (LEGACY — unkeyed, do not use for new writes) ──────
 
     /**
-     * Computes a SHA-256 checksum of the plaintext for integrity verification.
-     * Stored as a separate Firestore field ("checksum") alongside the encrypted blob.
+     * @deprecated (S07-H2) Plain SHA-256 of plaintext with no key is an offline
+     * dictionary-recovery oracle: anyone who has this digest and a guessed
+     * plaintext can confirm the guess without ever touching the backup key.
+     * Kept ONLY so {@link #verifyChecksum} can still validate documents that
+     * were written before this fix shipped. New writes must call
+     * {@link #computeHmac} instead — never call this for a new document.
      *
      * @return lowercase hex string of the SHA-256 digest
      */
+    @Deprecated
     public static String computeChecksum(String plaintext) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         byte[] hash = md.digest(plaintext.getBytes(StandardCharsets.UTF_8));
-        StringBuilder sb = new StringBuilder(hash.length * 2);
-        for (byte b : hash) sb.append(String.format("%02x", b));
-        return sb.toString();
+        return toHex(hash);
     }
 
     /**
-     * Verifies that the plaintext matches the expected checksum.
+     * @deprecated (S07-H2) Verifies the legacy unkeyed checksum format. Only
+     * called on restore for old documents that have a "checksum" field but no
+     * "hmac" field — see {@link #verifyHmac} for the current, keyed check.
      *
      * @param plaintext        the decrypted plaintext string
      * @param expectedChecksum hex SHA-256 digest previously stored in Firestore
      * @return true if checksums match; false on mismatch or computation failure
      */
+    @Deprecated
     public static boolean verifyChecksum(String plaintext, String expectedChecksum) {
         if (expectedChecksum == null || expectedChecksum.isEmpty()) return true; // legacy doc
         try {
@@ -125,6 +149,86 @@ public final class BackupCryptoHelper {
             Log.e(TAG, "verifyChecksum: failed", e);
             return false;
         }
+    }
+
+    // ── Integrity HMAC (S07-H2 fix — keyed, use for all new writes) ───────────
+
+    /**
+     * Derives the HMAC integrity key from the backup key via HKDF-SHA256 with
+     * a distinct {@code info} string, so the HMAC key is never the same bytes
+     * as the AES-GCM key even though both trace back to the same seed phrase.
+     */
+    private static byte[] deriveHmacKey(byte[] backupKey) throws Exception {
+        return SeedPhraseHelper.hkdfSha256(
+                backupKey, HMAC_INFO.getBytes(StandardCharsets.UTF_8), 32);
+    }
+
+    /**
+     * Computes a keyed HMAC-SHA256 of the plaintext, replacing the legacy
+     * unkeyed SHA-256 checksum (S07-H2). Without the backup key, an attacker
+     * cannot use the stored tag to confirm a guessed plaintext offline — the
+     * exact property the plain digest lacked.
+     *
+     * @return lowercase hex string of the HMAC-SHA256 tag
+     */
+    public static String computeHmac(byte[] backupKey, String plaintext) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(deriveHmacKey(backupKey), "HmacSHA256"));
+        byte[] tag = mac.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+        return toHex(tag);
+    }
+
+    /**
+     * Verifies a plaintext against a stored HMAC tag using a constant-time
+     * comparison (avoids leaking a timing oracle on the tag bytes).
+     *
+     * @param expectedHmacHex hex HMAC-SHA256 tag previously stored in Firestore,
+     *                        or null/empty for a legacy doc with no "hmac" field
+     *                        (caller should fall back to {@link #verifyChecksum}).
+     */
+    public static boolean verifyHmac(byte[] backupKey, String plaintext, String expectedHmacHex) {
+        if (expectedHmacHex == null || expectedHmacHex.isEmpty()) return false; // caller must use legacy path
+        try {
+            byte[] expected = hexToBytes(expectedHmacHex);
+            byte[] actual   = hexToBytes(computeHmac(backupKey, plaintext));
+            return MessageDigest.isEqual(expected, actual);
+        } catch (Exception e) {
+            Log.e(TAG, "verifyHmac: failed", e);
+            return false;
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        int len = hex.length();
+        byte[] out = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            out[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return out;
+    }
+
+    // ── Associated data (S07-M3) ───────────────────────────────────────────────
+
+    /**
+     * Builds canonical AAD bytes binding a backup document's own id/context to
+     * its ciphertext, so those fields (which otherwise live outside the AEAD
+     * boundary as plain Firestore fields) are authenticated by the GCM tag.
+     * Tampering with any of them — including flipping "compressed" — now fails
+     * decryption instead of silently succeeding or misapplying the wrong
+     * decompression path.
+     */
+    public static byte[] buildAad(String docId, String conversationId, boolean compressed) {
+        String s = (docId == null ? "" : docId) + '\u0000'
+                + (conversationId == null ? "" : conversationId) + '\u0000'
+                + compressed;
+        return s.getBytes(StandardCharsets.UTF_8);
     }
 
     // ── AES-256-GCM encrypt / decrypt (legacy — uncompressed) ─────────────────
@@ -179,6 +283,18 @@ public final class BackupCryptoHelper {
      * Expected size reduction: 40–60% for typical JSON message blobs.
      */
     public static String encryptCompressed(byte[] key, String plaintext) throws Exception {
+        return encryptCompressed(key, plaintext, null);
+    }
+
+    /**
+     * Same as {@link #encryptCompressed(byte[], String)} but also authenticates
+     * {@code aad} (see {@link #buildAad}) via AES-GCM's associated-data input
+     * (S07-M3). {@code aad} is never encrypted or stored in the wire format —
+     * the caller must independently store/know it and pass the identical bytes
+     * back into {@link #decryptCompressed(byte[], String, byte[])}, or the GCM
+     * tag check fails.
+     */
+    public static String encryptCompressed(byte[] key, String plaintext, byte[] aad) throws Exception {
         // Step 1: GZIP compress
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(bos)) {
@@ -193,6 +309,7 @@ public final class BackupCryptoHelper {
         cipher.init(Cipher.ENCRYPT_MODE,
                 new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(GCM_TAG_BITS, iv));
+        if (aad != null && aad.length > 0) cipher.updateAAD(aad);
         byte[] enc = cipher.doFinal(compressed);
 
         return Base64.encodeToString(iv, Base64.NO_WRAP)
@@ -200,9 +317,22 @@ public final class BackupCryptoHelper {
     }
 
     /**
-     * Decrypts a blob produced by {@link #encryptCompressed} and GZIP-decompresses it.
+     * Decrypts a blob produced by {@link #encryptCompressed(byte[], String)} and
+     * GZIP-decompresses it. No AAD is checked — only for blobs written without one.
      */
     public static String decryptCompressed(byte[] key, String blob) throws Exception {
+        return decryptCompressed(key, blob, null);
+    }
+
+    /**
+     * Same as {@link #decryptCompressed(byte[], String)} but verifies {@code aad}
+     * against the GCM tag (S07-M3). Must be called with the exact same AAD bytes
+     * passed to {@link #encryptCompressed(byte[], String, byte[])} — a mismatch
+     * (including a caller passing AAD for a blob that was written without one,
+     * or vice versa) throws an AEAD authentication exception rather than
+     * returning tampered/garbage plaintext.
+     */
+    public static String decryptCompressed(byte[] key, String blob, byte[] aad) throws Exception {
         String[] parts = blob.split(":", 2);
         if (parts.length != 2) throw new IllegalArgumentException("Invalid backup blob format");
 
@@ -214,6 +344,7 @@ public final class BackupCryptoHelper {
         cipher.init(Cipher.DECRYPT_MODE,
                 new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(GCM_TAG_BITS, iv));
+        if (aad != null && aad.length > 0) cipher.updateAAD(aad);
         byte[] compressed = cipher.doFinal(enc);
 
         // Step 2: GZIP decompress
