@@ -561,7 +561,11 @@ public class GroupChatActivity extends BaseActivity {
         executor.execute(() -> {
             String cipher;
             try {
-                cipher = GroupCipherHelper.encrypt(text, groupKey);
+                // S07-H3: bind (groupId, sender, msgId) into the GCM tag so this
+                // ciphertext only decrypts under its own context — not just under
+                // whatever a Firestore rule currently allows.
+                byte[] aad = GroupCipherHelper.buildAad(groupId, myUid, msgId);
+                cipher = GroupCipherHelper.encrypt(text, groupKey, aad);
             } catch (Exception ex) {
                 Log.e(TAG, "Group encrypt failed", ex);
                 runOnUiThread(() -> {
