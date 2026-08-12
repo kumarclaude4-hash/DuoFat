@@ -146,6 +146,102 @@ public class SeedPhraseHelperTest {
                 java.util.Arrays.equals(s1, s2));
     }
 
+    // ── mnemonicToSeed canonicalisation (S07-L3 regression coverage) ────────
+    //
+    // Before this fix, mnemonicToSeed() only trimmed the two ends and
+    // NFKD-normalised — it neither lower-cased nor collapsed internal
+    // whitespace itself. validateMnemonic() DOES tolerate both (it lower-cases
+    // per word and splits on \s+), so a mnemonic that validated successfully
+    // could silently derive a completely different seed than its canonical
+    // form, with no error anywhere. These tests prove mnemonicToSeed() is now
+    // self-sufficient: every reasonable rendering of "the same mnemonic" must
+    // hash to the identical seed, matching what validateMnemonic() already
+    // accepts as equivalent.
+
+    private static final String CANONICAL_VECTOR =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    @Test
+    public void mnemonicToSeed_isCaseInsensitive() throws Exception {
+        byte[] canonicalSeed = SeedPhraseHelper.mnemonicToSeed(CANONICAL_VECTOR);
+        byte[] upperSeed     = SeedPhraseHelper.mnemonicToSeed(CANONICAL_VECTOR.toUpperCase());
+        String mixed = "Abandon abandon ABANDON abandon abandon abandon abandon abandon abandon abandon abandon AbOuT";
+        byte[] mixedSeed = SeedPhraseHelper.mnemonicToSeed(mixed);
+
+        assertArrayEquals(
+                "uppercase input must derive the SAME seed as its canonical lowercase form"
+                        + " — validateMnemonic() already treats these as the same mnemonic",
+                canonicalSeed, upperSeed);
+        assertArrayEquals(
+                "mixed-case input must derive the SAME seed as its canonical lowercase form",
+                canonicalSeed, mixedSeed);
+    }
+
+    @Test
+    public void mnemonicToSeed_collapsesInternalWhitespace() throws Exception {
+        byte[] canonicalSeed = SeedPhraseHelper.mnemonicToSeed(CANONICAL_VECTOR);
+        // Double space between two words, and a tab between two others — both
+        // still pass validateMnemonic() (split("\\s+")) and must derive the
+        // identical seed as the single-space canonical form.
+        String doubleSpaced = "abandon  abandon abandon abandon abandon abandon abandon abandon"
+                + " abandon\tabandon abandon about";
+        byte[] doubleSpacedSeed = SeedPhraseHelper.mnemonicToSeed(doubleSpaced);
+
+        assertTrue("sanity: the whitespace-varied vector must still validate",
+                SeedPhraseHelper.validateMnemonic(doubleSpaced));
+        assertArrayEquals(
+                "extra/mixed internal whitespace must derive the SAME seed as the"
+                        + " single-space canonical form",
+                canonicalSeed, doubleSpacedSeed);
+    }
+
+    @Test
+    public void mnemonicToSeed_trimsSurroundingWhitespace() throws Exception {
+        byte[] canonicalSeed = SeedPhraseHelper.mnemonicToSeed(CANONICAL_VECTOR);
+        byte[] paddedSeed    = SeedPhraseHelper.mnemonicToSeed("  " + CANONICAL_VECTOR + "\n");
+        assertArrayEquals("leading/trailing whitespace must not change the derived seed",
+                canonicalSeed, paddedSeed);
+    }
+
+    // ── derivationCache lifecycle (S07-L2 regression coverage) ───────────────
+    //
+    // deriveIdentityKeyPair() caches the derived IdentityKeyPair (private key
+    // material) in a static field. clearDerivationCache() is called from every
+    // WipeHelper.eraseLocalData() path (voluntary wipe, unpair, duress) so that
+    // key material does not stay resident in the JVM heap after a wipe.
+    // deriveIdentityKeyPair() itself needs libsignal's native Curve25519 code
+    // and cannot run in a plain JVM unit test (see class javadoc), so this
+    // proves the cache-clearing contract at the level this test file CAN
+    // exercise: the backing field is actually nulled out, via reflection —
+    // not just that the public method returns without throwing.
+
+    @Test
+    public void clearDerivationCache_nullsOutTheBackingField() throws Exception {
+        java.lang.reflect.Field cacheField =
+                SeedPhraseHelper.class.getDeclaredField("derivationCache");
+        cacheField.setAccessible(true);
+        // Raw type deliberately, not AtomicReference<?> — the wildcard capture would
+        // reject the plain Object set() below at compile time, and this reflection
+        // handle is exactly the kind of unchecked access that's expected here.
+        @SuppressWarnings("unchecked")
+        java.util.concurrent.atomic.AtomicReference cache =
+                (java.util.concurrent.atomic.AtomicReference) cacheField.get(null);
+
+        // Seed a non-null value directly (bypassing deriveIdentityKeyPair(), which
+        // needs libsignal's native code unavailable in this plain-JVM test) so we
+        // can prove clearDerivationCache() actually clears a populated cache, not
+        // just a cache that happened to already be empty.
+        cache.set(new Object());
+        assertNotNull("test setup sanity: cache must be populated before clearing",
+                cache.get());
+
+        SeedPhraseHelper.clearDerivationCache();
+
+        assertNull("clearDerivationCache() must null out the cached derivation so no "
+                        + "identity private key material stays reachable after a wipe",
+                cache.get());
+    }
+
     // ── deriveUserId ─────────────────────────────────────────────────────────
 
     @Test
