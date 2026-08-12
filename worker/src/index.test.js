@@ -811,3 +811,131 @@ test('S03-H3 follow-up: a shrinking same-holder overwrite frees the quota headro
   }), env, ctx);
   assert.equal(put3.status, 200, 'the shrinking overwrite must have freed the 800 bytes of headroom it gave back');
 });
+
+// ─── S10-N3: a client DELETE racing the nightly migration must not orphan ──
+// the object in the B2 cold tier. The migration's steps are
+// get R2 → PUT B2 → HEAD R2 → delete R2. If a client DELETE lands after the
+// get() but before the PUT, it removes R2 and its own best-effort B2 delete
+// 404s (nothing there yet); the migration's PUT then recreates the object in
+// B2. The post-PUT HEAD sees R2 empty and, before this fix, did nothing —
+// leaving an unreferenced B2 copy that GET would keep serving forever. The
+// fix makes that branch fire a compensating B2 delete of the copy it wrote.
+
+// A migration-capable R2 bucket fake: supports list()/get()/head()/delete().
+// `onGet` lets a test simulate a concurrent client DELETE landing during the
+// migration's B2 PUT by mutating the bucket at a controlled point.
+function makeMigrationBucket(initial = []) {
+  const objects = new Map();
+  for (const o of initial) {
+    objects.set(o.key, {
+      size: o.size,
+      customMetadata: o.customMetadata ?? {},
+      httpMetadata: o.httpMetadata ?? {},
+      httpEtag: o.httpEtag ?? `"etag-${o.key}"`,
+      uploaded: o.uploaded ?? new Date().toISOString(),
+    });
+  }
+  return {
+    objects,
+    async list() {
+      return {
+        objects: [...objects.entries()].map(([key, o]) => ({
+          key,
+          size: o.size,
+          customMetadata: o.customMetadata,
+          httpMetadata: o.httpMetadata,
+          uploaded: o.uploaded,
+        })),
+        truncated: false,
+        cursor: null,
+      };
+    },
+    async get(key) {
+      const o = objects.get(key);
+      if (!o) return null;
+      return {
+        ...o,
+        httpEtag: o.httpEtag,
+        arrayBuffer: async () => new ArrayBuffer(o.size),
+      };
+    },
+    async head(key) {
+      const o = objects.get(key);
+      if (!o) return null;
+      return { size: o.size, customMetadata: o.customMetadata, httpMetadata: o.httpMetadata, httpEtag: o.httpEtag };
+    },
+    async delete(key) { objects.delete(key); },
+  };
+}
+
+const FORTY_DAYS_AGO = (Date.now() - 40 * 86_400_000).toString();
+
+test('S10-N3: a client DELETE that removes R2 during the migration PUT fires a compensating B2 delete so the migrated copy is not orphaned in cold tier', async () => {
+  const key = `media/${CHAT_ID}/racing.jpg`;
+  const bucket = makeMigrationBucket([
+    { key, size: 100, customMetadata: { uploadedAt: FORTY_DAYS_AGO, uploader: 'user-alice' } },
+  ]);
+  const env = makeEnv({ HOT_BUCKET: bucket });
+
+  const b2Calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const req = input instanceof Request ? input : new Request(input, init);
+    const method = req.method;
+    b2Calls.push({ method, url: req.url });
+    if (method === 'PUT') {
+      // Simulate the client DELETE landing in the window between the
+      // migration's get() and this PUT: R2 loses the object right now.
+      await bucket.delete(key);
+      return new Response(null, { status: 200 });
+    }
+    if (method === 'DELETE') {
+      return new Response(null, { status: 204 });
+    }
+    // Step 3 ListObjectsV2 reconciliation — return an empty bucket listing.
+    return new Response('<ListBucketResult></ListBucketResult>', { status: 200 });
+  };
+
+  try {
+    await worker.scheduled({}, env, ctx);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const putForKey = b2Calls.some((c) => c.method === 'PUT' && c.url.includes('racing.jpg'));
+  const compensatingDelete = b2Calls.some((c) => c.method === 'DELETE' && c.url.includes('racing.jpg'));
+  assert.equal(putForKey, true, 'the migration must have PUT the object to B2 first');
+  assert.equal(
+    compensatingDelete,
+    true,
+    'once the post-PUT HEAD finds R2 empty, the migration must delete the B2 copy it just wrote — otherwise the user-deleted object survives in cold tier and GET keeps serving it'
+  );
+});
+
+test('S10-N3: a normal migration (no racing delete) tiers the object to B2 and does NOT fire a compensating B2 delete', async () => {
+  const key = `media/${CHAT_ID}/normal.jpg`;
+  const bucket = makeMigrationBucket([
+    { key, size: 100, customMetadata: { uploadedAt: FORTY_DAYS_AGO, uploader: 'user-alice' } },
+  ]);
+  const env = makeEnv({ HOT_BUCKET: bucket });
+
+  const b2Calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const req = input instanceof Request ? input : new Request(input, init);
+    b2Calls.push({ method: req.method, url: req.url });
+    if (req.method === 'PUT') return new Response(null, { status: 200 });   // object stays in R2
+    if (req.method === 'DELETE') return new Response(null, { status: 204 });
+    return new Response('<ListBucketResult></ListBucketResult>', { status: 200 });
+  };
+
+  try {
+    await worker.scheduled({}, env, ctx);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  const compensatingDelete = b2Calls.some((c) => c.method === 'DELETE' && c.url.includes('normal.jpg'));
+  assert.equal(compensatingDelete, false, 'the compensating B2 delete must fire only on the concurrent-delete race, never on a healthy migration');
+  assert.equal(await bucket.head(key), null, 'a healthy migration must remove the object from R2 after tiering it to B2');
+});

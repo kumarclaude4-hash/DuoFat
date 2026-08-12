@@ -467,53 +467,13 @@ function mapYouTubeError(upstreamStatus) {
   return { status: 502, error: "Search failed. Try again." };
 }
 
-// ── Backblaze B2 (S3-compatible) SigV4 presign ────────────────────────────────
-// The signing key derivation and canonical-request construction, parameterised so
-// they are deterministic and testable (index.js supplies env credentials and the
-// current time). Returns null when credentials are absent.
-function b2HmacKey(appKey, dateStamp, region) {
-  const kDate    = crypto.createHmac("sha256", Buffer.from("AWS4" + appKey)).update(dateStamp).digest();
-  const kRegion  = crypto.createHmac("sha256", kDate).update(region).digest();
-  const kService = crypto.createHmac("sha256", kRegion).update("s3").digest();
-  return crypto.createHmac("sha256", kService).update("aws4_request").digest();
-}
-
-function buildB2PresignUrl({ keyId, appKey, bucket, region, method, objectKey, contentType, ttlSeconds, now }) {
-  if (!keyId || !appKey) return null;
-
-  const host = "s3." + region + ".backblazeb2.com";
-  const clock = now instanceof Date ? now : new Date();
-  const ds = clock.toISOString().slice(0, 10).replace(/-/g, "");
-  // yyyyMMddTHHmmssZ
-  const az = clock.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const cs = ds + "/" + region + "/s3/aws4_request";
-  const cred = keyId + "/" + cs;
-  const sh = (method === "PUT" && contentType) ? "content-type;host" : "host";
-
-  const qpRaw = [
-    ["X-Amz-Algorithm",     "AWS4-HMAC-SHA256"],
-    ["X-Amz-Credential",    cred],
-    ["X-Amz-Date",          az],
-    ["X-Amz-Expires",       String(ttlSeconds)],
-    ["X-Amz-SignedHeaders", sh],
-  ];
-  const canonQs = qpRaw.slice().sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v))
-    .join("&");
-
-  const ch = (method === "PUT" && contentType)
-    ? "content-type:" + contentType + "\nhost:" + host + "\n"
-    : "host:" + host + "\n";
-
-  const cr = [method, "/" + bucket + "/" + objectKey, canonQs, ch, sh, "UNSIGNED-PAYLOAD"].join("\n");
-  const sts = ["AWS4-HMAC-SHA256", az, cs,
-    crypto.createHash("sha256").update(cr).digest("hex")].join("\n");
-  const sk = b2HmacKey(appKey, ds, region);
-  const sig = crypto.createHmac("sha256", sk).update(sts).digest("hex");
-
-  return "https://" + host + "/" + bucket + "/" + objectKey
-    + "?" + canonQs + "&X-Amz-Signature=" + sig;
-}
+// ── Backblaze B2 SigV4 presign helpers removed (S03-L3 / S04-I2) ──────────────
+// `b2HmacKey` and `buildB2PresignUrl` used to live here. They were the signing
+// math behind the server's `b2PresignUrl` helper, which was itself dead code
+// (SEC-A01 replaced presigned-URL issuance with per-object capability tokens).
+// Removed along with that helper and the B2 credential env reads in
+// server/index.js so the unused signing path can no longer imply the server
+// needs `B2_KEY_ID` / `B2_APPLICATION_KEY`.
 
 module.exports = {
   notificationBody,
@@ -530,8 +490,6 @@ module.exports = {
   collectStaleKeys,
   pickClientIp,
   normalizeIpForRateLimit,
-  b2HmacKey,
-  buildB2PresignUrl,
   // YouTube search (Watch Together)
   SEARCH_QUERY_MIN_LEN,
   SEARCH_QUERY_MAX_LEN,
