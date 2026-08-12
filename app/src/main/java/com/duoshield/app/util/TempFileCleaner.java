@@ -16,12 +16,19 @@ import java.util.concurrent.TimeUnit;
 /**
  * WorkManager worker that deletes AES-decrypted temp files from getCacheDir().
  *
- * DuoShield writes decrypted voice (.3gp) and video (.mp4) bytes to the cache
- * directory just before playback.  These files must not persist — they contain
- * plaintext media.
+ * DuoShield writes decrypted media bytes and other short-lived scratch files to
+ * the cache directory during capture, upload, playback and thumbnailing. These
+ * files must not persist — most contain plaintext media.
  *
- * Deletion policy:
- *   • Prefixes matched: "voice_*.3gp"  and  "vid_*.mp4"
+ * Deletion policy (top level of getCacheDir() only):
+ *   • Plaintext media swept: "voice_*.3gp" / "voice_*.m4a", "vid_*.mp4"
+ *     (also covers "vid_view_*.mp4"), "share_*.jpg", "cam_*.jpg",
+ *     "grp_cam_*.jpg", "thumb_*.mp4"
+ *   • Scratch also swept:    "enc_*.tmp" (ciphertext upload scratch)
+ *   • Legacy exports swept:  "duoshield_export_*.pdf" / ".txt"
+ *   • Not handled here:      "b2dl_*.enc" lives inside the "chat_export_*"
+ *     working dir (a subdirectory), so it is already removed by the recursive
+ *     "chat_export_" directory sweep below rather than by a top-level rule.
  *   • Maximum age:      {@value MAX_AGE_MS} ms  (5 minutes)
  *   • Run schedule:     every {@value INTERVAL_MIN} minutes (WorkManager minimum)
  *
@@ -122,8 +129,24 @@ public class TempFileCleaner extends Worker {
     private static boolean isTempMediaFile(String name) {
         return (name.startsWith("voice_")           && name.endsWith(".3gp"))
             || (name.startsWith("voice_")           && name.endsWith(".m4a"))  // F25 fix: recorder uses .m4a
+            // "vid_" also covers MediaViewerActivity's "vid_view_*.mp4" scratch
+            // files (they share the vid_ prefix), so no separate rule is needed.
             || (name.startsWith("vid_")             && name.endsWith(".mp4"))
             || (name.startsWith("share_")           && name.endsWith(".jpg"))
+            // S08-H3: plaintext camera captures handed to the camera app via
+            // FileProvider — DuoShield never deletes these itself, so they
+            // persist in the cache until swept here. "cam_" is 1:1 chat,
+            // "grp_cam_" is the group-chat variant.
+            || (name.startsWith("cam_")             && name.endsWith(".jpg"))
+            || (name.startsWith("grp_cam_")         && name.endsWith(".jpg"))
+            // S08-H3: plaintext video frame-extraction scratch. Normally deleted
+            // in a finally block right after thumbnailing; matched here as a
+            // defense so a crash mid-extraction cannot leave plaintext behind.
+            || (name.startsWith("thumb_")           && name.endsWith(".mp4"))
+            // S08-H3: encrypt-to-disk upload scratch (ciphertext, not plaintext).
+            // Also normally deleted in a finally block; swept here to catch the
+            // crash-orphaned case.
+            || (name.startsWith("enc_")             && name.endsWith(".tmp"))
             // Legacy single-file export formats (superseded by ChatExportHelper's
             // ZIP archives) — kept so any stale files are still swept up.
             || (name.startsWith("duoshield_export_") && name.endsWith(".pdf"))
