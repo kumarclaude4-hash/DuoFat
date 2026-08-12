@@ -46,11 +46,19 @@ function bytesToB64url(bytes) {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function mintToken(op, key, holder, ttlMs = 60_000) {
+function randomJti() {
+  return bytesToB64url(crypto.getRandomValues(new Uint8Array(9)));
+}
+
+// S03-M3: wire format grew a `jti` segment — `v1.<op>.<expiresAt>.<holder>.<jti>.<sig>`.
+// A caller can pass an explicit `jti` to test replay behavior deterministically;
+// otherwise a fresh random one is minted, matching real server behavior where
+// every mint gets its own.
+async function mintToken(op, key, holder, ttlMs = 60_000, jti = randomJti()) {
   const expiresAt = Date.now() + ttlMs;
-  const payload    = `v1|${op}|${expiresAt}|${holder}|${key}`;
+  const payload    = `v1|${op}|${expiresAt}|${holder}|${jti}|${key}`;
   const sig         = await hmacSha256(MEDIA_TOKEN_SECRET, payload);
-  return `v1.${op}.${expiresAt}.${holder}.${bytesToB64url(sig)}`;
+  return `v1.${op}.${expiresAt}.${holder}.${jti}.${bytesToB64url(sig)}`;
 }
 
 // ─── Minimal fakes ─────────────────────────────────────────────────────────
@@ -543,4 +551,263 @@ test('S03-M2: a B2 (cold-tier) object with no carried-over uploader tag (pre-S3-
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// ─── S03-M1: served Content-Type is derived from the key, never trusted ───
+// The extension is already tightly allow-listed, but the declared
+// Content-Type header itself was fully attacker-controlled and replayed
+// verbatim on every GET, with no nosniff/Content-Disposition.
+
+test('S03-M1: an attacker-declared Content-Type at PUT time is ignored — GET serves the type derived from the key extension instead (hot tier)', async () => {
+  const env = makeEnv();
+  const holder = 'user-alice';
+  const key = `media/${CHAT_ID}/photo.jpg`;
+
+  const putToken = await mintToken('write', key, holder);
+  const put = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${putToken}`,
+      'Content-Length': '10',
+      // Attacker-chosen type that does not match the .jpg extension.
+      'Content-Type': 'text/html',
+    },
+    body: new Uint8Array(10),
+  }), env, ctx);
+  assert.equal(put.status, 200, await put.clone().text());
+
+  const getToken = await mintToken('read', key, holder);
+  const get = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${getToken}` },
+  }), env, ctx);
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get('Content-Type'), 'image/jpeg', 'must be derived from the .jpg extension, not the attacker-declared text/html');
+  assert.equal(get.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(get.headers.get('Content-Disposition'), 'attachment');
+});
+
+test('S03-M1: the cold (B2) tier also serves the key-derived Content-Type with nosniff/Content-Disposition, ignoring B2\'s own header', async () => {
+  const env = makeEnv();
+  const key = `media/${CHAT_ID}/voice.m4a`;
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const req = input instanceof Request ? input : new Request(input);
+    if (req.method === 'GET') {
+      return new Response(new Uint8Array(5), {
+        status: 200,
+        headers: { 'Content-Type': 'application/x-malicious', 'ETag': '"cold-etag"' },
+      });
+    }
+    return realFetch(input);
+  };
+
+  try {
+    const getToken = await mintToken('read', key, 'user-anyone');
+    const get = await worker.fetch(new Request(`https://worker.example/${key}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${getToken}` },
+    }), env, ctx);
+    assert.equal(get.status, 200);
+    assert.equal(get.headers.get('Content-Type'), 'audio/mp4', 'must be derived from the .m4a extension, not B2\'s stored/upstream header');
+    assert.equal(get.headers.get('X-Content-Type-Options'), 'nosniff');
+    assert.equal(get.headers.get('Content-Disposition'), 'attachment');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// ─── S03-M3: delete tokens are single-use and reject a legacy 5-part shape ─
+
+test('S03-M3: a delete token can only be used once — replaying it after a successful delete is rejected', async () => {
+  const env = makeEnv();
+  const holder = 'user-single-use';
+  const key = `media/${CHAT_ID}/onceonly.jpg`;
+
+  const putToken = await mintToken('write', key, holder);
+  const put = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${putToken}`, 'Content-Length': '10' },
+    body: new Uint8Array(10),
+  }), env, ctx);
+  assert.equal(put.status, 200, await put.clone().text());
+
+  const deleteToken = await mintToken('delete', key, holder);
+  const del1 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteToken}` },
+  }), env, ctx);
+  assert.equal(del1.status, 200, await del1.clone().text());
+
+  // Replay the exact same token — must be rejected, without ever touching
+  // R2/B2 again (the object is already gone; a non-replay-guarded path
+  // would fall through to the cold-tier branch and attempt a real network
+  // call, which this assertion also implicitly guards against hanging on).
+  const del2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteToken}` },
+  }), env, ctx);
+  assert.equal(del2.status, 403, await del2.clone().text());
+  const payload = await del2.json();
+  assert.match(payload.error, /already used/i);
+});
+
+test('S03-M3: two independently-minted delete tokens for different keys are each single-use independently', async () => {
+  const env = makeEnv();
+  const holder = 'user-independent';
+  const keyA = `media/${CHAT_ID}/a.jpg`;
+  const keyB = `media/${CHAT_ID}/b.jpg`;
+
+  for (const key of [keyA, keyB]) {
+    const putToken = await mintToken('write', key, holder);
+    await worker.fetch(new Request(`https://worker.example/${key}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${putToken}`, 'Content-Length': '10' },
+      body: new Uint8Array(10),
+    }), env, ctx);
+  }
+
+  const deleteTokenA = await mintToken('delete', keyA, holder);
+  const delA = await worker.fetch(new Request(`https://worker.example/${keyA}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteTokenA}` },
+  }), env, ctx);
+  assert.equal(delA.status, 200, await delA.clone().text());
+
+  // A separate, never-before-used token for a different key must be
+  // unaffected by keyA's token having just been consumed.
+  const deleteTokenB = await mintToken('delete', keyB, holder);
+  const delB = await worker.fetch(new Request(`https://worker.example/${keyB}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${deleteTokenB}` },
+  }), env, ctx);
+  assert.equal(delB.status, 200, await delB.clone().text());
+});
+
+test('S03-M3: a legacy 5-part token (pre-jti wire format) is rejected as malformed', async () => {
+  const env = makeEnv();
+  const key = `media/${CHAT_ID}/legacy.jpg`;
+  const holder = 'user-x';
+  const expiresAt = Date.now() + 60_000;
+  const payload = `v1|read|${expiresAt}|${holder}|${key}`; // old shape, no jti segment
+  const sig = await hmacSha256(MEDIA_TOKEN_SECRET, payload);
+  const legacyToken = `v1.read.${expiresAt}.${holder}.${bytesToB64url(sig)}`;
+
+  const res = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${legacyToken}` },
+  }), env, ctx);
+  assert.equal(res.status, 401);
+  const payloadJson = await res.json();
+  assert.match(payloadJson.error, /malformed/i);
+});
+
+// ─── S03-L2: a malformed percent-escape must 400, not throw ───────────────
+
+test('S03-L2: a malformed percent-escape in the request path is rejected with 400, not an uncaught exception', async () => {
+  const env = makeEnv();
+  const req = new Request('https://worker.example/media/%zzinvalid', { method: 'GET' });
+  const res = await worker.fetch(req, env, ctx);
+  assert.equal(res.status, 400);
+});
+
+test('S03-L2: a lone trailing "%" in the request path is rejected with 400, not an uncaught exception', async () => {
+  const env = makeEnv();
+  const req = new Request('https://worker.example/media/foo%', { method: 'GET' });
+  const res = await worker.fetch(req, env, ctx);
+  assert.equal(res.status, 400);
+});
+
+// ─── S03-H3 follow-up: same-holder overwrite must account for the DELTA ───
+// A same-holder PUT-over-an-existing-key is the one overwrite S03-M2 allows.
+// Before this fix, crediting the full new size on top of the old size (never
+// subtracted) double-counted every overwrite in both the global R2 counter
+// and the holder's per-user counter.
+
+test('S03-H3 follow-up: a same-size same-holder overwrite does not inflate the per-user quota counter', async () => {
+  const env = makeEnv({ MAX_USER_BYTES: '500' });
+  const holder = 'user-samesize';
+  const key = `media/${CHAT_ID}/same.jpg`;
+
+  const token1 = await mintToken('write', key, holder);
+  const put1 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token1}`, 'Content-Length': '500' },
+    body: new Uint8Array(500),
+  }), env, ctx);
+  assert.equal(put1.status, 200, await put1.clone().text());
+
+  // Overwrite the SAME key with another 500-byte body. If the old 500 bytes
+  // were never subtracted, the projected total would be 500 (already
+  // counted) + 500 (new) = 1000 > 500, and this would be wrongly rejected.
+  const token2 = await mintToken('write', key, holder);
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token2}`, 'Content-Length': '500' },
+    body: new Uint8Array(500),
+  }), env, ctx);
+  assert.equal(put2.status, 200, await put2.clone().text());
+});
+
+test('S03-H3 follow-up: a growing same-holder overwrite is charged only the delta, not the full new size on top of the old', async () => {
+  const env = makeEnv({ MAX_USER_BYTES: '1000' });
+  const holder = 'user-growing';
+  const key = `media/${CHAT_ID}/grow.jpg`;
+
+  const token1 = await mintToken('write', key, holder);
+  const put1 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token1}`, 'Content-Length': '400' },
+    body: new Uint8Array(400),
+  }), env, ctx);
+  assert.equal(put1.status, 200, await put1.clone().text());
+
+  // Growing 400 -> 900 is a delta of +500, so the true projected total is
+  // 400 (already counted) - 400 (old, subtracted) + 900 (new) = 900 <= 1000.
+  // The pre-fix arithmetic (userBytes + declaredBytes, no subtraction) would
+  // have computed 400 + 900 = 1300 > 1000 and wrongly rejected this.
+  const token2 = await mintToken('write', key, holder);
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token2}`, 'Content-Length': '900' },
+    body: new Uint8Array(900),
+  }), env, ctx);
+  assert.equal(put2.status, 200, await put2.clone().text());
+});
+
+test('S03-H3 follow-up: a shrinking same-holder overwrite frees the quota headroom it should', async () => {
+  const env = makeEnv({ MAX_USER_BYTES: '1000' });
+  const holder = 'user-shrinking';
+  const key = `media/${CHAT_ID}/shrink.jpg`;
+
+  const token1 = await mintToken('write', key, holder);
+  const put1 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token1}`, 'Content-Length': '900' },
+    body: new Uint8Array(900),
+  }), env, ctx);
+  assert.equal(put1.status, 200, await put1.clone().text());
+
+  // Shrink 900 -> 100 (delta -800). If the old 900 is never subtracted, the
+  // per-user counter stays stuck at 900 + 900 = 1800 forever, and the
+  // subsequent 900-byte upload to a NEW key below would be wrongly rejected.
+  const token2 = await mintToken('write', key, holder);
+  const put2 = await worker.fetch(new Request(`https://worker.example/${key}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token2}`, 'Content-Length': '100' },
+    body: new Uint8Array(100),
+  }), env, ctx);
+  assert.equal(put2.status, 200, await put2.clone().text());
+
+  // Now 100/1000 used. A fresh 900-byte upload to a different key must fit:
+  // 100 + 900 = 1000 <= 1000.
+  const key2 = `media/${CHAT_ID}/shrink-followup.jpg`;
+  const token3 = await mintToken('write', key2, holder);
+  const put3 = await worker.fetch(new Request(`https://worker.example/${key2}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token3}`, 'Content-Length': '900' },
+    body: new Uint8Array(900),
+  }), env, ctx);
+  assert.equal(put3.status, 200, 'the shrinking overwrite must have freed the 800 bytes of headroom it gave back');
 });

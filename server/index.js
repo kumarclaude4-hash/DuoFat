@@ -625,13 +625,23 @@ function b64url(buf) {
  * knows it from the request path and re-derives the signature over it, so a
  * token cannot be replayed against a different object.
  *
- * Wire format: v1.<op>.<expiresAt>.<uidTag>.<sig>
+ * Wire format: v1.<op>.<expiresAt>.<uidTag>.<jti>.<sig>
+ *
+ * S03-M3: `jti` is a random per-mint identifier, added alongside the
+ * pre-existing fields (not replacing any of them). It lets the Worker mark a
+ * `delete` token single-use in KV once consumed — a capability token is
+ * otherwise a stateless bearer credential replayable for its entire TTL by
+ * anything that observed the Authorization header, which is tolerable for
+ * `read`/`write` but not for `delete`, the one verb with no undo. This
+ * server and the Worker must stay in lockstep on the wire format — the
+ * Worker rejects any token that isn't exactly 6 dot-separated segments.
  */
 function signMediaToken({ op, key, uid, expiresAt }) {
   const holder  = uidTag(uid); // pseudonymous — lets the Worker rate-limit per user
-  const payload = `v1|${op}|${expiresAt}|${holder}|${key}`;
+  const jti     = crypto.randomBytes(9).toString("base64url");
+  const payload = `v1|${op}|${expiresAt}|${holder}|${jti}|${key}`;
   const sig     = b64url(crypto.createHmac("sha256", MEDIA_TOKEN_SECRET).update(payload).digest());
-  return `v1.${op}.${expiresAt}.${holder}.${sig}`;
+  return `v1.${op}.${expiresAt}.${holder}.${jti}.${sig}`;
 }
 
 /**
@@ -4093,7 +4103,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/duress/enroll ─────────────────────────────────────��───
+  // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
   //
   // Body: { uid }. Auth: x-admin-token header.
   // Creates or updates duressEligibility/{uid} with eligible:true so the app
