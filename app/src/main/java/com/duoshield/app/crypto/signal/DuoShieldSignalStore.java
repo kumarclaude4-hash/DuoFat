@@ -7,6 +7,7 @@ import android.util.Log;
 
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.models.SignalSessionRecord;
+import com.duoshield.app.util.LogRedact;
 import com.duoshield.app.util.SecurePrefs;
 
 import org.signal.libsignal.protocol.IdentityKey;
@@ -27,6 +28,8 @@ import org.signal.libsignal.protocol.state.SignedPreKeyRecord;
 import org.signal.libsignal.protocol.state.SignedPreKeyStore;
 
 import java.io.IOException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -53,8 +56,25 @@ public final class DuoShieldSignalStore
 
     private static final String TAG = "DuoShieldSignalStore";
 
-    // SecurePrefs key prefixes for trusted peer identities
-    private static final String KEY_TRUSTED_IDENTITY_PREFIX = "signal_trusted_id_";
+    // SecurePrefs key prefixes for trusted peer identities.
+    //
+    // S07-M2 fix: trust was previously anchored ONLY on this legacy, address-scoped
+    // key (KEY_TRUSTED_IDENTITY_PREFIX + address, where address embeds Firebase's
+    // mutable uid). If a uid were ever reassigned, or a user re-provisioned under
+    // the same uid, stale trust recorded for "this uid" could silently apply to
+    // whatever identity key next shows up at that uid — the trust record itself
+    // carried no binding to the actual cryptographic identity it was meant to
+    // protect. The two prefixes below anchor trust on the identity key's own
+    // SHA-256 fingerprint (immutable — a new key always gets a new fingerprint,
+    // and the same physical key always maps back to the same fingerprint even if
+    // the uid pointing at it changes):
+    //   - KEY_FP_POINTER_PREFIX + address  → fingerprint hex (a cache/index only;
+    //     tells us which fingerprint slot currently answers for this address)
+    //   - KEY_TRUST_BY_FP_PREFIX + fingerprint → base64 serialized identity key
+    //     (the actual trust record; keyed on the immutable identity, not the uid)
+    private static final String KEY_TRUSTED_IDENTITY_PREFIX = "signal_trusted_id_"; // legacy — read-only, for one-time migration
+    private static final String KEY_FP_POINTER_PREFIX        = "signal_identity_fp_ptr_";
+    private static final String KEY_TRUST_BY_FP_PREFIX        = "signal_trusted_key_fp_";
 
     private final Context ctx;
 
@@ -110,32 +130,97 @@ public final class DuoShieldSignalStore
      * encounter. A subsequent different identity is flagged but still stored — the
      * key-fingerprint screen (already in Settings) gives users out-of-band verification.
      */
+    /**
+     * S07-M2: SHA-256 hex fingerprint of a serialized identity key. This is the
+     * immutable anchor trust is now keyed on — unlike a Firebase uid, it cannot
+     * be reassigned to a different physical identity out from under a stored
+     * trust record.
+     */
+    private static String fingerprintOf(byte[] serializedKey) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(serializedKey);
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is guaranteed present on every Android API level DuoShield
+            // targets; this branch is unreachable in practice.
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    /**
+     * S07-M2: reads the current trust record for {@code address}, transparently
+     * migrating a legacy uid-keyed record (written before this fix) into the new
+     * fingerprint-keyed storage on first read. After migration, the legacy key is
+     * left in place (harmless, unread going forward) and every subsequent read/
+     * write for this address goes through the fingerprint-keyed store.
+     *
+     * @return {@code null} if no trust record exists yet for this address (first
+     *         contact); otherwise {fingerprintHex, base64(serializedKey)}.
+     */
+    private String[] readTrustRecord(SignalProtocolAddress address) {
+        SharedPreferences prefs = SecurePrefs.get(ctx);
+        String pointerKey = KEY_FP_POINTER_PREFIX + address.toString();
+        String fp = prefs.getString(pointerKey, null);
+        if (fp != null) {
+            String b64 = prefs.getString(KEY_TRUST_BY_FP_PREFIX + fp, null);
+            if (b64 != null) return new String[]{fp, b64};
+            // Pointer exists but the fp-keyed record is missing (shouldn't normally
+            // happen) — fall through to the legacy path below rather than treating
+            // this as "no trust record", so we don't silently regress to TOFU.
+        }
+        // One-time migration: no fingerprint-keyed record yet — check the legacy
+        // uid-keyed record and, if present, migrate it forward.
+        String legacyKey = KEY_TRUSTED_IDENTITY_PREFIX + address.toString();
+        String legacyB64 = prefs.getString(legacyKey, null);
+        if (legacyB64 == null) return null; // genuinely first contact
+        String legacyFp = fingerprintOf(Base64.decode(legacyB64, Base64.NO_WRAP));
+        prefs.edit()
+            .putString(KEY_TRUST_BY_FP_PREFIX + legacyFp, legacyB64)
+            .putString(pointerKey, legacyFp)
+            .apply();
+        Log.i(TAG, "Migrated legacy uid-keyed trust record for " + address
+                + " to fingerprint-keyed storage (S07-M2)");
+        return new String[]{legacyFp, legacyB64};
+    }
+
     @Override
     public boolean saveIdentity(SignalProtocolAddress address, IdentityKey identityKey) {
-        String prefsKey = KEY_TRUSTED_IDENTITY_PREFIX + address.toString();
         SharedPreferences prefs = SecurePrefs.get(ctx);
-        String existing = prefs.getString(prefsKey, null);
-        String incoming = Base64.encodeToString(identityKey.serialize(), Base64.NO_WRAP);
+        String[] existingRecord = readTrustRecord(address); // may migrate a legacy record
+        String incomingB64 = Base64.encodeToString(identityKey.serialize(), Base64.NO_WRAP);
+        String incomingFp  = fingerprintOf(identityKey.serialize());
+        String pointerKey  = KEY_FP_POINTER_PREFIX + address.toString();
 
-        if (existing == null) {
-            // F22 fix: store the fingerprint key on first-use too, not only on subsequent
-            // changes. Without this, KeyFingerprintActivity has nothing to show immediately
-            // after first pairing (the safety-number screen was blank on a fresh install).
-            // "signal_partner_identity_key_<name>" (address-scoped) is the correct key —
-            // "signal_partner_identity_key" (global, no suffix) was the old unscoped write.
+        if (existingRecord == null) {
+            // F22 fix (still honoured): store the display-fingerprint key on first-use
+            // too, not only on subsequent changes, so KeyFingerprintActivity has
+            // something to show immediately after first pairing.
+            // "signal_partner_identity_key_<name>" is a display-only cache read by
+            // KeyFingerprintActivity/ChatMediaActivity — it is not used for trust
+            // decisions, so it is untouched by the S07-M2 rekeying.
             prefs.edit()
-                .putString(prefsKey, incoming)
-                .putString("signal_partner_identity_key_" + address.getName(), incoming)
+                .putString(KEY_TRUST_BY_FP_PREFIX + incomingFp, incomingB64)
+                .putString(pointerKey, incomingFp)
+                .putString("signal_partner_identity_key_" + address.getName(), incomingB64)
                 .apply();
             return true; // new identity — session can proceed
         }
-        if (!existing.equals(incoming)) {
-            Log.w(TAG, "Identity key changed for " + address + " — storing new key (TOFU).");
+        String existingB64 = existingRecord[1];
+        if (!existingB64.equals(incomingB64)) {
+            // S07-L4/S10-N2: Log.w survives release builds (proguard-rules.pro keeps
+            // it deliberately for real failure diagnostics), so the peer uid must be
+            // redacted here — never interpolate a raw uid into a Log.w/Log.e line.
+            Log.w(TAG, "Identity key changed for " + LogRedact.uid(address.getName())
+                    + " — storing new key (TOFU).");
             // Batch the SecurePrefs writes into one editor so only one apply() call
             // flushes to disk instead of three (BUG-CR03).
             prefs.edit()
-                .putString(prefsKey, incoming)
-                .putString("signal_partner_identity_key_" + address.getName(), incoming)
+                .putString(KEY_TRUST_BY_FP_PREFIX + incomingFp, incomingB64)
+                .putString(pointerKey, incomingFp)
+                .putString("signal_partner_identity_key_" + address.getName(), incomingB64)
                 .apply();
             // The safety-number flag lives in a separate SharedPreferences file — must
             // be a separate apply() call.
@@ -158,6 +243,10 @@ public final class DuoShieldSignalStore
      *       {@link org.signal.libsignal.protocol.UntrustedIdentityException} and the
      *       message will appear as "[Decryption failed]" until the user verifies.
      * </ul>
+     *
+     * <p>S07-M2: the comparison itself is unchanged (still "does the incoming key
+     * match what we last trusted for this address"); what changed is where that
+     * "what we last trusted" record lives — see {@link #readTrustRecord}.
      */
     @Override
     public boolean isTrustedIdentity(SignalProtocolAddress address,
@@ -169,7 +258,8 @@ public final class DuoShieldSignalStore
         }
         boolean trusted = stored.equals(identityKey);
         if (!trusted) {
-            Log.w(TAG, "Identity key changed for " + address.getName()
+            // S07-L4/S10-N2: same redaction rationale as saveIdentity() above.
+            Log.w(TAG, "Identity key changed for " + LogRedact.uid(address.getName())
                     + " — raising safety-number banner");
             ctx.getSharedPreferences("duoshield_prefs", android.content.Context.MODE_PRIVATE)
                .edit()
@@ -181,13 +271,15 @@ public final class DuoShieldSignalStore
 
     @Override
     public IdentityKey getIdentity(SignalProtocolAddress address) {
-        String prefsKey = KEY_TRUSTED_IDENTITY_PREFIX + address.toString();
-        String b64 = SecurePrefs.get(ctx).getString(prefsKey, null);
-        if (b64 == null) return null;
+        String[] record = readTrustRecord(address); // transparently migrates legacy records
+        if (record == null) return null;
+        String b64 = record[1];
         try {
             return new IdentityKey(Base64.decode(b64, Base64.NO_WRAP), 0);
         } catch (InvalidKeyException e) {
-            Log.e(TAG, "Failed to deserialise stored identity for " + address, e);
+            // S07-L4/S10-N2: same redaction rationale as saveIdentity() above.
+            Log.e(TAG, "Failed to deserialise stored identity for "
+                    + LogRedact.uid(address.getName()), e);
             return null;
         }
     }
@@ -293,19 +385,49 @@ public final class DuoShieldSignalStore
         return address.getName() + "." + address.getDeviceId();
     }
 
+    /**
+     * S07-L4 / S10-N2: thrown by {@link #loadSession} when a stored session row
+     * exists but fails to deserialize, instead of the old silent fallback to a
+     * fresh, empty {@link SessionRecord}. That fallback let {@code
+     * containsSession} keep reporting {@code true} (it only counts rows) for a
+     * row that was actually unusable, so {@code establishSession}'s fast path
+     * believed a session already existed, skipped X3DH renegotiation, and every
+     * subsequent {@code encrypt} silently ran against an empty ratchet — a
+     * ratchet reset with nothing telling the user or the peer why decryption
+     * started failing. Callers must now handle this explicitly.
+     */
+    public static final class SessionDeserializationException extends RuntimeException {
+        public SessionDeserializationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     @Override
     public SessionRecord loadSession(SignalProtocolAddress address) {
         String key = toKey(address);
         SignalSessionRecord row = AppDatabase.getInstance(ctx)
                 .signalSessionDao().load(key);
         if (row == null) {
-            return new SessionRecord(); // fresh (empty) session
+            return new SessionRecord(); // fresh (empty) session — genuinely no prior session
         }
         try {
             return new SessionRecord(row.sessionData);
         } catch (Exception e) {
-            Log.e(TAG, "Session deserialisation failed for " + key + " — returning fresh.", e);
-            return new SessionRecord();
+            // S07-L4 fix: delete the corrupt row so containsSession() correctly
+            // reports false afterward — the session can then be renegotiated
+            // properly via X3DH instead of silently running against an empty,
+            // never-persisted in-memory ratchet — and throw instead of returning
+            // a fresh session, so the caller sees an explicit, typed failure
+            // rather than a decryption/encryption that succeeds against the
+            // wrong ratchet state with no indication anything went wrong.
+            AppDatabase.getInstance(ctx).signalSessionDao().delete(key);
+            // S07-L4/S10-N2: `key` embeds address.getName() (the peer uid) — redact
+            // it before logging at a level (Log.e) that survives release builds.
+            String redactedKey = LogRedact.uid(address.getName()) + "." + address.getDeviceId();
+            Log.e(TAG, "Session deserialisation failed for " + redactedKey
+                    + " — row deleted, session reset required.", e);
+            throw new SessionDeserializationException(
+                    "Session deserialisation failed for " + redactedKey, e);
         }
     }
 
@@ -317,7 +439,10 @@ public final class DuoShieldSignalStore
                     key, record.serialize(), System.currentTimeMillis());
             AppDatabase.getInstance(ctx).signalSessionDao().store(row);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to store session for " + key, e);
+            // S07-L4/S10-N2: `key` embeds address.getName() (the peer uid) — redact
+            // it before logging at a level (Log.e) that survives release builds.
+            Log.e(TAG, "Failed to store session for " + LogRedact.uid(address.getName())
+                    + "." + address.getDeviceId(), e);
         }
     }
 
