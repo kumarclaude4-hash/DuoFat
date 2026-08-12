@@ -275,3 +275,131 @@ not advanced to `S3-14`, because `S3-13`'s own exit bar
 ("suite green with session-lifetime and deny-path tests") is only half
 met: the deny-path test landed this session, the session-lifetime
 (bulk-revoke/binding) test did not.
+
+---
+
+## Continuation session — E2E-check on S05-H2's deny path (no S3-14/S05-M3 work)
+
+**Status:** No code changes. `S05-M1` was **not** re-touched (already
+`Fixed`, per the prior continuation above — not re-opened, not re-verified
+beyond a `git log`/`git status` sanity check). `S05-H2` stays `Partial`
+(same disposition as before this session — this was a depth-check on the
+existing deny-path slice, not new scope), now with source-level evidence
+that the deny path is a real, fully-wired mutation path end to end, not
+merely something `adminAuditWiring.test.js`'s structural (text) assertions
+happen to match.
+
+### What was checked, and how
+
+Starting state confirmed first: `git status` clean, `git log --oneline -8`
+showed the prior continuation's work already merged (`fa30e1e` "feat:
+implement partial waitlist deny route and admin panel button", merged via
+PR #80 at `edc1946`) — nothing pending, nothing to redo.
+
+The chain was then read from the browser-facing end down to the Firestore
+write, one hop at a time, rather than trusting that a passing structural
+test implies a real path:
+
+1. **UI**: `index.js:1611-1615` — the "Deny" button's `onclick` calls
+   `deny(r.requestId, denyBtn, approveBtn)`, a real function
+   (`index.js:1647-1664`), not a stub — it disables both buttons, calls
+   `api(...)`, and on success calls `loadWaitlist()` + `loadAuditLog()` to
+   refresh both panel views from the server.
+2. **Client transport**: `api()` (`index.js:1415-1445`) is a shared
+   `fetch()` wrapper used by every admin-panel call (approve, deny, unfreeze,
+   etc.) — it sets `credentials: "same-origin"` (so the HttpOnly
+   `duoshield_admin_session` cookie is sent) and the `x-admin-token` header,
+   and treats a `401` as "session expired" (forces logout), not as a
+   silently-swallowed error.
+3. **Server auth gate**: `requireAdminAuth()` (`index.js:904-938`) is the
+   same real gate every other `/admin/api/*` route uses — checks IP
+   lockout first (`auditAdminEvent("admin_api_blocked_locked_out", ...)`
+   + 429 if locked), then requires either a valid `x-admin-token` (constant-
+   time compared via `safeTokenEqual`) or a valid session
+   (`hasValidAdminSession(req)`); a failure both audits
+   `admin_api_unauthorized` and increments the lockout counter via
+   `recordAdminAuthFailure(ip)`. This is not a mock/no-op check — it is the
+   identical function gating `/approve`, `/admin/api/locked`, and every
+   other admin mutation route.
+4. **Mutation**: `index.js:4013-4053` — on a valid `requestId` (format-
+   checked against `/^[0-9a-f]{32}$/`) whose doc exists and is currently
+   `status: "pending"` (404/409 otherwise, same shape as `/approve`), the
+   handler performs a real Firestore write:
+   `ref.update({ status: "denied", deniedAt: FieldValue.serverTimestamp() })`
+   against `db.collection("waitlist").doc(requestId)` — not a dry-run, not
+   an in-memory stub.
+5. **Audit trail**: `auditAdminEvent("waitlist_denied", req, { requestId })`
+   is called immediately after the mutation succeeds, routing through the
+   single pseudonymising sink (`S05-M1`'s fix) rather than writing
+   `adminAuditLog` directly.
+6. **Read-back paths that make the denial actually take effect**:
+   `GET /waitlistStatus` (`index.js:2412-2442`) echoes whatever `status`
+   string the doc holds with no special-casing — a denied doc's poll
+   response is `{ status: "denied" }`, verbatim from Firestore, not
+   filtered or translated. `/mintToken`'s gate
+   (`index.js:2286`, `waitlistSnap.data().status !== "approved"`) is a
+   strict inequality against the literal string `"approved"`, so
+   `"denied"` is rejected by the exact same check that already rejects
+   `"pending"` — no separate `denied`-specific carve-out was needed or
+   added.
+7. **Firestore access control**: `adminAuditWiring.test.js`'s existing
+   `adminAuditLog is server-only in firestore.rules` test confirms
+   `allow read, write: if false` on that collection, so the audit trail
+   this path writes to cannot be read or forged by a client.
+
+No step in this chain short-circuits to a mock, a hardcoded response, or a
+no-op — the Deny button drives a real authenticated HTTP request into a
+real Firestore mutation with a real durable audit record, confirmed from
+source, not merely from `adminAuditWiring.test.js`'s text-matching
+assertions (which check the same shape but do not execute it, per that
+file's own documented limitation).
+
+### Verification NOT run (recorded, not fabricated)
+
+Same limitation as the prior continuation: no Firestore emulator or
+service-account credentials are available in this environment, so no
+live HTTP round-trip or live Firestore read-back was performed. This
+session's contribution over the prior one is a full manual trace of every
+hop in the chain from source, confirming none of them is a stub — it does
+not newly execute the path.
+
+### Test evidence (run this session)
+
+- `git status` — clean at session start and end (no code changes made).
+- `node --check index.js` — clean.
+- `node --test server/lib/adminAuditWiring.test.js` — **10/10 pass**,
+  unchanged.
+- `cd server && npm test` — **197/198 pass**. The 1 failure is the same
+  pre-existing `identityVerify.test.js` missing-native-module issue
+  (`Cannot find module '@signalapp/libsignal-client'`), reproduced again,
+  not a regression.
+
+### Why no regression test was added
+
+The existing `S05-H2` structural test in `adminAuditWiring.test.js`
+already asserts the four properties that matter for a text-level wiring
+check (route exists, admin-gated, rejects non-pending, sets `status:
+"denied"`, audits `waitlist_denied`) and does so with a bounded slice so a
+match from `/approve` or `/admin/api/locked` cannot pass it spuriously —
+this session found no gap in that coverage to add a test for. A true
+behavioural (live HTTP + live Firestore) test remains `BLOCKED` in this
+environment, same as it was for `/approve` before this session and for
+every other admin-panel mutation route — not a new limitation introduced
+or discovered here.
+
+### Documentation reconciled this session
+
+- `BUG_TRACKER.md`'s `S05-H2` row — verification column and detail cell
+  extended with the source-line evidence above; disposition (`Partial`)
+  unchanged.
+- `SESSION-S3-13.md` (this file) — this section.
+- `START_HERE.md` / `SESSION_INDEX.md` — updated to record this E2E-check
+  pass without changing `NEXT SESSION` (still `S3-13`'s one remaining item,
+  `S05-M3`) or re-describing `S05-M1`/the deny-path implementation itself,
+  which were already accurately documented by the prior continuation.
+
+### Chain state
+
+Unchanged by this session: `NEXT SESSION` stays `S3-13`'s remaining scope,
+`S05-M3` (admin session bulk-revoke + IP/UA binding; authenticated
+refresh) — not started here, per instruction for this session.
