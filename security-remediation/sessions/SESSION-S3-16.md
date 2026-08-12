@@ -1,10 +1,13 @@
 # SESSION-S3-16 — Android crypto storage
 
 **Lane:** AND (verify BLOCKED → S3-19b)
-**Status:** COMPLETE for what this environment can do — 2 of 4 findings Fixed
-(source-reviewed, compile/instrumented verification routed to S3-19b); 2 of 4
-findings re-confirmed genuinely Open (product-level scope, correctly excluded
-from this session).
+**Status:** COMPLETE for what this environment can do — 2 of 4 findings
+**Partial** (`S07-L2`, `S07-L3`: source-fixed + regression tests added,
+compile/instrumented AND-lane verification BLOCKED and routed to S3-19b —
+per the plan's own exit criterion for this session, a source-only fix lands
+`partial`, not `fixed`, until that run happens); 2 of 4 findings
+re-confirmed genuinely **Open** (`S08-H5`, `S07-M1`: product-level scope,
+correctly excluded from this session).
 **Model:** Opus 5
 **Sequencing note:** this is an **out-of-order pickup**, run at the user's
 explicit direction. The plan's actual next unstarted session was **S3-15**
@@ -103,7 +106,7 @@ Genuinely open, confirmed from source this session. Not code-changed.
   changes minimal"). Recommend a dedicated follow-up session once UX/product
   has decided the warning/consent shape.
 
-### S07-L2 — Static derivation cache survives duress wipe → **Fixed**
+### S07-L2 — Static derivation cache survives duress wipe → **Partial** (source-fixed; AND verification BLOCKED → S3-19b)
 
 - **Fix:** added `SeedPhraseHelper.clearDerivationCache()` (nulls the
   `AtomicReference` backing the cache) and wired it into
@@ -123,7 +126,7 @@ Genuinely open, confirmed from source this session. Not code-changed.
   asserts the field is now `null`. This proves the actual backing-field
   contract, not just that the public method returns without throwing.
 
-### S07-L3 — `mnemonicToSeed` canonicalization + `Locale.ROOT` → **Fixed**
+### S07-L3 — `mnemonicToSeed` canonicalization + `Locale.ROOT` → **Partial** (source-fixed; AND verification BLOCKED → S3-19b)
 
 - **Fix:** added `SeedPhraseHelper.canonicalizeMnemonic()` — trim, then
   `Locale.ROOT` lower-case, then collapse any run of whitespace to a single
@@ -185,7 +188,11 @@ Genuinely open, confirmed from source this session. Not code-changed.
   test methods (3 canonicalisation, 1 cache-clearing), 0 removed, 0 modified.
 - `BUG_TRACKER.md` — `S08-H5`, `S07-M1` rows re-confirmed `Open` with expanded
   evidence; `S07-L2`, `S07-L3` rows moved `Open`/`Carried` →
-  `Fixed (S3-16)`/`Verified` with full source + test evidence.
+  `Partial (S3-16)`/`Verified` with full source + test evidence (`Partial`,
+  not `Fixed` — the plan's own exit criterion for this session is
+  `partial — AND verification BLOCKED` pending a real compile/test run in
+  S3-19b; an earlier draft of this row briefly said `Fixed`, corrected here
+  before it was ever pushed).
 - `security-remediation/sessions/SESSION-S3-16.md` (this file),
   `security-remediation/START_HERE.md`, `security-remediation/SESSION_INDEX.md`
   — chain-state + index updates (done last, after implementation was
@@ -320,14 +327,14 @@ session was actually run.
 ## Session record
 
 ```
-SESSION: S3-16  MODEL: Opus 5  BUDGET: $5 max  CLUSTER: Android crypto storage (S08-H5/S07-M1/S07-L2/S07-L3)  STATUS: partial (2 fixed source-only, 2 confirmed open)
+SESSION: S3-16  MODEL: Opus 5  BUDGET: $5 max  CLUSTER: Android crypto storage (S08-H5/S07-M1/S07-L2/S07-L3)  STATUS: partial (2 source-fixed but AND-verification-BLOCKED -> Partial, 2 confirmed open)
 SEQUENCING: out-of-order pickup at explicit user direction — S3-15 (App Check, S10-N1) remains the plan's actual next unstarted session, not superseded by this one.
 CHANGES:
   - app/src/main/java/com/duoshield/app/crypto/SeedPhraseHelper.java: + canonicalizeMnemonic() (trim + Locale.ROOT + whitespace collapse), mnemonicToSeed() now canonicalises internally, validateMnemonic() per-word lowercase -> Locale.ROOT, + clearDerivationCache() (S07-L2/S07-L3)
   - app/src/main/java/com/duoshield/app/util/WipeHelper.java: eraseLocalData() Step 4 now also calls SeedPhraseHelper.clearDerivationCache() (S07-L2)
   - app/src/main/java/com/duoshield/app/ui/RestoreFromSeedActivity.java: pre-canonicalisation lowercase -> Locale.ROOT (S07-L3)
   - app/src/test/java/com/duoshield/app/SeedPhraseHelperTest.java: +4 tests — case-insensitivity, whitespace-collapse, whitespace-trim (BIP39 vector, byte-identical-seed assertions), clearDerivationCache backing-field-null reflection test
-  - BUG_TRACKER.md: S08-H5/S07-M1 rows re-confirmed Open with expanded evidence (no code change — root cause is product-scope, not a code gap); S07-L2/S07-L3 rows Open/Carried -> Fixed (S3-16)/Verified
+  - BUG_TRACKER.md: S08-H5/S07-M1 rows re-confirmed Open with expanded evidence (no code change — root cause is product-scope, not a code gap); S07-L2/S07-L3 rows Open/Carried -> Partial (S3-16)/Verified (not Fixed — AND-lane compile/test run is BLOCKED, per plan exit criterion)
   - START_HERE.md / SESSION_INDEX.md / SESSION-S3-16.md: chain-state + index + session log
 VERIFICATION:
   PASS: source re-derivation of all 4 findings against current code (not carried from tracker); brace/paren/bracket balance check on all 4 touched files (all BALANCED); new test logic hand-traced against SeedPhraseHelper's actual field names/types
