@@ -435,18 +435,18 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-  // ── Per-UID authenticated-endpoint rate limiter ───────────────────────────────
-  // Prevents an authenticated user from flooding the server-mediated endpoints
-  // below. Each endpoint has its own per-minute bucket.
-  //
-  // S04-I2: the `b2PresignedPut`/`b2PresignedGet`/`b2Delete` buckets were
-  // removed here. They rate-limited presigned-URL routes that no longer exist
-  // — the media data plane moved to per-object capability tokens (SEC-A01),
-  // served by the Cloudflare Worker, not by any presign route on this server —
-  // so the entries only made this table misreport the real attack surface.
-  const AUTH_RATE_WINDOW_MS = 60_000;
-  const AUTH_RATE_LIMITS = {
-    createChat:        10,   // 10 chat creations / min per user
+// ── Per-UID authenticated-endpoint rate limiter ───────────────────────────────
+// Prevents an authenticated user from flooding the server-mediated endpoints
+// below. Each endpoint has its own per-minute bucket.
+//
+// S04-I2: the `b2PresignedPut`/`b2PresignedGet`/`b2Delete` buckets were
+// removed here. They rate-limited presigned-URL routes that no longer exist
+// — the media data plane moved to per-object capability tokens (SEC-A01),
+// served by the Cloudflare Worker, not by any presign route on this server —
+// so the entries only made this table misreport the real attack surface.
+const AUTH_RATE_WINDOW_MS = 60_000;
+const AUTH_RATE_LIMITS = {
+  createChat:        10,   // 10 chat creations / min per user
   migrateUid:         2,   //  2 migrations / min per user
   turnCredentials:   20,   // 20 TURN fetches / min per user
   removeGroupMember: 20,   // 20 removals / min per user
@@ -4243,27 +4243,27 @@ http.createServer((req, res) => {
 
 }).listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
 
-  // ── B2 SigV4 presign surface removed (S03-L3 / S04-I2) ────────────────────────
-  // `b2PresignUrl` and its lock-bound wrapper `b2PresignUrlForUid` used to live
-  // here, along with the `/b2PresignedPut`, `/b2PresignedGet` and `/b2Delete`
-  // routes they were meant to serve. That whole surface was SEC-A01 residue:
-  // presigned-URL issuance was replaced by per-object capability tokens minted
-  // at `/mediaToken` and enforced by the Cloudflare Worker, so the presign
-  // helpers had no callers (they were even declared after `.listen()`), and the
-  // three routes never existed in the router table. Keeping them made
-  // `B2_KEY_ID` / `B2_APPLICATION_KEY` — a live, bucket-wide Backblaze
-  // credential — look like required server config whose only remaining purpose
-  // was to be leaked. The helpers, the signing math in `./lib/pure`
-  // (`b2HmacKey` / `buildB2PresignUrl`), and the B2 env reads are all gone.
-  //
-  // OPERATOR RUNBOOK (cannot be done from source — tracked, still required):
-  // revoke the Backblaze B2 application key that `B2_KEY_ID` /
-  // `B2_APPLICATION_KEY` referred to and delete both from the server
-  // environment. Until the key is revoked at Backblaze, any copy of it that
-  // already leaked (see S03-L1: it was compiled into released APKs) remains a
-  // live bucket-wide credential even though nothing in this codebase uses it.
-  // The duress latch that this wrapper once carried (S06-C2) is now moot on the
-  // server: there is no server-side path that can mint a B2 URL at all, so a
-  // token minted before a duress lock can no longer be used to reach media
-  // here.
+// ── B2 SigV4 presign surface removed (S03-L3 / S04-I2) ────────────────────────
+// `b2PresignUrl` and its lock-bound wrapper `b2PresignUrlForUid` used to live
+// here, along with the `/b2PresignedPut`, `/b2PresignedGet` and `/b2Delete`
+// routes they were meant to serve. That whole surface was SEC-A01 residue:
+// presigned-URL issuance was replaced by per-object capability tokens minted
+// at `/mediaToken` and enforced by the Cloudflare Worker, so the presign
+// helpers had no callers (they were even declared after `.listen()`), and the
+// three routes never existed in the router table. Keeping them made
+// `B2_KEY_ID` / `B2_APPLICATION_KEY` — a live, bucket-wide Backblaze
+// credential — look like required server config whose only remaining purpose
+// was to be leaked. The helpers, the signing math in `./lib/pure`
+// (`b2HmacKey` / `buildB2PresignUrl`), and the B2 env reads are all gone.
+//
+// OPERATOR RUNBOOK (cannot be done from source — tracked, still required):
+// revoke the Backblaze B2 application key that `B2_KEY_ID` /
+// `B2_APPLICATION_KEY` referred to and delete both from the server
+// environment. Until the key is revoked at Backblaze, any copy of it that
+// already leaked (see S03-L1: it was compiled into released APKs) remains a
+// live bucket-wide credential even though nothing in this codebase uses it.
+// The duress latch that this wrapper once carried (S06-C2) is now moot on the
+// server: there is no server-side path that can mint a B2 URL at all, so a
+// token minted before a duress lock can no longer be used to reach media
+// here.
 
