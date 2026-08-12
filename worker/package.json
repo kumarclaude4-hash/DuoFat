@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "description": "Cloudflare Worker for DuoShield tiered storage (R2 hot → B2 cold → purge at 180 days)",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "test": "node --test src/index.test.js"
   },
   "dependencies": {
     "aws4fetch": "^1.0.20"

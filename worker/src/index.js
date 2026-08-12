@@ -501,6 +501,21 @@ export default {
 
     // ── UPLOAD ────────────────────────────────────────────────────────────────
     if (request.method === 'PUT') {
+      // S03-M2: a capability token only proves the caller participates in the
+      // chat/group that owns this key (see SEC-A01 above) — every participant
+      // can mint a write token for any key in the conversation, including one
+      // another participant already uploaded to. Without this check, any chat
+      // member could silently overwrite (swap the bytes of) media someone else
+      // sent, using their own valid token — scope-bound, but not uploader-bound.
+      // Only the very first write to a key (no existing object, nothing to
+      // protect yet) is unrestricted; every write after that is locked to
+      // whichever holder's uploader tag was recorded on the object at PUT time.
+      const existing = await env.HOT_BUCKET.head(key).catch(() => null);
+      const existingUploader = existing?.customMetadata?.uploader;
+      if (existingUploader && existingUploader !== cap.holder) {
+        return respond({ error: 'Only the original uploader may overwrite this object' }, 403);
+      }
+
       // Optimistic pre-check using the client-supplied Content-Length.
       // A spoofed or absent header is caught after the upload via R2 HEAD —
       // see the post-put size verification below.
@@ -537,11 +552,11 @@ export default {
 
       await env.HOT_BUCKET.put(key, request.body, {
         httpMetadata:   { contentType },
-        // `uploader` records cap.holder purely for storage-quota accounting
-        // (so a later DELETE, regardless of who performs it — see S03-M2,
-        // out of scope here — credits the right holder's quota back). It is
-        // NOT read as an ownership/authorization check anywhere; that
-        // remains a separate, tracked fix.
+        // `uploader` records cap.holder for two purposes: storage-quota
+        // accounting (so DELETE credits the right holder's quota back) and,
+        // as of S03-M2, the ownership check above/in DELETE — the only write
+        // this tag doesn't gate is the very first one, when there is nothing
+        // to protect yet.
         customMetadata: { uploadedAt: Date.now().toString(), uploader: cap.holder },
       });
 
@@ -556,6 +571,26 @@ export default {
         return respond({
           error: `Upload rejected — actual size (${actualBytes} B) exceeds the ${maxFileSize(env) / 1_048_576} MB limit`,
         }, 413);
+      }
+
+      // Post-upload quota re-check. The pre-checks above only bound
+      // `declaredBytes` (the client-supplied Content-Length), which — like
+      // the file-size guard immediately above — is untrusted: a missing or
+      // understated header (e.g. chunked transfer with no Content-Length,
+      // safeInt-defaulted to 0) sails through both pre-checks regardless of
+      // how large the body actually is, then lands here already stored with
+      // its true size unaccounted for. Re-checking `actualBytes` against
+      // both caps before crediting anything closes that bypass for the same
+      // reason the file-size guard exists — the client header is never
+      // trusted for anything that gates a limit.
+      const r2AfterUpload = (await getR2Bytes(env)) + actualBytes;
+      const userAfterUpload = (await getUserBytes(env, cap.holder)) + actualBytes;
+      if (r2AfterUpload > MAX_R2_BYTES || userAfterUpload > maxUserBytes(env)) {
+        await env.HOT_BUCKET.delete(key).catch(() => {});
+        return respond({
+          error: 'Upload rejected — actual size exceeds the available storage quota (Content-Length was missing or understated).',
+          bytes: actualBytes,
+        }, 507);
       }
 
       // Increment R2 counter and the uploader's per-user counter with the
@@ -616,16 +651,26 @@ export default {
       const r2Head = await env.HOT_BUCKET.head(key).catch(() => null);
 
       if (r2Head) {
+        // S03-M2: a capability token only proves the caller participates in
+        // the chat/group that owns this key (SEC-A01) — every participant can
+        // mint a delete token for any key in the conversation, including one
+        // another participant uploaded. Enforce uploader binding here: only
+        // the holder recorded in customMetadata.uploader at PUT time (or an
+        // object with no uploader tag at all — a pre-S3-11 object migrated
+        // before this metadata existed) may delete it.
+        const r2Uploader = r2Head.customMetadata?.uploader;
+        if (r2Uploader && r2Uploader !== cap.holder) {
+          return respond({ error: 'Only the original uploader may delete this object' }, 403);
+        }
+
         // File is in R2 — delete it and adjust the R2 counter.
         const r2Size = r2Head.size ?? 0;
         await env.HOT_BUCKET.delete(key).catch(() => {});
         if (r2Size > 0) ctx.waitUntil(adjustR2(env, -r2Size));
         // S03-H3: credit the per-user quota back to whichever holder
-        // uploaded the object (recorded at PUT time), not the deleter — a
-        // capability token only proves the caller may act on this key (see
-        // SEC-A01), not that they are the original uploader.
-        const uploader = r2Head.customMetadata?.uploader;
-        if (uploader && r2Size > 0) ctx.waitUntil(adjustUserBytes(env, uploader, -r2Size));
+        // uploaded the object (recorded at PUT time) — now guaranteed by the
+        // ownership check above to be the caller themselves.
+        if (r2Uploader && r2Size > 0) ctx.waitUntil(adjustUserBytes(env, r2Uploader, -r2Size));
         // Race guard: the nightly migration PUTs to B2 and THEN deletes from R2
         // as two separate steps. If a client DELETE lands in that gap, the file
         // briefly exists in both tiers and this branch (R2-present) runs, which
@@ -640,6 +685,28 @@ export default {
         // File is not in R2 → it must have been migrated to B2 (cold tier).
         // B2 counter is reconciled nightly by the cron — no KV write here.
         const b2 = getB2Client(env);
+
+        // S03-M2: same ownership rule as the R2 branch above. The migration
+        // cron carries `x-amz-meta-uploader` across to B2 (see `scheduled()`
+        // below), so a HEAD here can enforce it the same way R2's `head()`
+        // metadata does. A HEAD miss (404) means there is nothing to protect
+        // — fall through to the DELETE below, which will itself no-op 404.
+        let headResp;
+        try {
+          headResp = await b2.fetch(b2Url(env, key), { method: 'HEAD' });
+        } catch (err) {
+          console.error(`B2 HEAD network error for ${key}: ${err.message}`);
+          return respond({ error: 'B2 delete failed (network error)', key }, 502);
+        }
+        if (headResp.ok) {
+          const b2Uploader = headResp.headers.get('x-amz-meta-uploader');
+          if (b2Uploader && b2Uploader !== cap.holder) {
+            return respond({ error: 'Only the original uploader may delete this object' }, 403);
+          }
+        } else if (headResp.status !== 404) {
+          return respond({ error: 'B2 delete failed', status: headResp.status, key }, 502);
+        }
+
         let delResp;
         try {
           delResp = await b2.fetch(b2Url(env, key), { method: 'DELETE' });
@@ -682,7 +749,7 @@ export default {
     let moved        = 0;
     let r2TotalBytes = 0;
 
-    // ── Step 1: Scan R2 ────────────────────────────────────────────────────────
+    // ── Step 1: Scan R2 ─────────────────────────��──────────────────────────────
     let cursor;
     do {
       const list = await env.HOT_BUCKET.list({
@@ -723,6 +790,12 @@ export default {
         const body = await r2Obj.arrayBuffer();
         const readEtag = r2Obj.httpEtag;
 
+        // S03-M2: carry the uploader tag across so ownership can still be
+        // enforced on DELETE after an object has tiered to B2 — otherwise
+        // the binding added in the R2 DELETE/PUT paths would silently stop
+        // applying the moment an object ages past HOT_TIER_DAYS.
+        const uploaderTag = r2Obj.customMetadata?.uploader;
+
         const putResp = await b2.fetch(b2Url(env, obj.key), {
           method: 'PUT',
           body,
@@ -730,6 +803,7 @@ export default {
             'Content-Type':           contentType,
             'Content-Length':         body.byteLength.toString(),
             'x-amz-meta-uploaded-at': uploadedAt.toString(),
+            ...(uploaderTag ? { 'x-amz-meta-uploader': uploaderTag } : {}),
           },
         });
 
