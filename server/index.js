@@ -952,6 +952,25 @@ function hasValidAdminSession(req, opts = {}) {
 // IIFE or an `async (body) => {}` collectBody callback) so this only adds
 // `await`, not new restructuring.
 async function requireAdminAuth(req, res) {
+  // S05-I3 (CSRF note): `SameSite=Strict` on the session cookie already blocks
+  // the cross-site case in every current browser, and CSP `form-action 'self'`
+  // covers form posts, so this was flagged as defense-in-depth rather than a
+  // live gap — but the mutating routes had exactly one such mechanism and no
+  // anti-CSRF token, `Origin`, or `Sec-Fetch-Site` check. `Sec-Fetch-Site` is
+  // sent by every current browser (Fetch Metadata) and cannot be set by an
+  // attacker page — it is set by the browser itself and describes the
+  // relationship between the REQUESTING page and this origin. Reject only the
+  // unambiguous cross-site case; leave `same-origin`/`same-site`/`none`
+  // (direct navigation, no Referer, or an older browser that omits the
+  // header) untouched so this is purely additive and cannot break a
+  // legitimate same-origin admin-panel request.
+  const secFetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+  if (secFetchSite === "cross-site") {
+    auditAdminEvent("admin_api_blocked_cross_site", req, { path: String(req.url).slice(0, 200) });
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-site request rejected");
+    return false;
+  }
   const ip = getClientIp(req);
   if (await adminIpLocked(ip)) {
     auditAdminEvent("admin_api_blocked_locked_out", req, { path: String(req.url).slice(0, 200) });
@@ -4161,7 +4180,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/waitlist/deny ─────────────────────────────────────────
+  // ── POST /admin/api/waitlist/deny ───���─────────────────────────────────────
   //
   // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // S05-H2: prior to this endpoint the ONLY mutation available on a waitlist
