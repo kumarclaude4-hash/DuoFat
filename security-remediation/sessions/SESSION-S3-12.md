@@ -346,11 +346,11 @@ accounting fix introduces or could reasonably fix without object versioning.
 cd worker && npm test   # node --test src/index.test.js
 ```
 
-**27/27 pass** — 19 pre-existing (9 from S3-11 + 8 from S3-12-partial's
-S03-M2 work — `2 more than the 17 previously recorded because this count
-already includes the 2 CORS/S08-I3 tests; see raw output`) + **8 new** this
-session (2 for S03-M1, 3 for S03-M3, 2 for S03-L2, 3 for the S03-H3
-follow-up — 8 total, matching the new-test count claimed per finding above).
+**27/27 pass** — 17 pre-existing (carried forward from `SESSION-S3-12-partial.md`,
+which recorded "Full worker suite: 17/17 pass" after the `S03-M2` work) +
+**10 new** this session (2 for `S03-M1`, 3 for `S03-M3`, 2 for `S03-L2`, 3
+for the `S03-H3` follow-up — 10 total, matching the per-finding test counts
+claimed above: 2+3+2+3=10).
 
 `node --check worker/src/index.js` and `node --check server/index.js` —
 both clean.
@@ -374,7 +374,7 @@ dependencies — `package.json`/lockfile were not modified.
   (S03-M1), `jti` in wire format + single-use delete-token tracking
   (S03-M3), guarded `decodeURIComponent` (S03-L2), delta-based overwrite
   accounting (S03-H3 follow-up).
-- `worker/src/index.test.js` — 8 new regression tests (see above) plus the
+- `worker/src/index.test.js` — 10 new regression tests (see above) plus the
   `mintToken` test helper updated to mint the new 6-segment wire format.
 - `server/index.js` — `signMediaToken()` now mints a `jti` and includes it
   in the signed payload/wire string, matching the Worker's new verifier
