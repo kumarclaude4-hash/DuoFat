@@ -63,11 +63,33 @@ public class SelfDestructWorker extends Worker {
 
             // Delete Room rows whose expiresAt deadline has passed.
             // expiresAt is an absolute timestamp set at send time; 0 means "never".
-            db.messageDao().deleteExpired(now);
-            Log.d(TAG, "Room: deleted messages with expiresAt ≤ " + now);
+            int roomDeleted = db.messageDao().deleteExpired(now);
+            Log.d(TAG, "Room: deleted " + roomDeleted + " message(s) with expiresAt ≤ " + now);
 
             // Mirror the deletion in Firestore so both sides stay in sync.
-            deleteExpiredFromFirestore(conversationId, now);
+            int firestoreDeleted = deleteExpiredFromFirestore(conversationId, now);
+
+            // S08-H3: a disappearing message's decrypted image/video thumbnail is
+            // decoded through Glide (see MessageAdapter), which persists the decoded
+            // plaintext bitmap in its own on-disk cache (getCacheDir()/glide_image_cache,
+            // up to 150 MB — see DuoShieldGlideModule) independently of the Room row,
+            // the Firestore doc, and the encrypted B2 blob deleted above. Without this,
+            // a message that just "disappeared" everywhere else still has a readable,
+            // unencrypted copy of its media sitting on disk — exactly the data a
+            // disappearing message is supposed to not leave behind. Only pay for this
+            // when something in this pass actually expired, so an ordinary poll with
+            // nothing to delete does not evict unrelated, still-live thumbnails.
+            // Glide.clearDiskCache() must not be called on the main thread — Worker.doWork()
+            // already runs on a background thread, so this is safe here.
+            if (roomDeleted > 0 || firestoreDeleted > 0) {
+                try {
+                    com.bumptech.glide.Glide.get(getApplicationContext()).clearDiskCache();
+                    Log.d(TAG, "Cleared Glide disk cache after " +
+                            (roomDeleted + firestoreDeleted) + " expired message(s).");
+                } catch (Exception e) {
+                    Log.w(TAG, "Glide clearDiskCache() failed after self-destruct (non-fatal)", e);
+                }
+            }
 
             return Result.success();
 
@@ -85,7 +107,7 @@ public class SelfDestructWorker extends Worker {
      * that a slow or offline network cannot block the WorkManager thread pool
      * indefinitely (BUG-T05).
      */
-    private void deleteExpiredFromFirestore(String conversationId, long now) throws Exception {
+    private int deleteExpiredFromFirestore(String conversationId, long now) throws Exception {
         FirebaseFirestore fs = FirebaseFirestore.getInstance();
         QuerySnapshot snap = Tasks.await(
                 fs.collection("chats").document(conversationId)
@@ -96,16 +118,16 @@ public class SelfDestructWorker extends Worker {
                 30, java.util.concurrent.TimeUnit.SECONDS
         );
         FirebaseCostGuard.getInstance(getApplicationContext()).recordReads(snap.size());
-        commitBatchDelete(fs, snap, "expiresAt-expired");
+        return commitBatchDelete(fs, snap, "expiresAt-expired");
     }
 
-    private void commitBatchDelete(FirebaseFirestore fs,
+    private int commitBatchDelete(FirebaseFirestore fs,
                                    QuerySnapshot snap,
                                    String label) throws Exception {
         List<DocumentSnapshot> docs = snap.getDocuments();
         if (docs.isEmpty()) {
             Log.d(TAG, "Firestore [" + label + "]: no messages to delete.");
-            return;
+            return 0;
         }
 
         int total = 0, batchCount = 0;
@@ -143,5 +165,6 @@ public class SelfDestructWorker extends Worker {
         if (batchCount > 0) Tasks.await(batch.commit(), 30, java.util.concurrent.TimeUnit.SECONDS);
         FirebaseCostGuard.getInstance(getApplicationContext()).recordDeletes(total);
         Log.d(TAG, "Firestore [" + label + "]: deleted " + total + " message(s).");
+        return total;
     }
 }

@@ -38,11 +38,46 @@ public class BaseActivity extends AppCompatActivity {
 
     private ShakeDetector shakeDetector;
 
+    /**
+     * SharedPreferences key for the user-facing "Allow screenshots" toggle in
+     * SecurityPrivacySettingsActivity. Read here (not just there) so every
+     * BaseActivity-derived screen actually enforces the choice — see S08-H2.
+     */
+    private static final String KEY_APP_SCREENSHOT_ENABLED = "app_screenshot_enabled";
+
+    /**
+     * Applies (or lifts) {@code FLAG_SECURE} on {@code activity}'s window based on the
+     * {@code app_screenshot_enabled} preference.
+     *
+     * <p>S08-H2 fix: every one of {@link #onCreate}, {@link MainActivity#onCreate},
+     * {@link LockScreenActivity#onCreate}, and
+     * {@link com.duoshield.app.ui.SecurityPrivacySettingsActivity#applyScreenshotFlag}
+     * unconditionally called {@code clearFlags(FLAG_SECURE)} — screenshots, screen
+     * recording, and the recents-list thumbnail were <em>always</em> allowed app-wide,
+     * regardless of what the "Allow screenshots" toggle said, and regardless of its
+     * secure-by-default value ({@code false} — see the {@code getBoolean} default in
+     * SecurityPrivacySettingsActivity). This is the single point BaseActivity-derived
+     * activities now route through, matching what GroupChatActivity's and
+     * ChatMediaActivity's onResume() comments already claimed was happening globally.
+     *
+     * <p>Default is secure (FLAG_SECURE applied) when the preference has never been
+     * set, matching the settings screen's own default.
+     */
+    static void applyScreenshotSecurity(android.app.Activity activity) {
+        boolean screenshotsAllowed = activity
+                .getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_APP_SCREENSHOT_ENABLED, false);
+        if (screenshotsAllowed) {
+            activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        } else {
+            activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Screenshots are always allowed — FLAG_SECURE is not applied globally.
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        applyScreenshotSecurity(this);
     }
 
     @Override
