@@ -403,3 +403,221 @@ or discovered here.
 Unchanged by this session: `NEXT SESSION` stays `S3-13`'s remaining scope,
 `S05-M3` (admin session bulk-revoke + IP/UA binding; authenticated
 refresh) — not started here, per instruction for this session.
+
+---
+
+## S05-M3 — admin session absolute lifetime, IP/UA binding, bulk revoke
+
+**Status: Fixed.** This closes `S3-13`'s last remaining item; the chain can
+now move to `S3-14`.
+
+### What was traced before editing (every creation/validation/refresh/
+### logout/revocation path)
+
+- **Creation:** `POST /admin/login`'s success branch called
+  `createAdminSession()` (no args) and set it as a cookie via
+  `adminSessionCookie(sessionId, req, Math.floor(ADMIN_SESSION_TTL_MS / 1000))`.
+- **Storage:** a bare `Map<sessionId, expiresAt>` (`adminSessions`), swept by
+  a 5-minute `setInterval` that deleted anything past its `expiresAt`.
+- **Validation/refresh:** `hasValidAdminSession(req)` read the cookie,
+  checked `expiresAt > Date.now()`, and — on every single call, success or
+  not distinguished — **unconditionally reset** `expiresAt` to
+  `Date.now() + ADMIN_SESSION_TTL_MS` (30 min). This function had exactly
+  two call sites: `requireAdminAuth()` (every `/admin/api/*` route) and,
+  critically, the unauthenticated `GET /admin` render check that decides
+  whether to serve the login gate or the app shell — meaning a session was
+  refreshed by page loads alone, not just by admin actions.
+- **Logout:** `POST /admin/logout` did `adminSessions.delete(sessionId)` and
+  cleared the cookie.
+- **Bulk/rotation:** nothing referenced `adminSessions` on token rotation —
+  `ADMIN_TOKEN` is read once from `process.env` at module load, so rotating
+  it in the environment does not and never did touch already-minted
+  sessions. There was no admin-facing bulk-revoke endpoint or button at all.
+
+**Conclusion from the trace, before writing any fix:** the pre-existing
+`BUG_TRACKER.md` disposition ("Partial — 30-min absolute TTL now enforced")
+was itself wrong. `ADMIN_SESSION_TTL_MS` was never an absolute ceiling — it
+was the *idle* window, and because `GET /admin` alone (not even an
+authenticated action) reset it, a session note-idling-open tab could
+persist indefinitely. This is corrected in the `BUG_TRACKER.md` row itself
+(same "correction to the prior disposition" pattern `S05-M1` used), not
+silently overwritten.
+
+### The fix
+
+New `server/lib/adminSessionStore.js` — pure, dependency-free, no Firestore
+(admin sessions are a short-lived operational concern, same rationale
+`adminLockoutStore.js` already documents for why it doesn't persist either;
+this module explicitly documents that it is a knowing continuation of that
+existing tradeoff, not a new one). Structured like `adminLockoutStore`'s
+factory-with-injectable-clock, for the same reason: deterministic time
+control in tests without `setTimeout`-based sleeps.
+
+- `create({ ip, userAgent })` → session id, and stores `createdAt`,
+  `expiresAt` (idle-timeout-relative), and a separate `absoluteExpiresAt`
+  fixed at creation time and never modified afterward.
+- `validate(sessionId, { ip, userAgent }, { refresh = true })`:
+  1. Missing/unknown id → `{ valid: false, reason: "missing" }` /
+     `"not_found"`.
+  2. Revoked → `"revoked"`.
+  3. Past `absoluteExpiresAt` → `"absolute_expired"` (checked *before* the
+     idle check, so an absolute-expired session is never reported as merely
+     idle-expired).
+  4. Past `expiresAt` → `"idle_expired"`.
+  5. `ip` or `userAgent` mismatch → `"ip_mismatch"` / `"ua_mismatch"` —
+     **the session record is left intact**, not deleted, on a binding
+     mismatch. This was a deliberate choice: an IP mismatch is frequently a
+     legitimate carrier/NAT/VPN IP change mid-session for the actual
+     account holder, not necessarily an attacker — deleting the session on
+     first mismatch would force a full re-login for that ordinary case,
+     while just rejecting each mismatched request until the tag matches
+     again preserves continuity if the same client's tag returns (e.g. a
+     flaky mobile network), and still fully blocks a cookie replayed from a
+     genuinely different context throughout.
+  6. Otherwise valid; if `refresh` (default `true`), extends `expiresAt` to
+     `Math.min(now + idleTtlMs, absoluteExpiresAt)` — the `Math.min` is the
+     actual fix for the missing ceiling; a session already near its
+     absolute limit gets a shorter effective extension, never a longer one.
+- `revoke(sessionId)` / `revokeAll()` (returns the count revoked) /
+  `sweep()` (drops anything idle- or absolute-expired, called from the
+  existing 5-minute interval, now pointed at the store instead of the raw
+  Map).
+- `_get(sessionId)` — a diagnostic-only accessor used by the regression
+  tests to assert the capped `expiresAt` value directly, rather than only
+  being able to observe the eventual pass/fail of a subsequent `validate()`
+  call.
+
+**Wiring in `server/index.js`:**
+- `ADMIN_SESSION_IDLE_TTL_MS` (30 min, same value as before) and new
+  `ADMIN_SESSION_ABSOLUTE_TTL_MS` (8h) are both explicit constants;
+  `ADMIN_SESSION_TTL_MS` is kept as an alias to `ADMIN_SESSION_IDLE_TTL_MS`
+  so the cookie `Max-Age` sent to the browser (a hint only — the server-side
+  store is the actual control) is unchanged.
+- `createAdminSession(req)` now takes the request and passes
+  `ip: ipTag(getClientIp(req))` (the same pseudonymised tag `S05-M1`
+  already writes to the audit log — never the raw IP) and
+  `userAgent: req.headers["user-agent"] || ""`.
+- New `evaluateAdminSession(req, opts)` wraps `adminSessionStore.validate()`
+  with the current request's cookie/ip/userAgent; `hasValidAdminSession(req,
+  opts)` is now a thin boolean wrapper over it, preserving its existing
+  call signature/behavior for `requireAdminAuth`'s default (refreshing)
+  call.
+- `requireAdminAuth()` now calls `evaluateAdminSession(req)` (only when no
+  valid token was supplied — token auth still never touches the session
+  store at all) and includes the resulting `sessionCheck.reason` in both
+  the `console.warn` line and the `admin_api_unauthorized` audit event's
+  `sessionInvalidReason` field — an `ip_mismatch`/`ua_mismatch` (a plausible
+  stolen-cookie replay) is now distinguishable in the durable audit trail
+  from an ordinary `idle_expired`/`absolute_expired`/`missing`.
+- `GET /admin`'s render check now calls `hasValidAdminSession(req, {
+  refresh: false })` — this was the specific fix for "page loads alone
+  extend the session": that route needs to know if the caller is
+  authenticated (to decide which HTML to serve) but must not have the
+  side effect of extending anything, since it requires no auth of its own.
+- `POST /admin/logout` calls `adminSessionStore.revoke(sessionId)` (was
+  `adminSessions.delete(sessionId)` against the old raw Map — same
+  behavior, just moved onto the new store).
+- New `POST /admin/api/sessions/revoke-all`: gated by `requireAdminAuth`
+  like every other `/admin/api/*` route (so it accepts either the admin
+  token or an existing valid session), calls
+  `adminSessionStore.revokeAll()`, audits `admin_sessions_revoked_all` with
+  the revoked count, and — deliberately — clears the *caller's own* cookie
+  in the response too, so a "sign out everywhere" action does not quietly
+  spare the person who pressed the button. The admin panel gained a "Sign
+  out everywhere" button (with a `confirm()` prompt, since it is
+  destructive to every other logged-in operator's session too) next to the
+  existing single-session "Sign out".
+
+### Regression tests added
+
+`server/lib/adminSessionStore.test.js` (15 tests, run directly against the
+pure store with an injectable clock, same pattern as
+`adminLockoutStore.test.js`):
+
+1. `create()`/`validate()` round-trip for a normal session, matching
+   context — valid.
+2. Refresh before idle expiry extends `expiresAt` (asserted via `_get()`).
+3. Two absolute-lifetime tests: (3a) a session that receives no refreshes
+   still expires at exactly its absolute ceiling, not later; (3b) a session
+   refreshed *inside* its idle window but close to the absolute ceiling has
+   its `expiresAt` capped at `absoluteExpiresAt` (not `now + idleTtlMs`),
+   asserted directly via `_get()` before also confirming the eventual
+   `absolute_expired` rejection past that point.
+4. IP-tag mismatch is rejected as `ip_mismatch`, and the session is
+   confirmed still present/usable afterward from the correct context
+   (non-destructive).
+4b. User-Agent mismatch is rejected as `ua_mismatch`, same
+   non-destructive confirmation.
+5. A revoked session is rejected as `revoked` and cannot be revived.
+6. `revokeAll()` invalidates every active session at once and reports the
+   correct count; 6b covers the empty-store no-op case reporting `0`.
+7. A session refreshed multiple times in a row from the *same* consistent
+   context (the ordinary "operator keeps working" case) stays valid across
+   all of them and is never spuriously rejected.
+
+Plus edge cases: idle expiry without a refresh, `sweep()` removing both
+idle- and absolute-expired entries, and an unknown/missing session id
+returning `not_found`/`missing` rather than throwing.
+
+`server/lib/adminAuditWiring.test.js` (+4 tests, source-text wiring checks —
+same "wiring, not re-testing the logic" split the file's existing `S05-H2`
+test documents): session creation binds `ip`/`userAgent`; `GET /admin`
+passes `{ refresh: false }`; the revoke-all route is admin-gated, calls
+`adminSessionStore.revokeAll()`, and audits; logout calls
+`adminSessionStore.revoke(sessionId)`. `admin_sessions_revoked_all` was
+also added to the file's pre-existing required-audit-actions list (the
+`S05-M1` wiring test that scans every `auditAdminEvent(...)` call site).
+
+### Test evidence
+
+- `node --check index.js` — clean.
+- `node --test server/lib/adminSessionStore.test.js` — **15/15 pass**.
+- `node --test server/lib/adminAuditWiring.test.js` — **14/14 pass** (10
+  pre-existing + 4 new).
+- `cd server && npm test` (full suite) — **216/217 pass**. The 1 failure is
+  the same pre-existing `identityVerify.test.js` missing-native-module issue
+  (`Cannot find module '@signalapp/libsignal-client'`), reproduced again,
+  confirmed not a regression (198 baseline + 15 `adminSessionStore.test.js`
+  + 4 `adminAuditWiring.test.js` = 217 total, 216 passing).
+
+### Residual limitations (documented, not hidden)
+
+- The session store is in-memory (a `Map`, same as before this fix) — a
+  process restart or a multi-instance deployment without sticky sessions
+  still invalidates/fragments sessions. This is a pre-existing
+  characteristic of the whole admin-auth subsystem (the lockout store has
+  the identical tradeoff, explicitly documented in its own module comment)
+  and is out of this finding's scope to change.
+- `ADMIN_SESSION_ABSOLUTE_TTL_MS` (8h) is a code constant, not yet wired to
+  an env var — unlike `ADMIN_SESSION_IDLE_TTL_MS`/`ADMIN_TOKEN`, there was
+  no existing env-configuration convention for this specific value to
+  follow, and no requirement was given to make it operator-tunable. Noting
+  this as a real limitation rather than silently deciding it doesn't
+  matter.
+- IP/UA-mismatch handling rejects the mismatched request but does not
+  itself trigger a lockout-style escalation (e.g. auto-revoke after N
+  consecutive mismatches) — each mismatched request is independently
+  audited (`admin_api_unauthorized` with `sessionInvalidReason:
+  "ip_mismatch"`/`"ua_mismatch"`) and left for an operator to notice and
+  act on (e.g. via "Sign out everywhere"), rather than the system
+  automatically revoking on the admin's behalf. This matches the finding's
+  literal ask ("bind sessions... according to the audit requirements") —
+  binding + audit visibility — without inventing an auto-revoke policy that
+  was not requested and could itself become a denial-of-service vector
+  (an attacker deliberately triggering mismatches to force-revoke a
+  legitimate admin's session).
+
+### Documentation reconciled this session
+
+- `BUG_TRACKER.md`'s `S05-M3` row — moved from `Partial (corrected)` to
+  `Fixed`, with the prior disposition's inaccuracy corrected in place (the
+  "30-min absolute TTL now enforced" claim was false — it was idle-only)
+  and the full fix/evidence documented.
+- `SESSION-S3-13.md` (this file) — this section.
+- `START_HERE.md` / `SESSION_INDEX.md` — `NEXT SESSION` advanced to
+  `S3-14`, since this closes `S3-13`'s last remaining item.
+
+### Chain state
+
+`S3-13` is now fully closed (`S05-M1` fixed, `S05-H2` partial-by-design and
+E2E-verified, `S05-M3` fixed). `NEXT SESSION` advances to `S3-14`.
