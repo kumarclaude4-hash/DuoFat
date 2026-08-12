@@ -191,9 +191,15 @@ test("S05-H2: POST /admin/api/waitlist/deny exists, is admin-gated, and sets sta
   assert.ok(nextRouteStart > routeStart, "could not bound the deny handler");
   const handler = SERVER_SOURCE.slice(routeStart, nextRouteStart);
 
+  // S05-L2: the deny route (like every other admin POST route) now runs
+  // requireAdminAuth() via requireAdminAuthThenBody() BEFORE the body is
+  // read, rather than inside the body's "end" callback — asserting the
+  // wrapper call here is how this test proves that ordering, not just that
+  // auth happens somewhere in the handler.
   assert.ok(
-    handler.includes("requireAdminAuth(req, res)"),
-    "the deny endpoint must be gated by requireAdminAuth, same as every other /admin/api route"
+    handler.includes("requireAdminAuthThenBody(req, res"),
+    "the deny endpoint must be gated by requireAdminAuth *before* its body is read " +
+    "(via requireAdminAuthThenBody), same as every other /admin/api POST route"
   );
   assert.ok(
     /status\s*!==\s*"pending"/.test(handler),
@@ -247,9 +253,11 @@ test("S05-M3: POST /admin/api/sessions/revoke-all exists, is admin-gated, calls 
   assert.ok(nextRouteStart > routeStart, "could not bound the revoke-all handler");
   const handler = SERVER_SOURCE.slice(routeStart, nextRouteStart);
 
+  // S05-L2: same auth-before-body wiring check as the deny test above.
   assert.ok(
-    handler.includes("requireAdminAuth(req, res)"),
-    "revoke-all must be gated by requireAdminAuth, same as every other /admin/api route"
+    handler.includes("requireAdminAuthThenBody(req, res"),
+    "revoke-all must be gated by requireAdminAuth *before* its body is read " +
+    "(via requireAdminAuthThenBody), same as every other /admin/api POST route"
   );
   assert.ok(
     handler.includes("adminSessionStore.revokeAll()"),

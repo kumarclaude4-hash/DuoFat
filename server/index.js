@@ -207,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
+      // ─���� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -866,9 +866,32 @@ const safeTokenEqual = pure.safeTokenEqual;
 
 const validAdminUid = pure.validAdminUid;
 
+// S05-I3: `FORCE_SECURE_COOKIES` is an explicit escape hatch for an operator
+// who knows their deployment terminates TLS somewhere `req.socket.encrypted`
+// and X-Forwarded-Proto trust (below) can't see it. "true"/"false" pin the
+// flag; anything else (including unset) falls through to the automatic
+// detection in adminSessionCookie().
+const FORCE_SECURE_COOKIES = (() => {
+  const raw = String(process.env.FORCE_SECURE_COOKIES || "").trim().toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+})();
+
 function adminSessionCookie(sessionId, req, maxAgeSeconds) {
+  // S05-I3: `x-forwarded-proto` is client-suppliable, so the old
+  // `forwardedProto === "https" || …` check let ANY caller decide whether
+  // their own cookie got issued with `Secure` — never exploitable against a
+  // third party, but still the wrong trust boundary on the system's most
+  // privileged cookie. TRUSTED_PROXY_HOPS (above) is the operator's existing,
+  // explicit declaration of "there is a proxy in front of me I trust to set
+  // this header honestly" (S04-M3); reusing it here means the header is only
+  // consulted when the operator has said a trusted proxy is actually present,
+  // instead of unconditionally trusting whatever the client sends.
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
-  const isHttps = forwardedProto === "https" || Boolean(req.socket.encrypted);
+  const isHttps = FORCE_SECURE_COOKIES !== null
+    ? FORCE_SECURE_COOKIES
+    : (TRUSTED_PROXY_HOPS > 0 && forwardedProto === "https") || Boolean(req.socket.encrypted);
   // SameSite=Lax (not Strict): some Android browsers/in-app webviews decline to
   // attach a Strict cookie on the very next top-level navigation after the
   // login POST redirects to GET /admin, which silently drops the session and
@@ -929,6 +952,25 @@ function hasValidAdminSession(req, opts = {}) {
 // IIFE or an `async (body) => {}` collectBody callback) so this only adds
 // `await`, not new restructuring.
 async function requireAdminAuth(req, res) {
+  // S05-I3 (CSRF note): `SameSite=Strict` on the session cookie already blocks
+  // the cross-site case in every current browser, and CSP `form-action 'self'`
+  // covers form posts, so this was flagged as defense-in-depth rather than a
+  // live gap — but the mutating routes had exactly one such mechanism and no
+  // anti-CSRF token, `Origin`, or `Sec-Fetch-Site` check. `Sec-Fetch-Site` is
+  // sent by every current browser (Fetch Metadata) and cannot be set by an
+  // attacker page — it is set by the browser itself and describes the
+  // relationship between the REQUESTING page and this origin. Reject only the
+  // unambiguous cross-site case; leave `same-origin`/`same-site`/`none`
+  // (direct navigation, no Referer, or an older browser that omits the
+  // header) untouched so this is purely additive and cannot break a
+  // legitimate same-origin admin-panel request.
+  const secFetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+  if (secFetchSite === "cross-site") {
+    auditAdminEvent("admin_api_blocked_cross_site", req, { path: String(req.url).slice(0, 200) });
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-site request rejected");
+    return false;
+  }
   const ip = getClientIp(req);
   if (await adminIpLocked(ip)) {
     auditAdminEvent("admin_api_blocked_locked_out", req, { path: String(req.url).slice(0, 200) });
@@ -1236,7 +1278,14 @@ function readBody(req, res) {
 // Callback-style counterpart to readBody(), for handlers written in the
 // on("data")/on("end") style (several routes below need to run
 // requireAdminAuth or other checks before body parsing, so they never
-// migrated to the Promise-based helper above). Enforces the same
+// migrated to the Promise-based helper above). S05-L2: that ordering used to
+// be aspirational — every admin route called this FIRST and ran
+// requireAdminAuth() only inside the "end" callback, letting an
+// unauthenticated caller make the server buffer a body and hold the socket
+// open before ever being rejected. requireAdminAuthThenBody() (below) is now
+// the actual enforcement point: it runs requireAdminAuth() first and only
+// calls into this function on success, so the auth-before-body order this
+// comment describes is real again. Enforces the same
 // MAX_BODY_BYTES cap: the naive `body += chunk` pattern this replaces has
 // no size limit of its own — it only inherited protection from the
 // declared Content-Length pre-check up in the request handler, which a
@@ -1273,12 +1322,44 @@ function collectBody(req, res, onComplete) {
   });
 }
 
+// S05-L2: every admin POST route used to call collectBody() FIRST and run
+// requireAdminAuth() only inside the "end" callback — the exact inverse of
+// what the comment on collectBody() above claims. requireAdminAuth() reads
+// only headers and the session cookie, so nothing about it requires waiting
+// for the body; running it here means an unauthenticated caller is rejected
+// (401/429/503) before the server buffers a single byte of body or holds the
+// socket open trickling toward MAX_BODY_BYTES for as long as Node's default
+// requestTimeout allows — previously free for an attacker to do repeatedly
+// against a single-process server that also carries FCM delivery. On
+// rejection the request is explicitly destroyed rather than left to drain on
+// its own, so an unauthenticated caller cannot hold the connection open past
+// its own 401/429/503 by continuing to trickle bytes it knows will never be
+// read.
+function requireAdminAuthThenBody(req, res, onBody) {
+  (async () => {
+    if (!(await requireAdminAuth(req, res))) {
+      req.destroy();
+      return;
+    }
+    collectBody(req, res, onBody);
+  })();
+}
+
 // ── Admin panel HTML shell ─────────────────────────────────────────────────────
 // Self-contained page (no build step, no external assets) served at GET /admin.
-// Prompts for the operator token once, keeps it in memory only (never
-// persisted to localStorage/cookies), and sends it as `x-admin-token` on
-// every fetch to /admin/api/*. All rendered values go through textContent,
-// never innerHTML, so nothing from Firestore can execute as markup.
+//
+// S05-I2: this comment used to describe the page prompting for and holding the
+// operator token in memory, then sending it as `x-admin-token` on every
+// fetch. That is no longer how the page authenticates: the login form below
+// posts the token once to POST /admin/login, which exchanges it for an
+// HttpOnly, session-cookie-backed session (adminSessionCookie() /
+// requireAdminAuth() above) — the page itself never sees or holds the token
+// after that POST, and every /admin/api/* fetch below relies on the browser
+// attaching that cookie automatically. `x-admin-token` remains a valid
+// SECOND auth path for scripted/non-browser callers (requireAdminAuth
+// accepts either), but the browser UI does not use it. All rendered values
+// go through textContent, never innerHTML, so nothing from Firestore can
+// execute as markup.
 const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2072,6 +2153,27 @@ function buildAdminCsp(nonce) {
 }
 
 function setBaselineSecurityHeaders(req, res) {
+  // S05-L3: this function set seven security headers but never Cache-Control,
+  // so every /admin/api/* JSON response (locked-account list, duress-enrolled
+  // list, audit log, waitlist queue) fell through with none — a bare `200`
+  // with no cache directives and no `Vary` is heuristically cacheable by the
+  // browser's disk cache (recoverable from an operator's machine or backup —
+  // this tool's threat model includes device seizure) and by any future
+  // shared cache (S04-M3 flags "operator puts Cloudflare in front of the API
+  // server" as realistic). GET /admin already set its own, stricter
+  // Cache-Control further down (no-store, no-cache, must-revalidate, plus
+  // Pragma/Expires) — writeHead()'s headers object always wins over a prior
+  // setHeader() call for the same header name (verified: Node does not merge,
+  // it overwrites), so setting the same-or-weaker `no-store` here for every
+  // `/admin*` path is additive, not a regression on that route. `Vary: Cookie`
+  // is set alongside it because authorization on every one of these routes
+  // depends on the session cookie, so a shared cache must not conflate
+  // responses for different cookies (or none) even if `no-store` were
+  // ever weakened later.
+  if (String(req.url || "").startsWith("/admin")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Vary", "Cookie");
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Frame-Options", "DENY");
@@ -2092,7 +2194,7 @@ function setBaselineSecurityHeaders(req, res) {
 }
 
 // ── Health + status + mintToken HTTP server ───────────────────────────────────
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
 
   // Baseline security headers on every response (merged with, and overridable by,
   // each route's writeHead — see setBaselineSecurityHeaders above).
@@ -2986,7 +3088,7 @@ http.createServer((req, res) => {
           return;
         }
 
-        // ── Cloudflare credentials ───────────────────────────────────────────
+        // ── Cloudflare credentials ─────────��─────────────────────────────────
         const tokenId  = process.env.TURN_TOKEN_ID  || "";
         const apiToken = process.env.TURN_API_TOKEN || "";
         if (!tokenId || !apiToken) {
@@ -3977,7 +4079,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/waitlist ────────���──────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns pending waitlist requests, newest
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns pending waitlist requests, newest
   // first, so the operator can see who's asking for access.
   if (req.method === "GET" && req.url === "/admin/api/waitlist") {
     (async () => {
@@ -4011,12 +4113,11 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/waitlist/approve ──────────────────────────────────────
   //
-  // Body: { requestId }. Auth: x-admin-token header.
+  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Flips a pending waitlist doc to status: "approved" so the requester's
   // next /waitlistStatus poll lets them proceed to account creation.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4031,18 +4132,35 @@ http.createServer((req, res) => {
           return;
         }
         const ref = db.collection("waitlist").doc(requestId);
-        const snap = await ref.get();
-        if (!snap.exists) {
+        // S05-L4: this used to be a plain get()-then-update() outside any
+        // transaction. Two concurrent approvals of the same requestId both
+        // observed status === "pending" and both wrote "approved" — harmless
+        // to the waitlist doc itself (idempotent, and /mintToken's own
+        // transaction is the real single-use gate), but it produced TWO
+        // audit_approved rows for one effective action, corrupting the
+        // record S05-H3 made authoritative. db.runTransaction() serializes
+        // concurrent callers on this doc: only the first to commit observes
+        // "pending" and writes; a retried/losing transaction re-reads the
+        // now-"approved" doc and takes the already-handled branch below
+        // instead of writing or auditing again.
+        let notFound = false;
+        let alreadyStatus = null;
+        await db.runTransaction(async (txn) => {
+          const snap = await txn.get(ref);
+          if (!snap.exists) { notFound = true; return; }
+          if (snap.data().status !== "pending") { alreadyStatus = snap.data().status; return; }
+          txn.update(ref, { status: "approved", approvedAt: FieldValue.serverTimestamp() });
+        });
+        if (notFound) {
           res.writeHead(404, { "Content-Type": "text/plain" });
           res.end("Request not found");
           return;
         }
-        if (snap.data().status !== "pending") {
+        if (alreadyStatus) {
           res.writeHead(409, { "Content-Type": "text/plain" });
-          res.end(`Request is already "${snap.data().status}", not pending`);
+          res.end(`Request is already "${alreadyStatus}", not pending`);
           return;
         }
-        await ref.update({ status: "approved", approvedAt: FieldValue.serverTimestamp() });
         console.log(`[admin] waitlist request approved: requestId=${reqTag(requestId)}`);
 
         // S05-M1: this used to write directly to adminAuditLog with a raw
@@ -4062,9 +4180,9 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/waitlist/deny ─────────────────────────────────────────
+  // ── POST /admin/api/waitlist/deny ───���─────────────────────────────────────
   //
-  // Body: { requestId }. Auth: x-admin-token header.
+  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // S05-H2: prior to this endpoint the ONLY mutation available on a waitlist
   // doc was pending -> approved — a junk/flood request could never be
   // rejected, so the queue grew forever and a sustained trickle of garbage
@@ -4074,8 +4192,7 @@ http.createServer((req, res) => {
   // payload, no expiry on approved-but-unused invites, no pagination) — it
   // closes the specific "no deny path" gap that S3-13's exit criteria names.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/deny") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4117,14 +4234,24 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/locked ─────────────────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns currently-locked accounts so the
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns currently-locked accounts so the
   // operator can see who's frozen and pick one to unfreeze.
   if (req.method === "GET" && req.url === "/admin/api/locked") {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
+        // S05-L4: this query had no limit(), unlike the waitlist query
+        // (limit(200)) and the audit log (limit(100)) elsewhere in this file.
+        // Clients can create their own accountLock doc (firestore.rules), so
+        // the locked set grows with the user base and with any attacker
+        // holding multiple accounts, and the whole result set was previously
+        // materialized into one JSON response on a single-process server.
+        // limit(500) bounds that; the panel is not paginated beyond this cap,
+        // which is an accepted, documented degradation, not a fix of the
+        // finding's full ask.
         const snap = await db.collection("accountLock")
           .where("locked", "==", true)
+          .limit(500)
           .get();
         const accounts = snap.docs.map((d) => {
           const data = d.data();
@@ -4142,12 +4269,11 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/locked/unfreeze ───────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be
   // removed, per firestore.rules (clients get `allow delete: if false`).
   if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4162,12 +4288,6 @@ http.createServer((req, res) => {
           return;
         }
         const ref = db.collection("accountLock").doc(uid);
-        const snap = await ref.get();
-        if (!snap.exists) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          res.end("No lock found for this uid");
-          return;
-        }
         // ── §8 / S06-M6: unfreeze must hand back a RE-ARMABLE state ───────────
         // A plain delete used to leave the account in the promote-and-rotate
         // "duress fired" state permanently: the duress code D is now the primary
@@ -4184,12 +4304,41 @@ http.createServer((req, res) => {
         // This lives server-side rather than in SecurePrefs specifically so it
         // survives a reinstall — a local flag would be dropped by exactly the
         // wipe that necessitated the unfreeze.
-        await ref.set({
-          locked:           false,
-          rotationRequired: true,
-          unfrozenAt:       FieldValue.serverTimestamp(),
-          lockedAt:         snap.data().lockedAt || null,  // preserve trigger time (S06-L6)
+        //
+        // S05-L4: this used to be a plain get()-then-set() outside any
+        // transaction, and it unconditionally wrote regardless of the doc's
+        // current `locked` value. Two concurrent unfreeze calls both observed
+        // the doc existed and both wrote — idempotent in the sense that the
+        // final state was the same, but each write re-stamped unfrozenAt and
+        // each was audited separately, producing two account_unfrozen rows
+        // for one effective action. db.runTransaction() plus a `locked ===
+        // true` guard closes both: only a doc that is actually currently
+        // locked gets unfrozen and audited; a retried/losing transaction (or
+        // a call against an already-unfrozen doc) takes the already-handled
+        // branch below instead.
+        let notFound = false;
+        let alreadyUnlocked = false;
+        await db.runTransaction(async (txn) => {
+          const snap = await txn.get(ref);
+          if (!snap.exists) { notFound = true; return; }
+          if (snap.data().locked !== true) { alreadyUnlocked = true; return; }
+          txn.set(ref, {
+            locked:           false,
+            rotationRequired: true,
+            unfrozenAt:       FieldValue.serverTimestamp(),
+            lockedAt:         snap.data().lockedAt || null,  // preserve trigger time (S06-L6)
+          });
         });
+        if (notFound) {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("No lock found for this uid");
+          return;
+        }
+        if (alreadyUnlocked) {
+          res.writeHead(409, { "Content-Type": "text/plain" });
+          res.end("Account is not currently locked");
+          return;
+        }
         // S06-M3: pseudonymise. GET /admin/api/locked is the operator's view of
         // real uids; the log does not need to hold a duress-linked cleartext id.
         console.log(`[admin] account unfrozen, rotation required: uid=${uidTag(uid)}`);
@@ -4224,8 +4373,7 @@ http.createServer((req, res) => {
   // everywhere" action that quietly spared the button-presser's own session
   // would not be a credible incident-response tool.
   if (req.method === "POST" && req.url === "/admin/api/sessions/revoke-all") {
-    collectBody(req, res, async () => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async () => {
       try {
         const revokedCount = adminSessionStore.revokeAll();
         auditAdminEvent("admin_sessions_revoked_all", req, { revokedCount });
@@ -4247,14 +4395,18 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/duress/enrolled ───────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns all accounts currently enrolled for
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns all accounts currently enrolled for
   // duress-PIN eligibility (duressEligibility/{uid}.eligible == true).
   if (req.method === "GET" && req.url === "/admin/api/duress/enrolled") {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
+        // S05-L4: same unbounded-.get() gap as GET /admin/api/locked above —
+        // limit(500) bounds it; see that route's comment for the full
+        // rationale.
         const snap = await db.collection("duressEligibility")
           .where("eligible", "==", true)
+          .limit(500)
           .get();
         const accounts = snap.docs.map((d) => {
           const data = d.data();
@@ -4273,17 +4425,25 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/account/lookup?uid=... ───────���────────────────────────
   //
-  // Auth: x-admin-token header. Looks up whether an account with this UID
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Looks up whether an account with this UID
   // actually exists (identities/{uid}) and its current duress-PIN eligibility
   // status. Used by the admin panel's "search by UID" step before enabling —
   // enrollment must never be granted blind to a UID that isn't a real account.
-  if (req.method === "GET" && req.url.startsWith("/admin/api/account/lookup")) {
+  if (req.method === "GET" && new URL(req.url, "http://localhost").pathname === "/admin/api/account/lookup") {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
         const requestUrl = new URL(req.url, "http://localhost");
         const uid = requestUrl.searchParams.get("uid") || "";
-        if (!uid || uid.length > 128) {
+        // S05-L1: this used to check only `!uid || uid.length > 128` — the one
+        // uid-taking admin route that skipped validAdminUid(), which the other
+        // three already use. `.doc()` accepts a slash-separated path, so
+        // `?uid=a/b/c` resolved to `identities/a/b/c`, an existence oracle over
+        // arbitrary nested document paths (plus a second one via
+        // duressEligibility below). validAdminUid() also now rejects the
+        // Firestore-reserved "."/".."/"__…__" shapes, so a malformed id yields
+        // this 400 instead of an uncaught 500 from `.doc()`.
+        if (!validAdminUid(uid)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing or invalid uid");
           return;
@@ -4305,14 +4465,13 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Creates or updates duressEligibility/{uid} with eligible:true so the app
   // shows the secondary-PIN setup UI for that account on next eligibility check.
   // Requires the UID to correspond to a real account (identities/{uid}) —
   // enrollment is never granted blind to an unverified/nonexistent UID.
   if (req.method === "POST" && req.url === "/admin/api/duress/enroll") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4365,12 +4524,11 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/duress/revoke ─────────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Sets eligible:false on duressEligibility/{uid} — the client's cached flag
   // is updated on the next eligibility refresh (sign-in or foreground).
   if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
-    collectBody(req, res, async (body) => {
-      if (!(await requireAdminAuth(req, res))) return;
+    requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
         try { parsed = JSON.parse(body); } catch (_) {
@@ -4410,7 +4568,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/auditlog ───────────────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns the 100 most-recent admin actions
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns the 100 most-recent admin actions
   // (waitlist approvals + account unfreezes) so the operator has a tamper-
   // evident record of who did what and when.
   if (req.method === "GET" && req.url === "/admin/api/auditlog") {
@@ -4438,7 +4596,21 @@ http.createServer((req, res) => {
   res.writeHead(404);
   res.end("Not found");
 
-}).listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
+});
+
+// S05-L2: Node's defaults (headersTimeout 60s, requestTimeout 300s in Node 20,
+// which package.json:115 pins) previously applied with no override anywhere
+// in this file, so an unauthenticated caller could hold a socket open for up
+// to five minutes trickling a body toward MAX_BODY_BYTES against a
+// single-process server that also carries FCM delivery. requireAdminAuth()
+// now runs before any body is read (see requireAdminAuthThenBody() above),
+// which closes the main gap; these bound the remaining unauthenticated
+// exposure (header-only requests, and any body-reading route) to a much
+// smaller window.
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
+
+server.listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
 
 // ── B2 SigV4 presign surface removed (S03-L3 / S04-I2) ────────────────────────
 // `b2PresignUrl` and its lock-bound wrapper `b2PresignUrlForUid` used to live
