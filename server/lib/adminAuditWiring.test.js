@@ -40,6 +40,7 @@ const REQUIRED_AUDIT_ACTIONS = [
   "admin_login_failed",
   "admin_login_succeeded",
   "admin_logout",
+  "admin_sessions_revoked_all", // S05-M3: bulk session revocation
 ];
 
 test("every admin auth event is wired to the durable audit sink", () => {
@@ -206,6 +207,67 @@ test("S05-H2: POST /admin/api/waitlist/deny exists, is admin-gated, and sets sta
   assert.ok(
     handler.includes('auditAdminEvent("waitlist_denied"'),
     "a denial must leave a durable audit trail, same as approval"
+  );
+});
+
+// ── S05-M3 wiring tests ──────────────────────────────────────────────────
+//
+// The pure absolute-lifetime/idle/binding/revoke-all LOGIC lives in
+// lib/adminSessionStore.js and is exercised directly (not via source-text
+// matching) in lib/adminSessionStore.test.js. These tests instead prove
+// index.js is actually WIRED to that store correctly — same "wiring, not
+// re-testing the logic" split S05-H2 above uses.
+
+test("S05-M3: session creation binds ip and userAgent context, not just an id", () => {
+  const fnStart = SERVER_SOURCE.indexOf("function createAdminSession(req)");
+  assert.ok(fnStart > 0, "createAdminSession(req) not found — must accept the request to bind client context");
+  const fnEnd = SERVER_SOURCE.indexOf("\n}", fnStart);
+  const body = SERVER_SOURCE.slice(fnStart, fnEnd);
+  assert.ok(body.includes("adminSessionStore.create("), "createAdminSession must delegate to adminSessionStore.create()");
+  assert.ok(/ip:\s*ipTag\(getClientIp\(req\)\)/.test(body), "the session must be bound to the pseudonymised IP tag, not the raw IP");
+  assert.ok(/userAgent:\s*req\.headers\["user-agent"\]/.test(body), "the session must be bound to the request's User-Agent");
+});
+
+test("S05-M3: GET /admin does not refresh (extend) the session it merely reads", () => {
+  const routeStart = SERVER_SOURCE.indexOf('req.method === "GET" && requestPath === "/admin"');
+  assert.ok(routeStart > 0, "GET /admin route not found");
+  const slice = SERVER_SOURCE.slice(routeStart, routeStart + 800);
+  assert.ok(
+    /hasValidAdminSession\(req,\s*\{\s*refresh:\s*false\s*\}\)/.test(slice),
+    "GET /admin must call hasValidAdminSession(req, { refresh: false }) — an unauthenticated view-only " +
+    "request must not silently extend the session's idle timeout"
+  );
+});
+
+test("S05-M3: POST /admin/api/sessions/revoke-all exists, is admin-gated, calls revokeAll, and audits", () => {
+  const routeStart = SERVER_SOURCE.indexOf('req.url === "/admin/api/sessions/revoke-all"');
+  assert.ok(routeStart > 0, "no POST /admin/api/sessions/revoke-all route found — bulk revocation is missing");
+
+  const nextRouteStart = SERVER_SOURCE.indexOf('req.url === "/admin/api/duress/enrolled"', routeStart);
+  assert.ok(nextRouteStart > routeStart, "could not bound the revoke-all handler");
+  const handler = SERVER_SOURCE.slice(routeStart, nextRouteStart);
+
+  assert.ok(
+    handler.includes("requireAdminAuth(req, res)"),
+    "revoke-all must be gated by requireAdminAuth, same as every other /admin/api route"
+  );
+  assert.ok(
+    handler.includes("adminSessionStore.revokeAll()"),
+    "revoke-all must actually call the store's bulk-revoke, not just return ok"
+  );
+  assert.ok(
+    handler.includes('auditAdminEvent("admin_sessions_revoked_all"'),
+    "a bulk revocation must leave a durable audit trail"
+  );
+});
+
+test("S05-M3: logout revokes the session in the durable store, not just deletes a cookie", () => {
+  const routeStart = SERVER_SOURCE.indexOf('req.method === "POST" && requestPath === "/admin/logout"');
+  assert.ok(routeStart > 0, "POST /admin/logout route not found");
+  const slice = SERVER_SOURCE.slice(routeStart, routeStart + 400);
+  assert.ok(
+    slice.includes("adminSessionStore.revoke(sessionId)"),
+    "logout must call adminSessionStore.revoke(sessionId) so the session cannot be replayed after logout"
   );
 });
 
