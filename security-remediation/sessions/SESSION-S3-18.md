@@ -1,15 +1,18 @@
 # SESSION-S3-18 — Android platform privacy
 
 **Lane:** AND (verify BLOCKED → S3-19b)
-**Status:** PARTIAL. Two of this session's three plan-scoped findings are
-source-fixed and land **Partial** (`S08-H2`, `S08-H3`); the third (`S08-L4`)
-and the temp-prefix-sweep sub-item of `S08-H3` were **not** addressed by the
-committed implementation and remain **Open** — see "Scope not completed"
-below. Implementation had already landed on this branch (commit `bdcad65`)
-before this documentation-and-verification pass started; this session's job
-was to independently re-verify every change against current source (not trust
-the prior commit messages), run the available structural checks, and close out
-the tracker/session/index/start-here documentation for what was actually done.
+**Status:** PARTIAL, but now **scope-complete**. All three plan-scoped
+findings (`S08-H2`, `S08-H3`, `S08-L4`) are source-fixed/source-reviewed and
+land **Partial**. The original pass (documented in the body of this file
+below) closed `S08-H2` and the Glide-disk-cache half of `S08-H3`, but left
+`S08-L4` and the `S08-H3` "sweep 4 temp prefixes" sub-item **Open**. A
+follow-up continuation (see "Continuation — closing the remaining scope"
+near the end of this file) closed both of those. Implementation had already
+landed on this branch (commit `bdcad65`) before the first documentation-and-
+verification pass started; every pass's job was to independently re-verify
+each change against current source (not trust prior commit messages), run
+the available structural checks, and close out the tracker/session/index/
+start-here documentation for what was actually done.
 **Model:** v0
 **Sequencing note:** this is the plan's actual next unstarted session — no
 out-of-order pickup. `S3-17` (the session immediately before this one) is
@@ -264,40 +267,151 @@ gate is S3-19b's.
   this file plus `START_HERE.md` and `SESSION_INDEX.md`.
 - No accidental encoding changes; no cosmetic-only reformatting bundled in.
 
-## Chain state
+## Chain state (superseded — see "Continuation" below)
 
-S3-18 is **partially** complete. `S08-H2` and the Glide-disk-cache half of
-`S08-H3` are source-fixed, verified from source, structurally checked, and land
-**Partial** (AND-lane compile/test execution BLOCKED → **S3-19b**). The
-`S08-H3` "sweep 4 temp prefixes" sub-item and all of `S08-L4` were **not**
-implemented and remain **Open**, carried forward as the remaining S3-18 work.
+S3-18 was **partially** complete at the end of the first pass. `S08-H2` and
+the Glide-disk-cache half of `S08-H3` were source-fixed, verified from source,
+structurally checked, and landed **Partial** (AND-lane compile/test execution
+BLOCKED → **S3-19b**). The `S08-H3` "sweep 4 temp prefixes" sub-item and all of
+`S08-L4` were **not** implemented and remained **Open**, carried forward as
+remaining S3-18 work.
 
-Because two scoped items are still open, **the chain state does NOT advance to
-S3-19.** `NEXT SESSION` remains **S3-18** with the remaining scope named
-explicitly. Neither catch-up gate (S3-15b RULES, S3-19b Android) has run; all
-AND-lane compile/test promotion for `S08-H2`/`S08-H3` remains BLOCKED pending
-S3-19b.
+Because two scoped items were still open at that point, the chain state did
+**not** advance to S3-19. Both remaining items were closed in the continuation
+pass documented below; the chain state now points to **S3-19** (see
+`START_HERE.md`/`SESSION_INDEX.md`, updated in that continuation's own
+documentation commit).
+
+## Continuation — closing the remaining scope (S08-H3 temp-sweep sub-item, S08-L4)
+
+**State found at continuation start:** `git log --oneline -8` showed the
+`S08-H3` temp-prefix sweep already implemented and committed
+(`5171495` — `fix(s08-h3): sweep plaintext camera/thumbnail temp files from
+cache`), landed after the first S3-18 documentation commit but before this
+continuation began; `git status` was clean. `S08-L4` was still `Open` in
+`BUG_TRACKER.md` and `AndroidManifest.xml` had no `excludeFromRecents`,
+`noHistory`, or `launchMode` on `.LockScreenActivity`.
+
+### S08-H3 temp-prefix sweep — verified, not re-implemented
+
+Re-read `TempFileCleaner.java` in full against the already-landed `5171495`
+diff: `isTempMediaFile()` now additionally matches `cam_*.jpg`
+(`ChatMediaActivity`), `grp_cam_*.jpg` (`GroupChatActivity`), `thumb_*.mp4`
+(`B2StorageHelper` frame-extraction scratch), and `enc_*.tmp` (upload-encrypt
+scratch), on top of the pre-existing `voice_`/`vid_`/`share_`/
+`duoshield_export_` prefixes and the `chat_export_*` directory/`DuoShield_
+Export_*.zip` handling. Confirmed the commit's own claims against source:
+
+- `cam_*.jpg`/`grp_cam_*.jpg` are the genuine leak — plaintext camera captures
+  hand off to the device camera app via `FileProvider`, and DuoShield never
+  deletes them itself once control returns.
+- `vid_view_*.mp4` (`MediaViewerActivity`) needs no separate rule — it already
+  matches the existing `vid_*.mp4` prefix rule (confirmed by re-reading the
+  matcher, which checks `startsWith("vid_")`, not an exact literal).
+- `b2dl_*.enc` (`B2StorageHelper`) is deliberately not added as a top-level
+  rule — confirmed it is created inside the `chat_export_<ts>/` working
+  directory (a cache subdirectory), which the pre-existing recursive
+  `chat_export_` directory sweep already deletes wholesale; a redundant
+  top-level rule would be dead code.
+
+No code change was needed for this sub-item in this continuation — it was
+already correctly implemented and is recorded here as independently
+re-verified, not re-done.
+
+### S08-L4 — lock screen not excluded from recents — fixed this continuation
+
+Read the finding in full (`audit/SESSION-08-CLIENT-PLATFORM.md`), then
+`BaseActivity.java`, `LockScreenActivity.java`, and the `AndroidManifest.xml`
+entry for `.LockScreenActivity`. Confirmed the finding's literal claim: the
+manifest entry carried `exported="false"` and a `theme` but no
+`excludeFromRecents`, `noHistory`, or `launchMode` at all.
+
+**Fix (`AndroidManifest.xml`, commit `e284fb5`):** added
+`android:excludeFromRecents="true"` and `android:launchMode="singleTask"` to
+the `.LockScreenActivity` entry. `excludeFromRecents` keeps the lock screen —
+and, since it is the task's top activity while shown, the task's recents
+thumbnail — out of the system recents list. `singleTask` backs the existing
+`BaseActivity.lockScreenActive` boolean guard (set before every
+`startActivity(LockScreenActivity)` call in `BaseActivity.onStart()` and
+`onShakeToLock()`) so a second `FLAG_ACTIVITY_NEW_TASK` start while one
+instance is already showing cannot stack a duplicate.
+
+Confirmed the finding's other requested change — "set `FLAG_SECURE` on it
+rather than clearing it" — needed no new work: `LockScreenActivity.onCreate()`
+already calls `BaseActivity.applyScreenshotSecurity(this)` as of this same
+session's earlier `S08-H2` fix, which applies `FLAG_SECURE` by default and
+only lifts it if the user has explicitly opted into `app_screenshot_enabled`.
+
+**Deliberately not attempted:** the finding's remaining recommendation — move
+the lock decision from `BaseActivity.onStart()` (which fires after the
+underlying activity's `onCreate()` has already inflated and populated its
+content) into `onCreate()` before inflation, or show an immediate opaque
+overlay — was not attempted. `onStart()` is the single choke point every
+`BaseActivity`-derived screen already routes sign-out/lock/duress-credential
+logic through; reordering it would mean either restructuring every subclass's
+`onCreate()`/`setContentView()` sequence or adding an overlay view to every
+screen's layout — a change with a blast radius this environment cannot
+regression-test without a compiler. The residual gap this leaves is narrow: a
+brief moment where content is laid out before being covered, reachable only
+via a recents capture at exactly that instant, and only when the user has
+explicitly disabled the secure-by-default screenshot preference (S08-H2's
+fix already blanks the recents thumbnail in the default case).
+
+**New regression coverage:** `LockScreenManifestTest.java` — a plain JVM
+`javax.xml.parsers.DocumentBuilder` test (no Android SDK/Robolectric
+dependency) that parses `AndroidManifest.xml` directly off disk and asserts
+the `.LockScreenActivity` `<activity>` element carries both
+`android:excludeFromRecents="true"` and `android:launchMode="singleTask"`.
+The assertions were hand-verified against the live manifest with
+`xmllint --xpath '//*[local-name()="activity"][@*[local-name()="name"]=
+".LockScreenActivity"]'` in this session (attributes render exactly as
+written; exactly one `.LockScreenActivity` entry exists in the manifest) —
+but the test file itself has not been compiled or run, same toolchain
+blocker as everything else routed to S3-19b.
+
+### Continuation disposition
+
+- **`S08-H3` temp-prefix sweep** → confirmed already correctly implemented
+  (commit `5171495`, landed before this continuation); `BUG_TRACKER.md`'s
+  `S08-H3` row already documents it in full detail from the prior pass.
+- **`S08-L4`** → **Partial** (commit `e284fb5`, this continuation).
+  `BUG_TRACKER.md`'s `S08-L4` row updated from `Open`/`Carried` to
+  `**Partial** (S3-18)`/`Verified`.
+- Both remain **Partial**, not Fixed, for the same reason as every other
+  AND-lane finding this round: no JDK/Gradle/Android SDK in this environment.
+  Source-reviewed, structurally checked (manifest confirmed well-formed with
+  `xmllint --noout`; the target attributes confirmed present with
+  `xmllint --xpath`), not compiled. AND-lane verification for all of
+  `S08-H2`/`S08-H3`/`S08-L4` remains routed to **S3-19b**.
+
+With both remaining items closed, **S3-18 is now scope-complete** (all three
+plan-scoped findings source-fixed/source-reviewed) and the chain state
+advances to **S3-19**.
 
 ## Session record
 
 ```
-SESSION: S3-18  MODEL: v0  CLUSTER: Android platform privacy (S08-H2, S08-H3, S08-L4)  STATUS: partial (S08-H2 + S08-H3 Glide-half source-fixed → Partial, AND-verification BLOCKED → S3-19b; S08-H3 temp-prefix-sweep sub-item + S08-L4 NOT implemented, remain Open/carried)
+SESSION: S3-18  MODEL: v0  CLUSTER: Android platform privacy (S08-H2, S08-H3, S08-L4)  STATUS: partial, scope-complete (all 3 findings source-fixed/source-reviewed → Partial, AND-verification BLOCKED → S3-19b)
 SEQUENCING: plan's actual next unstarted session — no out-of-order pickup. S3-17 was already closed before this session began.
-CHANGES (already committed on this branch before this session; independently re-verified from source, not newly written):
+CHANGES (S08-H2 + S08-H3 Glide-half already committed on this branch before the first pass; S08-H3 temp-sweep already committed before this continuation; S08-L4 implemented in this continuation):
   - app/src/main/java/com/duoshield/app/BaseActivity.java: + applyScreenshotSecurity(Activity) reading app_screenshot_enabled (default false → FLAG_SECURE applied), onCreate() routes through it (S08-H2)
   - app/src/main/java/com/duoshield/app/MainActivity.java + LockScreenActivity.java: onCreate() calls BaseActivity.applyScreenshotSecurity(this), unused WindowManager import removed (S08-H2)
   - app/src/main/java/com/duoshield/app/ui/SecurityPrivacySettingsActivity.java: applyScreenshotFlag(boolean allow) now honours allow instead of always clearing FLAG_SECURE (S08-H2)
   - app/src/main/java/com/duoshield/app/db/MessageDao.java: deleteExpired void→int (Room affected-row count) (S08-H3)
   - app/src/main/java/com/duoshield/app/db/SelfDestructWorker.java: count propagated from Room + Firestore deletes; Glide.clearDiskCache() called (off main thread, try/catch) only when roomDeleted>0||firestoreDeleted>0 (S08-H3)
+  - app/src/main/java/com/duoshield/app/util/TempFileCleaner.java: isTempMediaFile() extended to cam_*.jpg/grp_cam_*.jpg/thumb_*.mp4/enc_*.tmp (S08-H3, commit 5171495, verified not re-implemented)
+  - app/src/main/AndroidManifest.xml: .LockScreenActivity gains android:excludeFromRecents="true" + android:launchMode="singleTask" (S08-L4, commit e284fb5, this continuation)
+  - app/src/test/java/com/duoshield/app/LockScreenManifestTest.java: new plain-JVM XML-parse regression test for the S08-L4 manifest attributes (this continuation)
 DOCUMENTATION:
-  - BUG_TRACKER.md: S08-H2 + S08-H3 rows Open→Partial (S3-18) — already committed in 4a80703, verified accurate this session (not re-touched)
-  - START_HERE.md / SESSION_INDEX.md / SESSION-S3-18.md: chain-state + index + session log (this session's documentation commit)
+  - BUG_TRACKER.md: S08-H2 + S08-H3 rows Open→Partial (S3-18) from the first pass (commit 4a80703); S08-L4 row Open/Carried→Partial (S3-18) this continuation
+  - START_HERE.md / SESSION_INDEX.md / SESSION-S3-18.md: chain-state + index + session log, updated across both passes (documentation commits separate from implementation throughout)
 VERIFICATION:
-  PASS: independent source re-derivation of S08-H2 and S08-H3 against current code — confirmed FLAG_SECURE default-secure + toggle honours allow + no remaining unconditional clear; confirmed deleteExpired returns int, SelfDestructWorker propagates the count and clears Glide disk cache only on a non-empty delete pass (zero-expired safety holds), off the main thread, non-fatal on failure, no legitimate Glide caching path disabled
-  PASS: brace/paren/bracket balance on all 6 touched .java files (all BALANCED)
+  PASS: independent source re-derivation of S08-H2 and S08-H3 against current code (first pass) — confirmed FLAG_SECURE default-secure + toggle honours allow + no remaining unconditional clear; confirmed deleteExpired returns int, SelfDestructWorker propagates the count and clears Glide disk cache only on a non-empty delete pass (zero-expired safety holds), off the main thread, non-fatal on failure, no legitimate Glide caching path disabled
+  PASS: brace/paren/bracket balance on all 6 touched .java files from the first pass (all BALANCED)
+  PASS: independent re-verification of the S08-H3 temp-prefix sweep (commit 5171495) against current TempFileCleaner.java source — cam_/grp_cam_/thumb_/enc_ prefixes present and correctly scoped; vid_view_ confirmed already covered by the vid_ prefix; b2dl_ confirmed already covered by the chat_export_ recursive directory sweep (this continuation)
+  PASS: AndroidManifest.xml well-formedness (xmllint --noout) and S08-L4 attribute presence (xmllint --xpath exact match on the .LockScreenActivity element; grep confirms exactly one .LockScreenActivity entry in the manifest) (this continuation)
   PASS: AndroidManifest.xml backup check — android:allowBackup="false" + fullBackupContent="false" confirmed; no backup-exposure claim made (source does not support one)
-  BLOCKED: JDK/Gradle/Android SDK compile + unit/instrumented test execution — which java/javac/gradle all empty on PATH. Routed to S3-19b.
-  NOT DONE: S08-H3 temp-prefix sweep (TempFileCleaner misses cam_/enc_/vid_view_/thumb_/b2dl_) and S08-L4 recents exclusion — not implemented, remain Open, carried forward as remaining S3-18 work
-COMMIT: bdcad65 (implementation, already on branch) ; 4a80703 (S08-H2/H3 tracker rows, already on branch) ; documentation commit separate, this session  WORKTREE: clean
-NEXT SESSION: S3-18 (REMAINING) — S08-L4 (exclude lock screen + rendered activity from recents) and the S08-H3 "sweep 4 temp prefixes" sub-item (extend TempFileCleaner to cam_/enc_/vid_view_/thumb_/b2dl_) are still Open. Do NOT advance to S3-19 until they are addressed. Do NOT claim S3-15b or S3-19b done — neither catch-up gate has run; S08-H2/S08-H3 AND-lane compile/test verification remains BLOCKED pending S3-19b.
+  BLOCKED: JDK/Gradle/Android SDK compile + unit/instrumented test execution — which java/javac/gradle all empty on PATH. Routed to S3-19b for all 3 findings.
+COMMIT: bdcad65 (S08-H2/H3-Glide implementation, already on branch) ; 4a80703 (S08-H2/H3 tracker rows, already on branch) ; 5171495 (S08-H3 temp-sweep implementation, already on branch) ; e284fb5 (S08-L4 implementation, this continuation) ; documentation commits separate throughout  WORKTREE: clean
+NEXT SESSION: S3-19. S3-18 is scope-complete — all 3 plan-scoped findings (S08-H2, S08-H3, S08-L4) are source-fixed/source-reviewed and land Partial. Do NOT claim S3-15b or S3-19b done — neither catch-up gate has run; all of S08-H2/S08-H3/S08-L4's AND-lane compile/test verification remains BLOCKED pending S3-19b, independent of S3-19 proceeding on its own scope.
 ```
