@@ -202,3 +202,87 @@ test("S05-I3: adminSessionCookie only trusts x-forwarded-proto when a trusted pr
     "automatic detection can't see"
   );
 });
+
+// ── S05-I3 (Sec-Fetch-Site CSRF defense-in-depth) ────────────────────────────
+// The session cookie is SameSite=Lax (not Strict — some Android in-app
+// webviews drop a Strict cookie on the post-login top-level navigation), so
+// Lax withholds the cookie on cross-site sub-requests (fetch/XHR/form POST)
+// but still attaches it on a cross-site top-level GET navigation. requireAdminAuth()
+// therefore layers a Fetch-Metadata `Sec-Fetch-Site: cross-site` reject as a
+// second, browser-set (attacker-unforgeable) CSRF signal. It must:
+//   1. run inside requireAdminAuth() so EVERY admin/api route inherits it;
+//   2. reject ONLY the unambiguous "cross-site" value (leaving same-origin/
+//      same-site/none/absent untouched, so it is purely additive and cannot
+//      break a legitimate same-origin request or an older browser);
+//   3. reject with 403 and audit the event; and
+//   4. run BEFORE the token/session evaluation, so a cross-site request is
+//      turned away without ever touching the credential-comparison path.
+
+test("S05-I3: requireAdminAuth rejects Sec-Fetch-Site: cross-site with a 403 before any auth work", () => {
+  const fnStart = SERVER_SOURCE.indexOf("async function requireAdminAuth(req, res)");
+  assert.ok(fnStart > 0, "requireAdminAuth() not found");
+  const fnEnd = SERVER_SOURCE.indexOf("\n}", fnStart);
+  const body = SERVER_SOURCE.slice(fnStart, fnEnd);
+
+  const secFetchIdx = body.indexOf('req.headers["sec-fetch-site"]');
+  assert.ok(
+    secFetchIdx > 0,
+    "requireAdminAuth must read the browser-set Sec-Fetch-Site header — a same-origin admin " +
+    "request carries same-origin/same-site, a forged cross-site POST carries cross-site, and the " +
+    "value cannot be set by an attacker page (Fetch Metadata is set by the browser itself)"
+  );
+  assert.ok(
+    /secFetchSite\s*===\s*"cross-site"/.test(body),
+    "the check must key on the exact value \"cross-site\" only — matching same-site/none/'' too " +
+    "would break legitimate same-origin admin-panel fetches and older browsers that omit the header"
+  );
+
+  // The reject must be a 403 and must be audited.
+  const crossSiteBranch = body.slice(secFetchIdx, secFetchIdx + 400);
+  assert.ok(
+    /res\.writeHead\(403/.test(crossSiteBranch),
+    "a cross-site admin request must be rejected with 403, not silently allowed through"
+  );
+  assert.ok(
+    /auditAdminEvent\("admin_api_blocked_cross_site"/.test(crossSiteBranch),
+    "the cross-site rejection must be audited (admin_api_blocked_cross_site) so a CSRF attempt is " +
+    "visible in the durable audit trail, not just dropped"
+  );
+
+  // Defense-in-depth ordering: the cross-site reject must fire BEFORE the
+  // token comparison (safeTokenEqual) and before the IP-lockout check, so a
+  // forged cross-site request never reaches the credential path at all.
+  const tokenIdx = body.indexOf("safeTokenEqual(supplied, ADMIN_TOKEN)");
+  assert.ok(tokenIdx > 0, "requireAdminAuth must still compare the admin token");
+  assert.ok(
+    secFetchIdx < tokenIdx,
+    "the Sec-Fetch-Site cross-site reject must run BEFORE the token comparison, so a forged " +
+    "cross-site request is turned away without touching the credential-comparison path"
+  );
+});
+
+// The cookie the CSRF story depends on is SameSite=Lax, and the comment
+// describing the CSRF defense must not claim SameSite=Strict — an inaccurate
+// comment about the exact mechanism in force is the same class of defect
+// S05-I2 removed elsewhere in this file, and it directly undercuts the audit
+// reviewer's ability to trust the S05-I3 rationale.
+test("S05-I3/S05-I2: the session cookie is SameSite=Lax and the CSRF comment does not misstate it as Strict", () => {
+  const cookieFnStart = SERVER_SOURCE.indexOf("function adminSessionCookie(sessionId, req, maxAgeSeconds)");
+  assert.ok(cookieFnStart > 0, "adminSessionCookie() not found");
+  const cookieFnEnd = SERVER_SOURCE.indexOf("\n}", cookieFnStart);
+  const cookieBody = SERVER_SOURCE.slice(cookieFnStart, cookieFnEnd);
+  assert.ok(
+    /SameSite=Lax/.test(cookieBody),
+    "the admin session cookie is issued SameSite=Lax"
+  );
+
+  const authFnStart = SERVER_SOURCE.indexOf("async function requireAdminAuth(req, res)");
+  const authFnEnd = SERVER_SOURCE.indexOf("\n}", authFnStart);
+  const authBody = SERVER_SOURCE.slice(authFnStart, authFnEnd);
+  assert.ok(
+    !/SameSite=Strict/.test(authBody),
+    "the requireAdminAuth CSRF comment must not claim SameSite=Strict — the cookie is issued " +
+    "SameSite=Lax, and a comment stating otherwise misdescribes the exact defense in force (the " +
+    "same stale-comment class S05-I2 removed)"
+  );
+});

@@ -207,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ─���� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
+      // ─����� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -952,11 +952,14 @@ function hasValidAdminSession(req, opts = {}) {
 // IIFE or an `async (body) => {}` collectBody callback) so this only adds
 // `await`, not new restructuring.
 async function requireAdminAuth(req, res) {
-  // S05-I3 (CSRF note): `SameSite=Strict` on the session cookie already blocks
-  // the cross-site case in every current browser, and CSP `form-action 'self'`
-  // covers form posts, so this was flagged as defense-in-depth rather than a
-  // live gap — but the mutating routes had exactly one such mechanism and no
-  // anti-CSRF token, `Origin`, or `Sec-Fetch-Site` check. `Sec-Fetch-Site` is
+  // S05-I3 (CSRF note): the session cookie is `SameSite=Lax` (adminSessionCookie()
+  // above documents why Strict is unusable here — some Android in-app webviews
+  // drop a Strict cookie on the post-login top-level navigation). Lax already
+  // withholds the cookie on cross-site sub-requests — fetch/XHR/form POST, i.e.
+  // every mutating admin/api call — and CSP `form-action 'self'` covers form
+  // posts, so this was flagged as defense-in-depth rather than a live gap. But
+  // that left exactly one such mechanism and no anti-CSRF token, `Origin`, or
+  // `Sec-Fetch-Site` check. `Sec-Fetch-Site` is
   // sent by every current browser (Fetch Metadata) and cannot be set by an
   // attacker page — it is set by the browser itself and describes the
   // relationship between the REQUESTING page and this origin. Reject only the
