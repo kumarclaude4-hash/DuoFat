@@ -7,6 +7,7 @@ const { verifyMintTokenSignature } = require("./lib/identityVerify");
 const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
 const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
 const { createAdminLockoutStore } = require("./lib/adminLockoutStore");
+const { createAdminSessionStore } = require("./lib/adminSessionStore");
 const { Redis } = require("@upstash/redis");
 
 let serviceAccount;
@@ -206,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────���────────────
+      // ── 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -727,15 +728,21 @@ if (ADMIN_TOKEN) {
 
 const ADMIN_IP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ADMIN_IP_MAX_FAILS = 10;
-const ADMIN_SESSION_TTL_MS = 30 * 60 * 1000;
-const adminSessions = new Map(); // opaque session id → expiry timestamp
+// S05-M3: split into a sliding IDLE timeout and a hard ABSOLUTE ceiling that
+// no amount of activity can push past — see lib/adminSessionStore.js's doc
+// comment for the full "what was wrong" writeup. ADMIN_SESSION_TTL_MS (the
+// pre-fix single constant) is kept as an alias for ADMIN_SESSION_IDLE_TTL_MS
+// so the cookie Max-Age below (a browser-side hint only, not a control)
+// keeps its prior value unchanged.
+const ADMIN_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+const ADMIN_SESSION_TTL_MS = ADMIN_SESSION_IDLE_TTL_MS;
+const ADMIN_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000; // 8h
+const adminSessionStore = createAdminSessionStore({
+  idleTtlMs: ADMIN_SESSION_IDLE_TTL_MS,
+  absoluteTtlMs: ADMIN_SESSION_ABSOLUTE_TTL_MS,
+});
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [sessionId, expiresAt] of adminSessions) {
-    if (expiresAt <= now) adminSessions.delete(sessionId);
-  }
-}, 5 * 60 * 1000);
+setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
 
 // S04-L3: the admin brute-force failure counter (formerly the `adminIpFails`
 // Map right here) lived only in process memory, so a Render redeploy/crash/
@@ -873,23 +880,43 @@ function adminSessionCookie(sessionId, req, maxAgeSeconds) {
 
 const getCookie = pure.getCookie;
 
-function createAdminSession() {
-  const sessionId = crypto.randomBytes(32).toString("hex");
-  adminSessions.set(sessionId, Date.now() + ADMIN_SESSION_TTL_MS);
-  return sessionId;
+// S05-M3: binds the new session to this request's client context — the
+// SAME pseudonymised IP tag S05-M1 already writes to the audit log (not the
+// raw IP), plus the raw User-Agent header. A cookie captured from any other
+// channel (shared machine, synced browser profile, log leak) then fails
+// adminSessionStore's binding check from any other context it's replayed
+// from — see lib/adminSessionStore.js's module doc for the full rationale,
+// including why a mismatch rejects the request rather than deleting the
+// session outright.
+function createAdminSession(req) {
+  return adminSessionStore.create({
+    ip: ipTag(getClientIp(req)),
+    userAgent: req.headers["user-agent"] || "",
+  });
 }
 
-function hasValidAdminSession(req) {
+// Returns the full validation result ({valid, reason?}) so callers that need
+// to distinguish WHY a session was rejected (requireAdminAuth's audit entry)
+// can, while hasValidAdminSession() below stays a simple boolean for the one
+// caller (the GET /admin render check) that only needs yes/no.
+//
+// `opts.refresh` (default true) is forwarded to adminSessionStore.validate():
+// GET /admin passes `{refresh: false}` so that unauthenticated, view-only
+// route can no longer extend a session's idle timeout just by being loaded
+// (S05-M3 finding #2) — every genuinely authenticated admin/api call still
+// refreshes as before, capped at the session's absolute lifetime.
+function evaluateAdminSession(req, opts = {}) {
   const sessionId = getCookie(req, "duoshield_admin_session");
-  if (!sessionId) return false;
-  const expiresAt = adminSessions.get(sessionId);
-  if (!expiresAt || expiresAt <= Date.now()) {
-    adminSessions.delete(sessionId);
-    return false;
-  }
-  // Sliding expiry keeps an actively used admin panel open.
-  adminSessions.set(sessionId, Date.now() + ADMIN_SESSION_TTL_MS);
-  return true;
+  if (!sessionId) return { valid: false, reason: "missing" };
+  return adminSessionStore.validate(
+    sessionId,
+    { ip: ipTag(getClientIp(req)), userAgent: req.headers["user-agent"] || "" },
+    opts
+  );
+}
+
+function hasValidAdminSession(req, opts = {}) {
+  return evaluateAdminSession(req, opts).valid;
 }
 
 // Returns true and lets the caller proceed, or writes a 401/429/503 response
@@ -917,18 +944,25 @@ async function requireAdminAuth(req, res) {
   }
   const supplied = req.headers["x-admin-token"] || "";
   const tokenValid = supplied && safeTokenEqual(supplied, ADMIN_TOKEN);
-  if (!tokenValid && !hasValidAdminSession(req)) {
+  // Only evaluate the session when no valid token was supplied — token auth
+  // does not touch/refresh the session store at all.
+  const sessionCheck = tokenValid ? { valid: false, reason: "not_checked" } : evaluateAdminSession(req);
+  if (!tokenValid && !sessionCheck.valid) {
     await recordAdminAuthFailure(ip);
     // Logged so an unexpected mass-401 (e.g. the in-memory session map was
     // wiped by a restart between login and this call) is visible in Render
     // logs instead of silently bouncing the browser back to the login gate.
-    console.warn(`admin api: 401 ip=${ip} path=${req.url} hasCookie=${Boolean(getCookie(req, "duoshield_admin_session"))}`);
+    console.warn(`admin api: 401 ip=${ip} path=${req.url} hasCookie=${Boolean(getCookie(req, "duoshield_admin_session"))} reason=${sessionCheck.reason}`);
     auditAdminEvent("admin_api_unauthorized", req, {
       path: String(req.url).slice(0, 200),
       // Distinguishes "expired/wiped session" from "someone is guessing the
-      // token", which look identical in a bare 401 count.
+      // token", which look identical in a bare 401 count. S05-M3 adds
+      // sessionInvalidReason so an ip_mismatch/ua_mismatch (a stolen-cookie
+      // replay attempt) is distinguishable from an ordinary idle_expired/
+      // absolute_expired/missing/not_found in the durable audit trail.
       hadSessionCookie: Boolean(getCookie(req, "duoshield_admin_session")),
       suppliedToken: Boolean(supplied),
+      sessionInvalidReason: sessionCheck.reason,
     });
     res.writeHead(401, { "Content-Type": "text/plain" });
     res.end("Invalid admin token");
@@ -1334,6 +1368,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
       <div class="header-actions">
         <button class="action" type="button" id="autoRefreshBtn" aria-pressed="false">Auto-refresh: Off</button>
         <button class="action" type="button" id="refreshAllBtn">Refresh all</button>
+        <button class="action danger" type="button" id="revokeAllSessionsBtn" title="Signs out every admin session, including this one">Sign out everywhere</button>
         <button class="action" type="button" id="signOutBtn">Sign out</button>
       </div>
     </header>
@@ -1908,6 +1943,27 @@ async function logout() {
   forceLogout(false);
 }
 
+// S05-M3: bulk-revokes every admin session (including this one) via
+// POST /admin/api/sessions/revoke-all, then resets this tab back to the
+// login gate exactly like forceLogout — the server already cleared this
+// browser's own cookie in the response, so no separate /admin/logout call
+// is needed here.
+async function revokeAllSessions(btn) {
+  if (!confirm("Sign out every admin session, including this one, right now?")) return;
+  btn.disabled = true;
+  btn.textContent = "Signing out everywhere…";
+  try {
+    const data = await api("/admin/api/sessions/revoke-all", { method: "POST" });
+    toast("Signed out " + data.revokedCount + " session(s).");
+    forceLogout(false);
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Sign out everywhere failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Sign out everywhere";
+  }
+}
+
 function forceLogout(showMessage = true) {
   TOKEN = "";
   sessionActive = false;
@@ -1969,6 +2025,7 @@ function bindClick(id, handler) {
 bindClick("autoRefreshBtn", () => toggleAutoRefresh());
 bindClick("refreshAllBtn", function () { reload(this, refreshAll); });
 bindClick("signOutBtn", () => logout());
+bindClick("revokeAllSessionsBtn", function () { revokeAllSessions(this); });
 bindClick("waitlistRefreshBtn", function () { reload(this, loadWaitlist); });
 bindClick("lockedRefreshBtn", function () { reload(this, loadLocked); });
 bindClick("duressRefreshBtn", function () { reload(this, loadDuressEnrolled); });
@@ -3833,7 +3890,7 @@ http.createServer((req, res) => {
       // operator's earlier mistyped attempts shouldn't count toward a future
       // lockout window. (See adminLockoutStore.reset()'s doc comment.)
       await resetAdminAuthFailures(ip);
-      const sessionId = createAdminSession();
+      const sessionId = createAdminSession(req);
       console.log(`admin login: success ip=${ip}`);
       // Success is audited as deliberately as failure: "nobody failed" is not
       // the same as "nobody got in", and only this row can answer the latter.
@@ -3853,7 +3910,7 @@ http.createServer((req, res) => {
   // and does not rely on JavaScript being able to access the HttpOnly cookie.
   if (req.method === "POST" && requestPath === "/admin/logout") {
     const sessionId = getCookie(req, "duoshield_admin_session");
-    if (sessionId) adminSessions.delete(sessionId);
+    if (sessionId) adminSessionStore.revoke(sessionId);
     // S05-H3: closes the session's audit interval. Without a logout row, a
     // login at 02:00 looks open-ended forever, so every later action is
     // ambiguous as to whether that session was still the one in use.
@@ -3868,7 +3925,13 @@ http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && requestPath === "/admin") {
-    const authenticated = hasValidAdminSession(req);
+    // S05-M3 finding #2: this route requires no auth and previously called
+    // hasValidAdminSession(req) with its default refresh behavior purely to
+    // decide which view (gate vs. app) to render — the side effect being
+    // that ANY request carrying the cookie (a browser prefetch, a restored
+    // tab, a background reload) extended the session's idle timeout with no
+    // real operator activity. {refresh: false} makes this call read-only.
+    const authenticated = hasValidAdminSession(req, { refresh: false });
     // Generate a fresh 128-bit nonce for each response so the inline <script>
     // tag is the only code the browser will execute (blocks injected scripts).
     const nonce = crypto.randomBytes(16).toString("base64");
@@ -4144,6 +4207,39 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
         sendServerError(res, "admin/api/locked/unfreeze", e);
+      }
+    });
+    return;
+  }
+
+  // ── POST /admin/api/sessions/revoke-all ───────────────────────────────────
+  //
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth
+  // accepts either). S05-M3: bulk revocation was previously impossible at
+  // all — rotating ADMIN_TOKEN never touched adminSessions (it was read once
+  // at module load), so any session already minted survived a rotation until
+  // it idled out, which, given the pre-fix unbounded sliding refresh (see
+  // lib/adminSessionStore.js), could be never. This clears EVERY admin
+  // session at once, including the caller's own — deliberately: a "sign out
+  // everywhere" action that quietly spared the button-presser's own session
+  // would not be a credible incident-response tool.
+  if (req.method === "POST" && req.url === "/admin/api/sessions/revoke-all") {
+    collectBody(req, res, async () => {
+      if (!(await requireAdminAuth(req, res))) return;
+      try {
+        const revokedCount = adminSessionStore.revokeAll();
+        auditAdminEvent("admin_sessions_revoked_all", req, { revokedCount });
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          // Expire the caller's own cookie too: revokeAll() already deleted
+          // the session record it points to, so leaving the cookie in the
+          // browser would just make the next request 401 instead of showing
+          // a clean logged-out state immediately.
+          "Set-Cookie": adminSessionCookie("", req, 0),
+        });
+        res.end(JSON.stringify({ ok: true, revokedCount }));
+      } catch (e) {
+        sendServerError(res, "admin/api/sessions/revoke-all", e);
       }
     });
     return;

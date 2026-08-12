@@ -40,6 +40,7 @@ const REQUIRED_AUDIT_ACTIONS = [
   "admin_login_failed",
   "admin_login_succeeded",
   "admin_logout",
+  "admin_sessions_revoked_all", // S05-M3: bulk session revocation
 ];
 
 test("every admin auth event is wired to the durable audit sink", () => {
