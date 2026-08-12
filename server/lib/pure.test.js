@@ -38,6 +38,28 @@ test("safeTokenEqual accepts an equal-length token containing NUL bytes", () => 
   assert.equal(pure.safeTokenEqual(a, b), true);
 });
 
+// S05-I3: the pre-fix implementation took an early `return false` on a raw
+// length mismatch, BEFORE ever calling timingSafeEqual — making the supplied
+// token's length (not its content) a timing side-channel. Hashing both sides
+// to a fixed-width digest first removes that branch: there is no longer any
+// length-dependent code path, for ANY combination of input lengths. This
+// doesn't change correctness (still equal iff content is equal) — it only
+// removes the short-circuit.
+test("safeTokenEqual has no length-dependent short-circuit (S05-I3)", () => {
+  // Every length-mismatched pair below must still compare unequal...
+  assert.equal(pure.safeTokenEqual("short", "a-much-longer-token"), false);
+  assert.equal(pure.safeTokenEqual("", "nonempty"), false);
+  assert.equal(pure.safeTokenEqual("nonempty", ""), false);
+  assert.equal(pure.safeTokenEqual("a", "aa"), false);
+  // ...and equal-content pairs of any length must still compare equal,
+  // including lengths at/near a SHA-256 block boundary (64 bytes) where a
+  // naive length-based fast path would be most tempting to keep.
+  assert.equal(pure.safeTokenEqual("x".repeat(63), "x".repeat(63)), true);
+  assert.equal(pure.safeTokenEqual("x".repeat(64), "x".repeat(64)), true);
+  assert.equal(pure.safeTokenEqual("x".repeat(65), "x".repeat(65)), true);
+  assert.equal(pure.safeTokenEqual("x".repeat(64), "x".repeat(63) + "y"), false);
+});
+
 test("validAdminUid enforces the UID whitelist", () => {
   assert.equal(pure.validAdminUid("user_123"), true);
   assert.equal(pure.validAdminUid("a"), true);
@@ -52,6 +74,23 @@ test("validAdminUid enforces the UID whitelist", () => {
   assert.equal(pure.validAdminUid(123), false);          // non-string
   assert.equal(pure.validAdminUid(null), false);
   assert.equal(pure.validAdminUid(undefined), false);
+});
+
+// S05-L1: Firestore reserves single-segment document ids "." and ".." and any
+// id matching /^__.*__$/ — .doc() throws on them (uncaught 500 pre-fix)
+// instead of behaving like an ordinary not-found lookup. None of these
+// contain a slash/backslash/control char, so the pre-fix whitelist accepted
+// them.
+test("validAdminUid rejects Firestore-reserved document-id shapes", () => {
+  assert.equal(pure.validAdminUid("."), false);
+  assert.equal(pure.validAdminUid(".."), false);
+  assert.equal(pure.validAdminUid("__foo__"), false);
+  assert.equal(pure.validAdminUid("____"), false);
+  // Must not over-reject: single/double underscores and ids that merely
+  // contain, but do not wrap in, double underscores are legitimate uids.
+  assert.equal(pure.validAdminUid("_user_123"), true);
+  assert.equal(pure.validAdminUid("user__123"), true);
+  assert.equal(pure.validAdminUid("...ellipsis"), true);
 });
 
 test("getCookie parses from a raw header string", () => {

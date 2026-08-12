@@ -207,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ─�� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
+      // ─���� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -866,9 +866,32 @@ const safeTokenEqual = pure.safeTokenEqual;
 
 const validAdminUid = pure.validAdminUid;
 
+// S05-I3: `FORCE_SECURE_COOKIES` is an explicit escape hatch for an operator
+// who knows their deployment terminates TLS somewhere `req.socket.encrypted`
+// and X-Forwarded-Proto trust (below) can't see it. "true"/"false" pin the
+// flag; anything else (including unset) falls through to the automatic
+// detection in adminSessionCookie().
+const FORCE_SECURE_COOKIES = (() => {
+  const raw = String(process.env.FORCE_SECURE_COOKIES || "").trim().toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+})();
+
 function adminSessionCookie(sessionId, req, maxAgeSeconds) {
+  // S05-I3: `x-forwarded-proto` is client-suppliable, so the old
+  // `forwardedProto === "https" || …` check let ANY caller decide whether
+  // their own cookie got issued with `Secure` — never exploitable against a
+  // third party, but still the wrong trust boundary on the system's most
+  // privileged cookie. TRUSTED_PROXY_HOPS (above) is the operator's existing,
+  // explicit declaration of "there is a proxy in front of me I trust to set
+  // this header honestly" (S04-M3); reusing it here means the header is only
+  // consulted when the operator has said a trusted proxy is actually present,
+  // instead of unconditionally trusting whatever the client sends.
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
-  const isHttps = forwardedProto === "https" || Boolean(req.socket.encrypted);
+  const isHttps = FORCE_SECURE_COOKIES !== null
+    ? FORCE_SECURE_COOKIES
+    : (TRUSTED_PROXY_HOPS > 0 && forwardedProto === "https") || Boolean(req.socket.encrypted);
   // SameSite=Lax (not Strict): some Android browsers/in-app webviews decline to
   // attach a Strict cookie on the very next top-level navigation after the
   // login POST redirects to GET /admin, which silently drops the session and
@@ -1236,7 +1259,14 @@ function readBody(req, res) {
 // Callback-style counterpart to readBody(), for handlers written in the
 // on("data")/on("end") style (several routes below need to run
 // requireAdminAuth or other checks before body parsing, so they never
-// migrated to the Promise-based helper above). Enforces the same
+// migrated to the Promise-based helper above). S05-L2: that ordering used to
+// be aspirational — every admin route called this FIRST and ran
+// requireAdminAuth() only inside the "end" callback, letting an
+// unauthenticated caller make the server buffer a body and hold the socket
+// open before ever being rejected. requireAdminAuthThenBody() (below) is now
+// the actual enforcement point: it runs requireAdminAuth() first and only
+// calls into this function on success, so the auth-before-body order this
+// comment describes is real again. Enforces the same
 // MAX_BODY_BYTES cap: the naive `body += chunk` pattern this replaces has
 // no size limit of its own — it only inherited protection from the
 // declared Content-Length pre-check up in the request handler, which a
@@ -1298,10 +1328,19 @@ function requireAdminAuthThenBody(req, res, onBody) {
 
 // ── Admin panel HTML shell ─────────────────────────────────────────────────────
 // Self-contained page (no build step, no external assets) served at GET /admin.
-// Prompts for the operator token once, keeps it in memory only (never
-// persisted to localStorage/cookies), and sends it as `x-admin-token` on
-// every fetch to /admin/api/*. All rendered values go through textContent,
-// never innerHTML, so nothing from Firestore can execute as markup.
+//
+// S05-I2: this comment used to describe the page prompting for and holding the
+// operator token in memory, then sending it as `x-admin-token` on every
+// fetch. That is no longer how the page authenticates: the login form below
+// posts the token once to POST /admin/login, which exchanges it for an
+// HttpOnly, session-cookie-backed session (adminSessionCookie() /
+// requireAdminAuth() above) — the page itself never sees or holds the token
+// after that POST, and every /admin/api/* fetch below relies on the browser
+// attaching that cookie automatically. `x-admin-token` remains a valid
+// SECOND auth path for scripted/non-browser callers (requireAdminAuth
+// accepts either), but the browser UI does not use it. All rendered values
+// go through textContent, never innerHTML, so nothing from Firestore can
+// execute as markup.
 const ADMIN_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2095,6 +2134,27 @@ function buildAdminCsp(nonce) {
 }
 
 function setBaselineSecurityHeaders(req, res) {
+  // S05-L3: this function set seven security headers but never Cache-Control,
+  // so every /admin/api/* JSON response (locked-account list, duress-enrolled
+  // list, audit log, waitlist queue) fell through with none — a bare `200`
+  // with no cache directives and no `Vary` is heuristically cacheable by the
+  // browser's disk cache (recoverable from an operator's machine or backup —
+  // this tool's threat model includes device seizure) and by any future
+  // shared cache (S04-M3 flags "operator puts Cloudflare in front of the API
+  // server" as realistic). GET /admin already set its own, stricter
+  // Cache-Control further down (no-store, no-cache, must-revalidate, plus
+  // Pragma/Expires) — writeHead()'s headers object always wins over a prior
+  // setHeader() call for the same header name (verified: Node does not merge,
+  // it overwrites), so setting the same-or-weaker `no-store` here for every
+  // `/admin*` path is additive, not a regression on that route. `Vary: Cookie`
+  // is set alongside it because authorization on every one of these routes
+  // depends on the session cookie, so a shared cache must not conflate
+  // responses for different cookies (or none) even if `no-store` were
+  // ever weakened later.
+  if (String(req.url || "").startsWith("/admin")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Vary", "Cookie");
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Frame-Options", "DENY");
@@ -2115,7 +2175,7 @@ function setBaselineSecurityHeaders(req, res) {
 }
 
 // ── Health + status + mintToken HTTP server ───────────────────────────────────
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
 
   // Baseline security headers on every response (merged with, and overridable by,
   // each route's writeHead — see setBaselineSecurityHeaders above).
@@ -4000,7 +4060,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/waitlist ────────���──────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns pending waitlist requests, newest
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns pending waitlist requests, newest
   // first, so the operator can see who's asking for access.
   if (req.method === "GET" && req.url === "/admin/api/waitlist") {
     (async () => {
@@ -4034,7 +4094,7 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/waitlist/approve ──────────────────────────────────────
   //
-  // Body: { requestId }. Auth: x-admin-token header.
+  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Flips a pending waitlist doc to status: "approved" so the requester's
   // next /waitlistStatus poll lets them proceed to account creation.
   if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
@@ -4103,7 +4163,7 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/waitlist/deny ─────────────────────────────────────────
   //
-  // Body: { requestId }. Auth: x-admin-token header.
+  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // S05-H2: prior to this endpoint the ONLY mutation available on a waitlist
   // doc was pending -> approved — a junk/flood request could never be
   // rejected, so the queue grew forever and a sustained trickle of garbage
@@ -4155,7 +4215,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/locked ─────────────────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns currently-locked accounts so the
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns currently-locked accounts so the
   // operator can see who's frozen and pick one to unfreeze.
   if (req.method === "GET" && req.url === "/admin/api/locked") {
     (async () => {
@@ -4190,7 +4250,7 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/locked/unfreeze ───────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be
   // removed, per firestore.rules (clients get `allow delete: if false`).
   if (req.method === "POST" && req.url === "/admin/api/locked/unfreeze") {
@@ -4316,7 +4376,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/duress/enrolled ───────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns all accounts currently enrolled for
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns all accounts currently enrolled for
   // duress-PIN eligibility (duressEligibility/{uid}.eligible == true).
   if (req.method === "GET" && req.url === "/admin/api/duress/enrolled") {
     (async () => {
@@ -4346,7 +4406,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/account/lookup?uid=... ───────���────────────────────────
   //
-  // Auth: x-admin-token header. Looks up whether an account with this UID
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Looks up whether an account with this UID
   // actually exists (identities/{uid}) and its current duress-PIN eligibility
   // status. Used by the admin panel's "search by UID" step before enabling —
   // enrollment must never be granted blind to a UID that isn't a real account.
@@ -4386,7 +4446,7 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Creates or updates duressEligibility/{uid} with eligible:true so the app
   // shows the secondary-PIN setup UI for that account on next eligibility check.
   // Requires the UID to correspond to a real account (identities/{uid}) —
@@ -4445,7 +4505,7 @@ http.createServer((req, res) => {
 
   // ── POST /admin/api/duress/revoke ─────────────────────────────────────────
   //
-  // Body: { uid }. Auth: x-admin-token header.
+  // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Sets eligible:false on duressEligibility/{uid} — the client's cached flag
   // is updated on the next eligibility refresh (sign-in or foreground).
   if (req.method === "POST" && req.url === "/admin/api/duress/revoke") {
@@ -4489,7 +4549,7 @@ http.createServer((req, res) => {
 
   // ── GET /admin/api/auditlog ───────────────────────────────────────────────
   //
-  // Auth: x-admin-token header. Returns the 100 most-recent admin actions
+  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns the 100 most-recent admin actions
   // (waitlist approvals + account unfreezes) so the operator has a tamper-
   // evident record of who did what and when.
   if (req.method === "GET" && req.url === "/admin/api/auditlog") {
@@ -4517,7 +4577,21 @@ http.createServer((req, res) => {
   res.writeHead(404);
   res.end("Not found");
 
-}).listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
+});
+
+// S05-L2: Node's defaults (headersTimeout 60s, requestTimeout 300s in Node 20,
+// which package.json:115 pins) previously applied with no override anywhere
+// in this file, so an unauthenticated caller could hold a socket open for up
+// to five minutes trickling a body toward MAX_BODY_BYTES against a
+// single-process server that also carries FCM delivery. requireAdminAuth()
+// now runs before any body is read (see requireAdminAuthThenBody() above),
+// which closes the main gap; these bound the remaining unauthenticated
+// exposure (header-only requests, and any body-reading route) to a much
+// smaller window.
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
+
+server.listen(PORT, () => console.log(`Push server listening on port ${PORT}`));
 
 // ── B2 SigV4 presign surface removed (S03-L3 / S04-I2) ────────────────────────
 // `b2PresignUrl` and its lock-bound wrapper `b2PresignUrlForUid` used to live
