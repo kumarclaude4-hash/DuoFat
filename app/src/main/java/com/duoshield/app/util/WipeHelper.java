@@ -128,6 +128,18 @@ public class WipeHelper {
         } catch (Exception e) {
             Log.e(TAG, "Failed to clear SecurePrefs during wipe", e);
         }
+        // S07-L2: SecurePrefs is the on-disk copy of the Signal identity key pair —
+        // but SeedPhraseHelper.deriveIdentityKeyPair() also caches the derived
+        // IdentityKeyPair (private key material) in a static, process-lifetime
+        // field that the on-disk clear above never touches. Without this, the
+        // identity private key stayed resident in memory for the rest of the
+        // process's life after every wipe path, including DURESS. See
+        // SeedPhraseHelper.clearDerivationCache()'s javadoc for the full detail.
+        try {
+            com.duoshield.app.crypto.SeedPhraseHelper.clearDerivationCache();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to clear SeedPhraseHelper derivation cache during wipe", e);
+        }
 
         // Step 5: Close the Room singleton BEFORE deleting the file, so the cached
         // instance cannot point at a deleted database on next access.

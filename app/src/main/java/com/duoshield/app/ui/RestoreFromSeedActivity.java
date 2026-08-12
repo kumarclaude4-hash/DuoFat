@@ -41,6 +41,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -150,7 +151,14 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.length; i++) {
             if (i > 0) sb.append(' ');
-            sb.append(parts[i].toLowerCase());
+            // S07-L3: Locale.ROOT explicitly, not the platform default locale — see
+            // SeedPhraseHelper.canonicalizeMnemonic()'s javadoc for why a
+            // locale-sensitive lower-case must never decide which bytes this
+            // mnemonic hashes to. SeedPhraseHelper.mnemonicToSeed() now also
+            // canonicalises internally, so this pre-canonicalisation is
+            // defense-in-depth, not the only thing standing between a typo here
+            // and a wrong derived identity.
+            sb.append(parts[i].toLowerCase(Locale.ROOT));
         }
         String mnemonic = sb.toString();
 

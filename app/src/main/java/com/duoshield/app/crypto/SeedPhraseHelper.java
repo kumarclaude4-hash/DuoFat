@@ -7,6 +7,7 @@ import java.security.SecureRandom;
 import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -71,6 +72,32 @@ public final class SeedPhraseHelper {
             this.seedFingerprint = seedFingerprint;
             this.pair = pair;
         }
+    }
+
+    /**
+     * Clears the in-process derivation cache populated by
+     * {@link #deriveIdentityKeyPair(byte[])}.
+     *
+     * <p>(S07-L2) That cache holds the most recently derived {@link IdentityKeyPair} —
+     * i.e. the plaintext identity private key — in a static field so repeated calls
+     * with the same seed (identity display, restore confirmation, etc.) skip the
+     * KDF. That same property makes it a wipe hazard: {@code WipeHelper.eraseLocalData}
+     * destroys every on-disk copy of key material (SecurePrefs, the SQLCipher DB),
+     * but this cache lives only in the JVM heap, and none of the wipe steps ever
+     * called back into this class — the derived identity private key stayed
+     * resident in process memory for the remaining lifetime of the process even
+     * after a duress wipe, recoverable by a memory-dump/debugger-attach forensic
+     * technique that key destruction is specifically supposed to defeat.
+     *
+     * <p>Called from every path that funnels through {@code WipeHelper.eraseLocalData}
+     * (voluntary wipe, unpair, and duress) — see that method's Step 4. Best-effort:
+     * dropping the reference lets the GC reclaim the {@link IdentityKeyPair}, but
+     * this class has no access to zero the key bytes inside libsignal's object graph
+     * before that happens, the same limitation every other in-memory key handle in
+     * this app has once it leaves this class's control.
+     */
+    public static void clearDerivationCache() {
+        derivationCache.set(null);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -405,7 +432,9 @@ public final class SeedPhraseHelper {
         Map<String, Integer> index = getWordIndex();
         int[] indices = new int[WORD_COUNT];
         for (int i = 0; i < WORD_COUNT; i++) {
-            String word = parts[i].toLowerCase();
+            // S07-L3: Locale.ROOT explicitly — see canonicalizeMnemonic()'s javadoc
+            // for why an implicit default-locale lower-case is the wrong call here.
+            String word = parts[i].toLowerCase(Locale.ROOT);
             Integer idx = index.get(word);
             if (idx == null) return false;
             indices[i] = idx;
@@ -433,6 +462,43 @@ public final class SeedPhraseHelper {
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
+     * Canonicalises a mnemonic into the exact form {@link #mnemonicToSeed(String)}
+     * must hash: {@link Locale#ROOT}-lower-cased, internal runs of whitespace
+     * collapsed to a single ASCII space, and leading/trailing whitespace trimmed
+     * (NFKD normalisation happens separately, in the caller, per the BIP39 spec).
+     *
+     * <p>(S07-L3) {@code mnemonicToSeed} previously only trimmed the two ends and
+     * NFKD-normalised — it did <em>not</em> lower-case or collapse internal
+     * whitespace itself, so it silently trusted every caller to have already put
+     * the string in canonical form. {@link #validateMnemonic(String)} DOES
+     * tolerate mixed case and repeated whitespace (it lower-cases and splits on
+     * {@code \s+} per word), so a mnemonic that <em>validates successfully</em>
+     * could previously derive a completely different — and wrong — seed/identity
+     * key than the canonical form of the same words, with no error raised
+     * anywhere: e.g. "Abandon  ability able …" (capital first letter, a doubled
+     * space from a clipboard paste) passes {@code validateMnemonic} but, before
+     * this fix, hashed to a different PBKDF2 password than "abandon ability able
+     * …", producing a different account. Centralising canonicalisation inside
+     * {@code mnemonicToSeed} itself (rather than relying on call-site
+     * pre-processing, which existed for exactly one of the three call sites) closes
+     * that gap for every current and future caller.
+     *
+     * <p>Uses {@link Locale#ROOT} explicitly rather than the platform default
+     * locale's case folding. {@code String.toLowerCase()} with no explicit locale
+     * is locale-sensitive — most infamously, Turkish-locale devices lower-case
+     * {@code 'I'} to the dotless {@code 'ı'} (U+0131), not {@code 'i'} — so the
+     * exact same input bytes can fold to different output bytes purely based on
+     * device language settings. BIP39 mnemonics are always plain ASCII English
+     * words, so this cannot currently change which word a user meant, but it CAN
+     * change whether the canonical, hashed form matches on a Turkish-locale
+     * device vs. everywhere else, which is exactly the class of silent,
+     * device-dependent key-derivation mismatch this method exists to prevent.
+     */
+    static String canonicalizeMnemonic(String mnemonic) {
+        return mnemonic.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    /**
      * Derives a 64-byte seed from a mnemonic using the standard BIP39 PBKDF2 algorithm.
      *
      * <p>Parameters (fixed by BIP39 — do not change):
@@ -448,8 +514,12 @@ public final class SeedPhraseHelper {
      * @return 64-byte seed. Deterministic: same mnemonic always yields the same seed.
      */
     public static byte[] mnemonicToSeed(String mnemonic) throws Exception {
-        // NFKD normalisation as required by BIP39
-        String normalised = Normalizer.normalize(mnemonic.trim(), Normalizer.Form.NFKD);
+        // S07-L3 fix: canonicalise BEFORE NFKD normalisation. See
+        // canonicalizeMnemonic() — this method must derive the identical seed
+        // for every string a user would consider "the same mnemonic" on its
+        // own, not by trusting the caller to have already normalised it.
+        String canonical  = canonicalizeMnemonic(mnemonic);
+        String normalised = Normalizer.normalize(canonical, Normalizer.Form.NFKD);
         char[]  password  = normalised.toCharArray();
         byte[]  salt      = MNEMONIC_SALT.getBytes("UTF-8");
 
