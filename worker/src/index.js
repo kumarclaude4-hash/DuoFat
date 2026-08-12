@@ -997,7 +997,32 @@ export default {
             console.warn(`Skipped R2 delete for ${obj.key} — object changed during migration`);
             r2TotalBytes += current.size ?? 0;
           } else {
-            // Deleted concurrently — nothing left in R2, nothing to count.
+            // S10-N3: deleted concurrently — and this is the one interleaving
+            // the two existing race guards do NOT already cover. A client
+            // DELETE that removed this key from R2 landed AFTER our get()
+            // above but BEFORE the B2 PUT we just issued: it took the
+            // R2-present branch, deleted from R2, and fired its own
+            // best-effort B2 delete — which 404'd because our PUT had not
+            // happened yet. Our PUT then recreated the object in B2. Nothing
+            // in R2 now references it, GET falls back to B2 (X-Storage-Tier:
+            // cold) so the "deleted" media would keep serving forever, and
+            // the nightly ListObjectsV2 reconciliation (Step 3) would silently
+            // count the orphan as legitimate B2 usage — hiding the leak from
+            // the very counter that tracks it (S03-H3).
+            //
+            // We are the party that created the orphan and the only party
+            // that knows it, so undo our own write. This is a compensating
+            // delete, not an atomic one: there is no cross-tier transaction on
+            // this project (no Durable Objects — see S03-I2), so if this
+            // best-effort delete itself fails the orphan persists. That is why
+            // it is logged rather than swallowed the way the pre-fix empty
+            // branch was — a residual orphan is now visible in Worker logs
+            // instead of silent. If this delete false-positives (a transient
+            // R2 HEAD miss on an object that is actually still present), no
+            // data is lost: R2 still holds the object, GET serves it from the
+            // hot tier, and tomorrow's run re-migrates it.
+            console.warn(`S10-N3: undoing orphaned B2 copy of ${obj.key} — R2 was deleted during migration`);
+            ctx.waitUntil(b2.fetch(b2Url(env, obj.key), { method: 'DELETE' }).catch(() => {}));
           }
         } else {
           // B2 PUT failed — object stays in R2. Count it and retry tomorrow.
