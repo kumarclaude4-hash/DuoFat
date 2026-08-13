@@ -207,7 +207,7 @@ db.collectionGroup("messages").onSnapshot(
 
       const messageId = msgDoc.id;
 
-      // ─����� 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
+      // ─������ 1-to-1 chat: chats/{chatId}/messages/{msgId} ─────────�����────────────
       if (path.startsWith("chats/")) {
         const chatId = path.split("/")[1];
         try {
@@ -1159,6 +1159,31 @@ const isBlockedPreviewHost = pure.isBlockedPreviewHost;
 // the old one is kept as cheap defence in depth, not replaced.
 const egressGuard = require("./lib/egressGuard");
 
+// S04-H1 (residual): undici's fetch + a per-request Agent whose connect.lookup
+// is PINNED to the exact address we already validated with resolveAndCheckHost().
+// Node's global fetch offers no way to pin the socket, so the validated name was
+// re-resolved by the kernel at connect() time — the check-then-connect gap a
+// sub-second-TTL DNS-rebinding attacker races (documented in egressGuard.js and
+// RISK_REGISTER.md). Pinning closes that window: the socket can only reach an
+// address that already passed the public-address check on this hop.
+const { fetch: undiciFetch, Agent: UndiciAgent } = require("undici");
+const net = require("net");
+
+// Builds a net.lookup-compatible function that ALWAYS returns the pre-validated
+// addresses, never touching DNS again. This is what pins the connection.
+function makePinnedLookup(addresses) {
+  return function pinnedLookup(_hostname, options, callback) {
+    const cb = typeof options === "function" ? options : callback;
+    const opts = typeof options === "function" ? {} : (options || {});
+    const records = addresses.map((address) => ({
+      address,
+      family: net.isIPv6(address) ? 6 : 4,
+    }));
+    if (opts.all) return cb(null, records);
+    return cb(null, records[0].address, records[0].family);
+  };
+}
+
 // ── Link-preview image proxy (S04-H3 / S08-H4) ────────────────────────────────
 // og:image URLs are rewritten to point at THIS server and signed with this
 // secret, so the recipient's device never contacts the linked host directly (see
@@ -1172,7 +1197,7 @@ const imageProxy = require("./lib/imageProxy");
 
 // Absolute origin of THIS server, as the client should address it. Needed
 // because the proxied og:image URL is handed to Android's Glide, which cannot
-// resolve a root-relative path — a relative URL would simply render no image.
+// resolve a root-relative path ��� a relative URL would simply render no image.
 // PUBLIC_BASE_URL wins when set (correct behind a proxy that rewrites Host);
 // otherwise derive it from the request the same way adminSessionCookie() decides
 // `Secure`, since Render terminates TLS upstream and req.socket is plain HTTP.
@@ -1231,24 +1256,47 @@ async function fetchFollowingSafeRedirects(targetUrl, { headers, timeoutMs, maxR
       throw new Error(`Blocked redirect target (${targetVerdict.reason}): ${parsed.hostname}`);
     }
     const dnsVerdict = await egressGuard.resolveAndCheckHost(parsed.hostname);
-    if (!dnsVerdict.ok) {
-      throw new Error(`Blocked redirect target (${dnsVerdict.reason}): ${parsed.hostname}`);
+    if (!dnsVerdict.ok || !Array.isArray(dnsVerdict.addresses) || dnsVerdict.addresses.length === 0) {
+      throw new Error(`Blocked redirect target (${dnsVerdict.reason || "no validated address"}): ${parsed.hostname}`);
     }
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    // Pin the connection to the address(es) we just validated. Building the
+    // Agent per hop is deliberate: each redirect resolves and re-validates its
+    // own host, so the pin must track the current hop, not the first one.
+    const agent = new UndiciAgent({
+      connect: { lookup: makePinnedLookup(dnsVerdict.addresses) },
+    });
+    const closeAgent = () => { agent.close().catch(() => {}); };
     let response;
     try {
-      response = await fetch(current, { headers, signal: ctrl.signal, redirect: "manual" });
+      response = await undiciFetch(current, {
+        headers,
+        signal: ctrl.signal,
+        redirect: "manual",
+        dispatcher: agent,
+      });
+    } catch (e) {
+      clearTimeout(t);
+      closeAgent();
+      throw e;
     } finally {
       clearTimeout(t);
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
+      // This response's body is discarded — cancel it and close its pinned
+      // agent before following the redirect, so the socket isn't held open.
+      try { await response.body?.cancel(); } catch { /* already closed */ }
+      closeAgent();
       if (!location) throw new Error("Redirect with no Location header");
       current = new URL(location, current).toString();
       continue;
     }
-    return { response, finalUrl: current };
+    // `cleanup` closes the pinned agent; the caller must invoke it once the
+    // response body has been fully read (or when bailing out), so the socket
+    // pool doesn't leak.
+    return { response, finalUrl: current, cleanup: closeAgent };
   }
   throw new Error("Too many redirects");
 }
@@ -1628,7 +1676,7 @@ function toggleAutoRefresh() {
   }
 }
 
-// ── Click-to-copy for identifiers (UIDs, request IDs, IPs) ───────────────────
+// ── Click-to-copy for identifiers (UIDs, request IDs, IPs) ───────────��───────
 // Copies to the clipboard, with an execCommand fallback for older webviews.
 function copyText(text) {
   const done = () => toast("Copied to clipboard");
@@ -3057,7 +3105,7 @@ const server = http.createServer((req, res) => {
     // raw req.on("data")/req.on("end") pattern skips the size guard entirely.
     collectBody(req, res, async () => {
       try {
-        // ── Auth ────────────────────────────────────────────────────────────
+        // ── Auth ��───────────────────────────────────────────────────────────
         const authHeader = req.headers["authorization"] || "";
         const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
         if (!idToken) {
@@ -3321,12 +3369,14 @@ const server = http.createServer((req, res) => {
         }
 
         let upstream;
+        let cleanupUpstream = () => {};
         try {
           const result = await fetchFollowingSafeRedirects(verdict.targetUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
             timeoutMs: 6000,
           });
           upstream = result.response;
+          cleanupUpstream = result.cleanup;
         } catch (fetchErr) {
           console.warn("/linkPreviewImage fetch failed:", fetchErr.message);
           res.writeHead(502, { "Content-Type": "text/plain" });
@@ -3334,39 +3384,45 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const contentType = upstream.headers.get("content-type");
-        if (!upstream.ok || !imageProxy.isAllowedImageType(contentType)) {
-          // Allowlist, not blocklist: without this the endpoint would happily
-          // relay HTML or SVG (which can carry script) from an arbitrary host.
-          res.writeHead(502, { "Content-Type": "text/plain" });
-          res.end("Unsupported image response");
-          return;
-        }
-
-        let capped;
         try {
-          // Same S04-H2 reasoning as the HTML path: cap what we READ, not just
-          // what we keep, so a multi-gigabyte "image" cannot exhaust the heap.
-          capped = await egressGuard.readCappedBody(upstream, egressGuard.MAX_PREVIEW_IMAGE_BYTES);
-        } catch (capErr) {
-          console.warn("/linkPreviewImage body rejected:", capErr.message);
-          res.writeHead(502, { "Content-Type": "text/plain" });
-          res.end("Image too large");
-          return;
-        }
+          const contentType = upstream.headers.get("content-type");
+          if (!upstream.ok || !imageProxy.isAllowedImageType(contentType)) {
+            // Allowlist, not blocklist: without this the endpoint would happily
+            // relay HTML or SVG (which can carry script) from an arbitrary host.
+            try { await upstream.body?.cancel(); } catch { /* already closed */ }
+            res.writeHead(502, { "Content-Type": "text/plain" });
+            res.end("Unsupported image response");
+            return;
+          }
 
-        res.writeHead(200, {
-          "Content-Type": String(contentType).split(";")[0].trim(),
-          "Content-Length": capped.buffer.length,
-          // Cache aggressively: the bytes are immutable for the life of the
-          // signature, and every cache hit is one fewer outbound fetch.
-          "Cache-Control": "private, max-age=3600",
-          // The bytes come from an arbitrary third-party host; forbid sniffing
-          // them into anything executable.
-          "X-Content-Type-Options": "nosniff",
-          "Content-Security-Policy": "default-src 'none'; sandbox",
-        });
-        res.end(capped.buffer);
+          let capped;
+          try {
+            // Same S04-H2 reasoning as the HTML path: cap what we READ, not just
+            // what we keep, so a multi-gigabyte "image" cannot exhaust the heap.
+            capped = await egressGuard.readCappedBody(upstream, egressGuard.MAX_PREVIEW_IMAGE_BYTES);
+          } catch (capErr) {
+            console.warn("/linkPreviewImage body rejected:", capErr.message);
+            res.writeHead(502, { "Content-Type": "text/plain" });
+            res.end("Image too large");
+            return;
+          }
+
+          res.writeHead(200, {
+            "Content-Type": String(contentType).split(";")[0].trim(),
+            "Content-Length": capped.buffer.length,
+            // Cache aggressively: the bytes are immutable for the life of the
+            // signature, and every cache hit is one fewer outbound fetch.
+            "Cache-Control": "private, max-age=3600",
+            // The bytes come from an arbitrary third-party host; forbid sniffing
+            // them into anything executable.
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+          });
+          res.end(capped.buffer);
+        } finally {
+          // Close the pinned connection pool now that the body is fully read.
+          cleanupUpstream();
+        }
       } catch (e) {
         console.error("/linkPreviewImage error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
@@ -3412,10 +3468,11 @@ const server = http.createServer((req, res) => {
           // already passed the check above — Node's fetch does not re-run
           // caller validation on redirect hops. Follow redirects manually
           // instead, so every hop's host is checked before it's fetched.
-          const { response: r, finalUrl } = await fetchFollowingSafeRedirects(targetUrl, {
+          const { response: r, finalUrl, cleanup: cleanupPreview } = await fetchFollowingSafeRedirects(targetUrl, {
             headers: { "User-Agent": "Mozilla/5.0 (compatible; DuoShield/1.0)" },
             timeoutMs: 6000,
           });
+          try {
           // S04-I3: label the preview with the domain content actually came
           // from (the final hop of the redirect chain), not the originally
           // submitted host — see pure.previewDomainFromUrl's doc comment for
@@ -3444,16 +3501,31 @@ const server = http.createServer((req, res) => {
               // og:title content (&amp; &lt; &gt; &quot; &#39; &#NNN; &#xHHH;).
               // Without this, "BBC News &amp; Sport" is returned verbatim and
               // displayed as literal ampersand-entities to the user.
+              //
+              // SINGLE PASS, deliberately: the old chained .replace() calls
+              // decoded `&amp;` first and then re-scanned the RESULT, so an
+              // input of `&amp;#39;` became `&#39;` and then `'` — a classic
+              // double-unescaping bug (an attacker could smuggle a character
+              // past a caller that pre-encoded once). One regex with a single
+              // left-to-right pass never re-examines what it just produced, so
+              // each entity is decoded exactly once.
+              const NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
               const rawTitle = ogT[1].trim().replace(/\s+/g, " ");
-              preview.title = rawTitle
-                .replace(/&amp;/gi,  "&")
-                .replace(/&lt;/gi,   "<")
-                .replace(/&gt;/gi,   ">")
-                .replace(/&quot;/gi, '"')
-                .replace(/&#39;/gi,  "'")
-                .replace(/&apos;/gi, "'")
-                .replace(/&#(\d{1,5});/g,   (_, dec) => String.fromCodePoint(parseInt(dec,  10)))
-                .replace(/&#x([0-9a-f]{1,5});/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+              preview.title = rawTitle.replace(
+                /&(#x[0-9a-f]{1,5}|#\d{1,5}|amp|lt|gt|quot|apos);/gi,
+                (whole, body) => {
+                  const b = body.toLowerCase();
+                  if (b[0] === "#") {
+                    const code = b[1] === "x"
+                      ? parseInt(b.slice(2), 16)
+                      : parseInt(b.slice(1), 10);
+                    return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+                      ? String.fromCodePoint(code)
+                      : whole;
+                  }
+                  return NAMED_ENTITIES[b] ?? whole;
+                }
+              );
             }
             if (ogI) {
               // Validate the extracted URL before returning it to the client.
@@ -3499,6 +3571,12 @@ const server = http.createServer((req, res) => {
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(preview));
+          } finally {
+            // Discard any unread body (non-HTML responses are never read) and
+            // close the pinned connection pool for this preview fetch.
+            try { await r.body?.cancel(); } catch { /* already consumed/closed */ }
+            cleanupPreview();
+          }
         } catch (fetchErr) {
           console.warn("/linkPreview fetch failed:", fetchErr.message);
           res.writeHead(200, { "Content-Type": "application/json" });

@@ -69,11 +69,24 @@ export function mockupPreviewPlugin(): Plugin {
     }));
   }
 
+  // Produces a JS string literal that is safe to embed in generated SOURCE
+  // code. JSON.stringify handles quotes/backslashes/control chars, but it does
+  // NOT escape `<`, `>`, or the U+2028/U+2029 line terminators — a path
+  // containing `</script>` or a raw line separator could otherwise terminate a
+  // context or break parsing. Escaping them as \uXXXX keeps the emitted module
+  // syntactically inert regardless of what the discovered file path contains.
+  function toSafeJsStringLiteral(value: string): string {
+    return JSON.stringify(value).replace(
+      /[<>\u2028\u2029]/g,
+      (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'),
+    );
+  }
+
   function generateSource(components: Array<DiscoveredComponent>): string {
     const entries = components
       .map(
         (c) =>
-          `  ${JSON.stringify(c.globKey)}: () => import(${JSON.stringify(c.importPath)})`,
+          `  ${toSafeJsStringLiteral(c.globKey)}: () => import(${toSafeJsStringLiteral(c.importPath)})`,
       )
       .join(',\n');
 
