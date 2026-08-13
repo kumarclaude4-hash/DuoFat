@@ -68,19 +68,24 @@ public class ContactManager {
      * (duoshield://add/<anything>) could feed arbitrary attacker-controlled input
      * straight into a live Firestore lookup and then into the visible "Account ID"
      * field and error/toast strings.
+     *
+     * <p>The pattern itself lives in {@link AccountIdValidator} — the single,
+     * Android-independent source of truth shared with {@code AddContactActivity}'s
+     * deep-link and clipboard entry points. This constant is kept, delegating to
+     * that class, only so any external caller of the previous public field does
+     * not silently regress to an unvalidated string.
      */
-    public static final Pattern ACCOUNT_ID_PATTERN =
-            Pattern.compile("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}");
+    public static final Pattern ACCOUNT_ID_PATTERN = AccountIdValidator.pattern();
 
     /**
      * Canonicalizes a raw, user- or link-supplied Account ID string (trims
-     * whitespace, uppercases) and returns it only if it matches
-     * {@link #ACCOUNT_ID_PATTERN}; otherwise returns {@code null}.
+     * whitespace, uppercases) and returns it only if it matches the canonical
+     * Account ID shape; otherwise returns {@code null}. Delegates to
+     * {@link AccountIdValidator#canonicalizeOrNull(String)} so every entry point
+     * (manual entry, clipboard, deep link, QR scan) enforces the exact same rule.
      */
     public static String canonicalizeAccountId(String raw) {
-        if (raw == null) return null;
-        String candidate = raw.trim().toUpperCase(java.util.Locale.US);
-        return ACCOUNT_ID_PATTERN.matcher(candidate).matches() ? candidate : null;
+        return AccountIdValidator.canonicalizeOrNull(raw);
     }
 
     private final Context           context;
@@ -309,7 +314,7 @@ public class ContactManager {
         }
     }
 
-    // ── Utility ───────────────────────────────────────────────────────────────
+    // ── Utility ─────────���─────────────────────────────────────────────────────
 
     /** InputStream#readAllBytes() requires API 33; minSdk is 26, so read manually. */
     private static byte[] readAllBytesCompat(InputStream is) throws java.io.IOException {

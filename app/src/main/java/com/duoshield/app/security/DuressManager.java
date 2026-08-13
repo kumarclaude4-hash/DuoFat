@@ -162,16 +162,29 @@ public class DuressManager {
     /**
      * Arms slot B with a real secondary code.
      *
-     * @return false if the code was rejected. The only rejection reason is a length
-     *         that differs from the primary PIN — see the length note in
-     *         {@code ManageUnlockCodesActivity}; a mismatched length produces a code
-     *         that physically cannot be entered on the lock screen.
+     * @return false if the code was rejected. The rejection reason is a length
+     *         outside the app-wide accepted PIN range — see the length note in
+     *         {@code ManageUnlockCodesActivity}, which enforces the identical
+     *         {@code MIN_PIN_LEN}..{@code MAX_PIN_LEN} bound before ever reaching
+     *         here — so the code stays enterable on the lock screen.
+     *
+     *         <p>Before S08-L3 this instead required an exact length match against
+     *         {@code PinManager.getPinLength(context)} (the account's real primary
+     *         PIN length, then still readable from plaintext storage). That method
+     *         now always returns the fixed {@code MAX_PIN_LEN} upper bound — it no
+     *         longer reflects any one account's real length — so an exact-match
+     *         gate here would incorrectly reject every secondary code shorter than
+     *         {@code MAX_PIN_LEN} digits even though {@code LockScreenActivity}'s
+     *         debounced auto-submit (also S08-L3) accepts any length in the same
+     *         {@code MIN_PIN_LEN}..{@code MAX_PIN_LEN} range the primary PIN can be.
      */
     public static boolean setDuressPin(Context context, String pin) {
         String slotKey = duressKey();
         String armKey  = armedKey();
         if (slotKey == null || armKey == null) return false;
-        if (pin == null || pin.length() != com.duoshield.app.util.PinManager.getPinLength(context)) {
+        if (pin == null
+                || pin.length() < com.duoshield.app.util.PinManager.MIN_PIN_LEN
+                || pin.length() > com.duoshield.app.util.PinManager.MAX_PIN_LEN) {
             return false;
         }
         try {
