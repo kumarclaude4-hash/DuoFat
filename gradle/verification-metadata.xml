@@ -31,7 +31,7 @@
        verification on, then commit.
   Note: the vendored app/libs/libsignal-client-0.54.1-stripped.jar is a files(...)
   dependency, NOT covered by this metadata - its integrity is gated separately by
-  "scripts/strip_signal_records.py --check" (SC-01).
+  the "check" mode of scripts/strip_signal_records.py (SC-01).
 -->
 <verification-metadata xmlns="https://schema.gradle.org/dependency-verification"
                        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
