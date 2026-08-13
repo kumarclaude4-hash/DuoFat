@@ -3,71 +3,76 @@
   SC-03 - Gradle dependency verification.
 
   Gradle now enforces integrity checking on every Maven/Google artifact it
-  resolves for this project (buildscript/plugin classpath + all app
+  resolves for this project (buildscript/plugin classpath and all app
   configurations): a compromised repository, cache, or MITM substituting a
   modified androidx/Firebase/ZXing/Glide/AGP artifact will fail the build
   instead of being silently accepted.
 
-  History: this file previously landed with verify-metadata=false and an
-  empty <components/> list (S3-03), on the mistaken assumption that
-  verify-metadata=false makes the file fully inert. It does not - Gradle
+  History: this file previously landed with verify-metadata set to false
+  and an empty components list (S3-03), on the mistaken assumption that
+  verify-metadata=false makes the file fully inert. It does not: Gradle
   activates dependency verification as soon as this file is present at
   gradle/verification-metadata.xml, and verify-metadata=false only skips
   verification of metadata descriptors (POM/module files), not artifact
   (JAR/AAR) checksums. With an empty components list, every artifact Gradle
   resolved had no recorded checksum and was rejected, breaking CI Lint and
-  the Release APK build for ~2 days (first exposed by commit 62b5f5d68c,
-  2026-08-11; see security-remediation session notes for the incident
-  writeup).
+  the Release APK build for about two days (first exposed by commit
+  62b5f5d68c on 2026-08-11; see security-remediation session notes for the
+  incident writeup). A second, separate bug (a literal double hyphen inside
+  an XML comment in an earlier revision of this same file) briefly caused a
+  totally different failure, an XML parse error, before this one was even
+  reached; that is why this comment avoids the double hyphen character
+  sequence entirely, even inside quoted command examples.
 
   How the components list below was produced and reviewed (S3-03b):
-    1. Generated with `./gradlew --write-verification-metadata sha256 --dry-run
-       :app:lintDebug :app:assembleDebug :app:assembleRelease
-       :app:assembleDebugAndroidTest` (the temporary CI job
-       "[TEMP] Regenerate SC-03 verification metadata"), covering the full
-       :classpath (buildscript/plugin) graph plus every app dependency
-       configuration those four tasks resolve.
+    1. Generated with the write verification metadata sha256 flag in dry
+       run mode, targeting app:lintDebug, app:assembleDebug,
+       app:assembleRelease and app:assembleDebugAndroidTest (the temporary
+       CI job named [TEMP] Regenerate SC-03 verification metadata),
+       covering the full classpath (buildscript/plugin) graph plus every
+       app dependency configuration those four tasks resolve.
     2. Independently reproduced in a second, unrelated environment (fresh
-       JDK 17 + Gradle 8.7 + Android SDK install) - byte-identical output,
-       confirming the hashes are deterministic and not tied to one
-       compromised runner.
-    3. Cross-checked all 330 recorded sha256 values against the independent,
-       authoritative checksums published by Google's Maven repo
-       (dl.google.com/android/maven2) and Maven Central (repo1.maven.org) -
-       the same two repositories declared in build.gradle. 329 of 330
-       matched exactly.
+       JDK 17 plus Gradle 8.7 plus a fresh Android SDK install); the output
+       was byte identical, confirming the hashes are deterministic and not
+       tied to one compromised runner.
+    3. Cross-checked all 330 recorded sha256 values against the
+       independent, authoritative checksums published by Google's Maven
+       repository (dl.google.com/android/maven2) and Maven Central
+       (repo1.maven.org), the same two repositories declared in
+       build.gradle. 329 of 330 matched exactly.
     4. The one exception, com.github.chrisbanes:PhotoView:2.3.0, does not
-       exist on Maven Central or Google Maven at all - it is genuinely
-       JitPack-only (confirmed: no matching path on repo1.maven.org, and
+       exist on Maven Central or Google Maven at all; it is genuinely
+       JitPack only (confirmed: no matching path on repo1.maven.org, and
        JitPack builds it on demand from the upstream GitHub tag). There is
        no independent oracle to cross-check its hash against. Per SC-06,
-       JitPack is already scoped with includeGroupByRegex 'com\.github\..*'
-       so it can only ever serve this one namespace; recording its hash here
-       adds a second, complementary control - the checksum is pinned to
-       the artifact observed at review time, so any future tampering with
-       that JitPack build (mutable-ref risk) now fails verification instead
-       of being silently accepted. This is a recorded, accepted residual
-       risk (first-observed-good trust), not a verified provenance chain -
-       see BUG_TRACKER.md SC-03 for the disposition.
+       JitPack is already scoped with an includeGroupByRegex limited to the
+       com.github namespace, so it can only ever serve this one group;
+       recording its hash here adds a second, complementary control: the
+       checksum is pinned to the artifact observed at review time, so any
+       future tampering with that JitPack build (mutable-ref risk) now
+       fails verification instead of being silently accepted. This is a
+       recorded, accepted residual risk (first observed good trust), not a
+       verified provenance chain; see BUG_TRACKER.md SC-03 for the
+       disposition.
     5. verify-signatures stays false: no PGP keyring was generated (no
-       signature files were requested from --write-verification-metadata),
+       signature files were requested from the metadata-generation run),
        so turning signature verification on now would fail every artifact
        for the opposite reason this file used to fail metadata checks.
 
   Note: the vendored app/libs/libsignal-client-0.54.1-stripped.jar is a
-  files(...) dependency, NOT covered by this metadata - its integrity is
-  gated separately by the "check" mode of scripts/strip_signal_records.py
-  (SC-01). The real org.signal:libsignal-android/libsignal-client Maven
+  files(...) dependency, NOT covered by this metadata; its integrity is
+  gated separately by the check mode of scripts/strip_signal_records.py
+  (SC-01). The real org.signal:libsignal-android and libsignal-client Maven
   artifacts (compileOnly, not shipped) ARE covered below and were verified
-  against Maven Central in step 3.
+  against Maven Central in step 3 above.
 -->
 <verification-metadata xmlns="https://schema.gradle.org/dependency-verification"
                        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                        xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.3.xsd">
    <configuration>
       <verify-metadata>true</verify-metadata>
-      <!-- PGP signature verification is opt-in and needs trusted-keys; keep off
-           until a keyring is deliberately generated and reviewed. -->
+      <!-- PGP signature verification is opt in and needs trusted keys; keep
+           it off until a keyring is deliberately generated and reviewed. -->
       <verify-signatures>false</verify-signatures>
    </configuration>
    <components>
@@ -1721,4 +1726,5 @@
             <sha256 value="0cdab410947e04b6743df99cf1543267ddd107357d6f76948d145be590fd497d" origin="Verified (S3-03b): sha256 cross-checked against Google Maven / Maven Central, 2026-08-13"/>
          </artifact>
       </component>
-   </verification-metadata>
+   </components>
+</verification-metadata>
