@@ -9,11 +9,30 @@
 -optimizationpasses 5
 -allowaccessmodification
 
-# ── App crypto & security classes — never obfuscate ─────────
--keep class com.duoshield.app.crypto.**        { *; }
--keepclassmembers class com.duoshield.app.crypto.**    { *; }
--keep class com.duoshield.app.security.**      { *; }
--keepclassmembers class com.duoshield.app.security.**  { *; }
+# ── App crypto & security classes ─────────────────────────────
+# S08-I1: `com.duoshield.app.crypto.**` and `com.duoshield.app.security.**` used
+# to be kept in full (`-keep .. { *; }` + `-keepclassmembers .. { *; }`), which
+# disables shrinking AND obfuscation for every class, field, and method in the
+# app's own key-management, PIN/lock, and E2E-crypto code. That is the opposite
+# of what a security-sensitive package needs from R8: these are the classes an
+# attacker doing static analysis on the APK most wants readable, unobfuscated
+# names and unremoved dead code for. Auditing confirmed no concrete reason for
+# the blanket keep:
+#   - No Class.forName / getDeclaredMethod / getDeclaredField / reflection of
+#     any kind in com.duoshield.app.crypto or com.duoshield.app.security.
+#   - No Gson/Firestore POJO field-name mapping (JSON in this package is built
+#     manually with org.json.JSONObject.put/get — string keys, not reflection).
+#   - No native/JNI entry points here — the only JNI boundary crypto touches is
+#     org.signal.libsignal.**, which has its own keep rule below.
+#   - The two classes in these packages that WorkManager instantiates by class
+#     name at runtime — AccountLockWorker (security) and
+#     SignedPreKeyRotationWorker (crypto.signal) — are already covered by the
+#     generic `-keep class * extends androidx.work.Worker` rule further down,
+#     so they need no package-specific rule either.
+# Full shrinking/obfuscation is therefore safe and enabled for both packages.
+# If a future addition to either package genuinely needs reflection, add a
+# narrow rule scoped to that one class/annotation here — do not restore the
+# blanket package keep.
 
 # ── Data models — required by Room and Firestore reflection ─
 -keep class com.duoshield.app.models.**        { *; }

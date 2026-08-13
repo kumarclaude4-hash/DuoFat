@@ -694,7 +694,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 ClipboardManager cm = (ClipboardManager)
                     ctx.getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) {
-                    cm.setPrimaryClip(ClipData.newPlainText("uid", uid));
+                    ClipData clip = ClipData.newPlainText("uid", uid);
+                    com.duoshield.app.util.ClipboardHelper.markSensitive(clip); // S08-L2
+                    cm.setPrimaryClip(clip);
                     Toast.makeText(ctx, "UID copied", Toast.LENGTH_SHORT).show();
                 }
             });

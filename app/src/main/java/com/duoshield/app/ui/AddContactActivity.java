@@ -25,6 +25,7 @@ import com.duoshield.app.BaseActivity;
 import com.duoshield.app.ChatMediaActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.ui.KeyOrbitView;
+import com.duoshield.app.contacts.AccountIdValidator;
 import com.duoshield.app.contacts.ContactManager;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.button.MaterialButton;
@@ -162,12 +163,19 @@ public class AddContactActivity extends BaseActivity {
         if (data == null) return;
         // scheme: duoshield, host: add, path: /<userId>
         String path = data.getPath();
-        if (path != null && !path.isEmpty()) {
-            String userId = path.startsWith("/") ? path.substring(1) : path;
-            if (!userId.isEmpty() && etPartnerUserId != null) {
-                etPartnerUserId.setText(userId);
-                Toast.makeText(this, "Account ID loaded from link", Toast.LENGTH_SHORT).show();
-            }
+        if (path == null || path.isEmpty()) return;
+        String rawUserId = path.startsWith("/") ? path.substring(1) : path;
+        // S08-L1: the deep link is attacker-controlled input — any app or web page can
+        // fire an ACTION_VIEW intent at duoshield://add/<anything>. Require it to match
+        // the same canonical Account ID shape the clipboard auto-paste path already
+        // enforces, instead of trusting the raw path unconditionally (the previous
+        // fail-open behavior).
+        String userId = AccountIdValidator.canonicalizeOrNull(rawUserId);
+        if (userId != null && etPartnerUserId != null) {
+            etPartnerUserId.setText(userId);
+            Toast.makeText(this, "Account ID loaded from link", Toast.LENGTH_SHORT).show();
+        } else if (!rawUserId.isEmpty()) {
+            Toast.makeText(this, "That link doesn't contain a valid Account ID.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -181,13 +189,15 @@ public class AddContactActivity extends BaseActivity {
             if (clip == null || clip.getItemCount() == 0) return;
             CharSequence text = clip.getItemAt(0).getText();
             if (text == null) return;
-            String s = text.toString().trim();
-            // Match new XXXXX-XXXXX-XXX format (unambiguous base32)
-            if (s.matches("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}")) {
+            // S08-L1: shared with handleDeepLink() via AccountIdValidator so both entry
+            // points enforce the identical canonical Account ID shape instead of
+            // maintaining two copies of the format regex that could drift apart.
+            String canonical = AccountIdValidator.canonicalizeOrNull(text.toString());
+            if (canonical != null) {
                 if (etPartnerUserId != null &&
                         (etPartnerUserId.getText() == null
                                 || etPartnerUserId.getText().toString().isEmpty())) {
-                    etPartnerUserId.setText(s);
+                    etPartnerUserId.setText(canonical);
                     Toast.makeText(this, "Account ID pasted from clipboard", Toast.LENGTH_SHORT).show();
                 }
             }
