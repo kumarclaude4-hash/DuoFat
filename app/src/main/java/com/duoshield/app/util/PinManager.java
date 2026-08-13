@@ -361,10 +361,16 @@ public class PinManager {
         SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
         String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
         if (stored == null) return;
-        int len = sp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        // S08-L3: this used to also read the device gate's plaintext KEY_DEVICE_PIN_LEN
+        // (or DEFAULT_PIN_LEN when absent) and copy it into the promoted account's
+        // KEY_LEN_PREFIX entry — reintroducing, for any account that went through
+        // account creation / restore, exactly the plaintext PIN-length disclosure
+        // setPin()/setDevicePin() were fixed to stop writing. Copy only the salt:hash
+        // string, and scrub any KEY_LEN_PREFIX value a pre-fix build left behind for
+        // this account, mirroring setPin()'s scrub.
         SecurePrefs.get(ctx).edit()
                 .putString(KEY_PIN_PREFIX + user.getUid(), stored)
-                .putInt(KEY_LEN_PREFIX + user.getUid(), len)
+                .remove(KEY_LEN_PREFIX + user.getUid())
                 .apply();
     }
 
