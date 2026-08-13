@@ -21,7 +21,6 @@ import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.appcheck.FirebaseAppCheck;
-import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory;
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreSettings;
@@ -48,11 +47,16 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
         // network call and silently ship that call with no token attached.
         //
         // Play Integrity (release/debug builds alike) is the real-device
-        // attestor; BuildConfig.DEBUG additionally layers in the Debug provider,
-        // which mints a per-install debug token instead of requiring a real
-        // Play Integrity verdict, so debug/CI/emulator builds are never blocked
-        // by an attestation check they cannot pass. Registering DebugAppCheck-
-        // ProviderFactory does nothing unless the resulting token is added as a
+        // attestor; debug builds additionally layer in the Debug provider via
+        // AppCheckDebugProvider.install(), which mints a per-install debug
+        // token instead of requiring a real Play Integrity verdict, so
+        // debug/CI/emulator builds are never blocked by an attestation check
+        // they cannot pass. AppCheckDebugProvider has a debug-variant
+        // implementation (app/src/debug/...) and a release-variant no-op
+        // (app/src/release/...) — see that class for why: DebugAppCheckProvider-
+        // Factory ships in firebase-appcheck-debug, a debugImplementation-only
+        // dependency, so the release source set can never import it directly.
+        // Registering it does nothing unless the resulting token is added as a
         // "debug token" for this app in the Firebase console — until then it
         // just fails open exactly like the Play Integrity factory does below.
         //
@@ -74,8 +78,7 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
             appCheck.installAppCheckProviderFactory(
                     PlayIntegrityAppCheckProviderFactory.getInstance());
             if (BuildConfig.DEBUG) {
-                appCheck.installAppCheckProviderFactory(
-                        DebugAppCheckProviderFactory.getInstance());
+                AppCheckDebugProvider.install(appCheck);
             }
             Log.i(TAG, "App Check provider factory installed ("
                     + (BuildConfig.DEBUG ? "Debug+PlayIntegrity" : "PlayIntegrity") + ").");
