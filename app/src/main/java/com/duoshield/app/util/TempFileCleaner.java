@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit;
  * the cache directory during capture, upload, playback and thumbnailing. These
  * files must not persist — most contain plaintext media.
  *
- * Deletion policy (top level of getCacheDir() only):
+ * Deletion policy (top level of getCacheDir(), PLUS getCacheDir()/shared/**
+ * — see below):
  *   • Plaintext media swept: "voice_*.3gp" / "voice_*.m4a", "vid_*.mp4"
  *     (also covers "vid_view_*.mp4"), "share_*.jpg", "cam_*.jpg",
  *     "grp_cam_*.jpg", "thumb_*.mp4"
@@ -31,6 +32,15 @@ import java.util.concurrent.TimeUnit;
  *     "chat_export_" directory sweep below rather than by a top-level rule.
  *   • Maximum age:      {@value MAX_AGE_MS} ms  (5 minutes)
  *   • Run schedule:     every {@value INTERVAL_MIN} minutes (WorkManager minimum)
+ *
+ * S08-M2 note: "share_*.jpg", "cam_*.jpg", "grp_cam_*.jpg", and
+ * "DuoShield_Export_*.zip" now live under {@link SharedCacheDir}'s
+ * subdirectories (getCacheDir()/shared/media|camera|export/) instead of the
+ * cache root, because they are the only files ever handed to FileProvider —
+ * see SharedCacheDir's class doc. The same filename rules below are applied
+ * to files found in that tree (see {@link #sweepDir}), so relocating them
+ * did not change what gets swept or when, only which files sit at the cache
+ * root at all.
  *
  * Schedule once at app start via {@link #schedule(Context)}.
  * Uses {@link ExistingPeriodicWorkPolicy#KEEP} so subsequent app launches do
@@ -58,11 +68,37 @@ public class TempFileCleaner extends Worker {
         if (cacheDir == null || !cacheDir.exists()) return Result.success();
 
         File[] files = cacheDir.listFiles();
-        if (files == null) return Result.success();
-
         long now     = System.currentTimeMillis();
-        int  deleted = 0;
+        int  deleted = (files == null) ? 0 : sweepDir(files, now);
 
+        // S08-M2: the files FileProvider ever grants a Uri for
+        // (share_/cam_/grp_cam_/DuoShield_Export_) now live under
+        // getCacheDir()/shared/<category>/ instead of the cache root — sweep
+        // each category subdirectory with the identical rules used above.
+        File sharedRoot = SharedCacheDir.root(getApplicationContext());
+        File[] sharedCategories = sharedRoot.listFiles();
+        if (sharedCategories != null) {
+            for (File categoryDir : sharedCategories) {
+                if (!categoryDir.isDirectory()) continue; // defensive; only subdirs expected here
+                File[] categoryFiles = categoryDir.listFiles();
+                if (categoryFiles != null) deleted += sweepDir(categoryFiles, now);
+            }
+        }
+
+        if (deleted > 0) {
+            Log.i(TAG, "Cleaned " + deleted + " decrypted temp file(s) from cache.");
+        }
+        return Result.success();
+    }
+
+    /**
+     * Applies the deletion policy to one flat list of files (either
+     * getCacheDir()'s top level, or one getCacheDir()/shared/<category>/
+     * subdirectory) and returns how many were deleted. Shared between both
+     * call sites in {@link #doWork} so the two locations cannot drift.
+     */
+    private int sweepDir(File[] files, long now) {
+        int deleted = 0;
         for (File f : files) {
             long ageMs = now - f.lastModified();
 
@@ -99,11 +135,7 @@ public class TempFileCleaner extends Worker {
                 }
             }
         }
-
-        if (deleted > 0) {
-            Log.i(TAG, "Cleaned " + deleted + " decrypted temp file(s) from cache.");
-        }
-        return Result.success();
+        return deleted;
     }
 
     /**

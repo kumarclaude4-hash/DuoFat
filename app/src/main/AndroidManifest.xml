@@ -50,8 +50,7 @@
         android:localeConfig="@xml/locales_config"
         android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true"
-        android:extractNativeLibs="false"
-        android:allowNativeHeapPointerTagging="false">
+        android:extractNativeLibs="false">
 
         <!-- ── LAUNCHER ────────────────────────────────────── -->
         <activity
@@ -91,9 +90,17 @@
             android:exported="false" />
 
         <!-- ── Security ────────────────────────────────────── -->
+        <!-- S08-L4: excludeFromRecents keeps this screen (and, since it is the
+             task's top activity while shown, the task's recents thumbnail) out
+             of the system recents list. singleTask backs the lockScreenActive
+             guard in BaseActivity/onShakeToLock: a second FLAG_ACTIVITY_NEW_TASK
+             start while one instance is already showing routes into the
+             existing instance instead of creating a stackable duplicate. -->
         <activity
             android:name=".LockScreenActivity"
             android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.DuoShield" />
 
         <!-- ── Identity / Recovery (Phase 1a) ────────────── -->

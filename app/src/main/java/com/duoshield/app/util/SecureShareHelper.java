@@ -24,7 +24,11 @@ public class SecureShareHelper {
 
     public static void shareImage(Context ctx, byte[] decryptedBytes) {
         new Thread(() -> {
-            File out = new File(ctx.getCacheDir(), "share_" + System.currentTimeMillis() + ".jpg");
+            // S08-M2: write into the FileProvider-scoped shared/media/ subdir
+            // rather than the cache root, so the grant below is not scoped to
+            // the whole cache directory.
+            File out = new File(SharedCacheDir.media(ctx),
+                    "share_" + System.currentTimeMillis() + ".jpg");
             try (FileOutputStream fos = new FileOutputStream(out)) {
                 fos.write(decryptedBytes);
             } catch (Exception e) {
