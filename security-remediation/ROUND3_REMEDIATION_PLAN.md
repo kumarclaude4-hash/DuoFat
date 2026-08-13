@@ -167,11 +167,23 @@ Findings: `S10-N1` (Firebase App Check provider wiring in client + rules enforce
 enforcement enable = runbook; sideloaded-APK caveat = accepted).
 Exit: client wiring + rules scaffold source-reviewed; enable step is operator.
 
-### S3-15b — RULES catch-up verification gate  · lane RULES · **operator toolchain required**
+### S3-15b — RULES catch-up verification gate  · lane RULES · **DONE**
 Not new fixes: run `firestore-tests` on the emulator for every rule changed in S3-04, S3-05, S3-10,
 S3-15 (and the pre-existing `S03-H1`/`S01-L1` regression tests never yet executed). Promote each
 `partial — RULES verification BLOCKED` row to `fixed` (`verified-source+test`) or, on failure, to
 `deferred-with-justification`. **Do not sign off rules work before this runs.**
+
+**Ran this session:** installed Java 21 (Amazon Corretto) + `firebase-tools@15.26.0`, then ran
+`firebase emulators:exec --only firestore --project duoshield-test "npm test"` against
+`firestore-tests/` exactly as `.github/workflows/firestore-rules-test.yml` does. Result:
+**186/186 tests passed, 0 failures.** Promoted `S01-H1`, `S01-H2`, `S01-H3` (S3-04), `S01-M1`,
+`S01-M2`, `S01-M3`, `S01-M4`, `S01-L1`, `S01-L2` (S3-05) from `partial` to `fixed`
+(`verified-source+test`) in `../BUG_TRACKER.md`. `S06-L3` (S3-10) stays `fixed` but its
+never-executed caveat is closed. `S10-N1` (S3-15) and `S07-H3` (S3-17) stay `partial` — both still
+have an open AND-lane half pending `S3-19b`, and `S07-H3`'s rules-side fix (binding sender/group at
+the rules layer) was never implemented in code, so there is nothing rules-side for the emulator to
+promote for that finding specifically. No failures occurred, so nothing routed to
+`deferred-with-justification`.
 
 ### S3-16 — Android crypto storage  · lane AND (verify BLOCKED → S3-19b)
 Findings: `S08-H5`/`S07-M1` (SecurePrefs plaintext fallback holding identity key + backup key +
@@ -220,6 +232,8 @@ only then revisit `FINAL_SIGNOFF.md`.
 
 `FINAL_SIGNOFF.md` stays **PENDING** until: all 20 sessions above are recorded `fixed`/`accepted`
 in `../BUG_TRACKER.md` with real evidence; **S3-15b and S3-19b have actually run** (no BLOCKED rows
-left claiming `fixed`); operator items — GCP key revoked, all creds rotated, branch protection on,
-TTL/App Check/SBOM done; and an operator has built and released the Android client together with the
-server. Anything asserted before that is false progress.
+left claiming `fixed`) — **S3-15b ran this session (186/186 emulator tests passed); S3-19b remains
+outstanding** (no Android SDK/Gradle toolchain in this environment); operator items — GCP key
+revoked, all creds rotated, branch protection on, TTL/App Check/SBOM done; and an operator has built
+and released the Android client together with the server. Anything asserted before that is false
+progress.
