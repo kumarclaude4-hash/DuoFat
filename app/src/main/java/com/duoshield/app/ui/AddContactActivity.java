@@ -217,7 +217,11 @@ public class AddContactActivity extends BaseActivity {
     private void copyMyId() {
         if (myUserId == null || myUserId.isEmpty()) return;
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("user_id", myUserId));
+        if (cm != null) {
+            ClipData clip = ClipData.newPlainText("user_id", myUserId);
+            com.duoshield.app.util.ClipboardHelper.markSensitive(clip); // S08-L2
+            cm.setPrimaryClip(clip);
+        }
         Toast.makeText(this, "Account ID copied!", Toast.LENGTH_SHORT).show();
     }
 

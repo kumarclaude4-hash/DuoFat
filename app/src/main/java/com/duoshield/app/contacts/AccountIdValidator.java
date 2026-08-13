@@ -55,4 +55,15 @@ public final class AccountIdValidator {
     public static boolean isValid(String raw) {
         return canonicalizeOrNull(raw) != null;
     }
+
+    /**
+     * Exposes the compiled canonical-shape pattern for callers that need it as a
+     * {@link Pattern} directly (e.g. {@code ContactManager}'s pre-existing public
+     * {@code ACCOUNT_ID_PATTERN} field). Prefer {@link #isValid(String)} or
+     * {@link #canonicalizeOrNull(String)} for new code — they canonicalize
+     * (trim + uppercase) before matching, which this raw pattern does not.
+     */
+    public static Pattern pattern() {
+        return ACCOUNT_ID_PATTERN;
+    }
 }

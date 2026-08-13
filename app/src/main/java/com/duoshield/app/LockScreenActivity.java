@@ -129,8 +129,24 @@ public class LockScreenActivity extends AppCompatActivity {
         pinDotsView.setFilledCount(len);
         cancelPendingAutoSubmit();
         if (len >= pinLength) {
-            // Exact PIN length reached — submit immediately
+            // Numpad's dot indicator/buffer are sized to PinManager.getPinLength(),
+            // the fixed MAX_PIN_LEN upper bound (S08-L3) — not this account's real
+            // PIN length, which is no longer stored anywhere. Reaching that bound
+            // submits immediately.
             checkPin();
+        } else if (len >= PinManager.MIN_PIN_LEN) {
+            // S08-L3 follow-up: an account's real PIN can be anywhere from
+            // MIN_PIN_LEN to MAX_PIN_LEN digits (see SetupPinActivity), but this
+            // screen can no longer size the buffer to the exact real length
+            // without reintroducing the plaintext-length disclosure the fix
+            // removed. Once at least MIN_PIN_LEN digits are entered, debounce a
+            // short pause and submit automatically — every prior digit press
+            // above cancels this via cancelPendingAutoSubmit(), so a user still
+            // typing keeps typing without an early false submit, and a user who
+            // stops at their actual (shorter-than-max) PIN length is still
+            // verified instead of being stuck unable to submit.
+            pendingAutoSubmit = this::checkPin;
+            autoSubmitHandler.postDelayed(pendingAutoSubmit, AUTO_SUBMIT_DEBOUNCE_MS);
         }
     }
 

@@ -3,6 +3,8 @@ package com.duoshield.app.ui;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
@@ -44,6 +46,8 @@ import com.duoshield.app.util.PinManager;
  */
 public class DevicePinGateActivity extends AppCompatActivity {
 
+    private static final long AUTO_SUBMIT_DEBOUNCE_MS = 600L;
+
     private boolean setupMode;
 
     // ── Verify-mode views ──────────────────────────────────────────────────
@@ -56,6 +60,8 @@ public class DevicePinGateActivity extends AppCompatActivity {
     private int pinLength = 6;
     private StringBuilder pinBuffer = new StringBuilder(6);
     private boolean isVerifying = false;
+    private final Handler autoSubmitHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingAutoSubmit;
 
     // ── Setup-mode views ─────────────────────────────────────────────────
     private EditText etNewPin;
@@ -151,18 +157,42 @@ public class DevicePinGateActivity extends AppCompatActivity {
         if (isVerifying || pinBuffer.length() >= pinLength) return;
         HapticHelper.lightPress(this);
         pinBuffer.append(digit);
-        pinDotsView.setFilledCount(pinBuffer.length());
-        if (pinBuffer.length() >= pinLength) checkPin();
+        int len = pinBuffer.length();
+        pinDotsView.setFilledCount(len);
+        cancelPendingAutoSubmit();
+        if (len >= pinLength) {
+            // pinLength is PinManager.getDevicePinLength()'s fixed MAX_PIN_LEN upper
+            // bound (S08-L3), not this device's real PIN length. Reaching it submits
+            // immediately.
+            checkPin();
+        } else if (len >= PinManager.MIN_PIN_LEN) {
+            // S08-L3 follow-up: the real device PIN can be MIN_PIN_LEN..MAX_PIN_LEN
+            // digits (see initSetupUi()'s 4-6 bound), and this screen no longer knows
+            // the exact real length. Debounce a short pause once at least
+            // MIN_PIN_LEN digits are in so a shorter-than-max PIN can still submit —
+            // every further digit press cancels this pending submit.
+            pendingAutoSubmit = this::checkPin;
+            autoSubmitHandler.postDelayed(pendingAutoSubmit, AUTO_SUBMIT_DEBOUNCE_MS);
+        }
+    }
+
+    private void cancelPendingAutoSubmit() {
+        if (pendingAutoSubmit != null) {
+            autoSubmitHandler.removeCallbacks(pendingAutoSubmit);
+            pendingAutoSubmit = null;
+        }
     }
 
     private void onBackspacePressed() {
         if (isVerifying || pinBuffer.length() == 0) return;
+        cancelPendingAutoSubmit();
         pinBuffer.deleteCharAt(pinBuffer.length() - 1);
         pinDotsView.setFilledCount(pinBuffer.length());
         tvError.setVisibility(View.INVISIBLE);
     }
 
     private void checkPin() {
+        cancelPendingAutoSubmit();
         if (isVerifying) return;
         String entered = pinBuffer.toString();
         if (entered.isEmpty()) return;
