@@ -24,6 +24,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 /**
  * Replaces PairingManager with a multi-contact flow.
@@ -55,6 +56,33 @@ public class ContactManager {
     private static final int    IDENTITY_RETRIES     = 5;
     private static final long   IDENTITY_DELAY_MS    = 1_500L;
 
+    /**
+     * Canonical DuoShield Account ID format: three groups of unambiguous base32
+     * characters (digits 2-9, letters A-Z excluding I/L/O), e.g. K3MNP-Q8RXA-7BC.
+     * This is the single source of truth for what a valid Account ID looks like —
+     * every entry point (manual entry, clipboard auto-paste, deep link, QR scan)
+     * MUST canonicalize and validate against this pattern before the ID is used to
+     * look up an {@code identities/{userId}} document (S08-L1). Firestore document
+     * IDs otherwise accept almost any non-empty string up to 1500 bytes (no "/",
+     * not "." or ".."), so without this gate a malicious deep link
+     * (duoshield://add/<anything>) could feed arbitrary attacker-controlled input
+     * straight into a live Firestore lookup and then into the visible "Account ID"
+     * field and error/toast strings.
+     */
+    public static final Pattern ACCOUNT_ID_PATTERN =
+            Pattern.compile("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}");
+
+    /**
+     * Canonicalizes a raw, user- or link-supplied Account ID string (trims
+     * whitespace, uppercases) and returns it only if it matches
+     * {@link #ACCOUNT_ID_PATTERN}; otherwise returns {@code null}.
+     */
+    public static String canonicalizeAccountId(String raw) {
+        if (raw == null) return null;
+        String candidate = raw.trim().toUpperCase(java.util.Locale.US);
+        return ACCOUNT_ID_PATTERN.matcher(candidate).matches() ? candidate : null;
+    }
+
     private final Context           context;
     private final FirebaseFirestore db;
 
@@ -84,7 +112,16 @@ public class ContactManager {
             callback.onError("Please enter your contact's User ID.");
             return;
         }
-        String id = partnerId.trim();
+        // S08-L1: canonicalize + validate before this ID is used as a Firestore
+        // document ID. This is the authoritative gate — it applies no matter which
+        // entry point (manual entry, deep link, QR scan) supplied the raw string,
+        // so a malformed/attacker-controlled value fails closed here even if an
+        // upstream UI screen forgot to pre-validate.
+        String id = canonicalizeAccountId(partnerId);
+        if (id == null) {
+            callback.onError("That doesn't look like a valid Account ID. It should look like K3MNP-Q8RXA-7BC.");
+            return;
+        }
 
         // Step 1 — resolve userId → Firebase UID (with retry for brand-new accounts
         // whose identities doc may not have propagated to Firestore yet)

@@ -2090,7 +2090,11 @@ public class ChatMediaActivity extends BaseActivity {
             return;
         }
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("message", msg.getText()));
+        if (cm != null) {
+            ClipData clip = ClipData.newPlainText("message", msg.getText());
+            com.duoshield.app.util.ClipboardHelper.markSensitive(clip); // S08-L2
+            cm.setPrimaryClip(clip);
+        }
         Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
     }
 

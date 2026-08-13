@@ -64,6 +64,20 @@ public class AccountLockWorker extends Worker {
     private static final long JITTER_MIN_MS   = 5_000L;
     private static final long JITTER_RANGE_MS = 35_000L;
 
+    /**
+     * S06-L4: {@code Result.retry()} on a {@link androidx.work.OneTimeWorkRequest}
+     * has no built-in attempt cap — returning it forever (e.g. the device stays
+     * offline indefinitely) would have WorkManager reschedule this job forever,
+     * silently, with no genuine-failure signal ever surfacing. 15 attempts of
+     * {@code BackoffPolicy.EXPONENTIAL} starting at 30s and capped by WorkManager's
+     * own 5-hour per-attempt ceiling accumulate to roughly 33 hours of retrying —
+     * comfortably longer than the 24-hour server-side nonce expiry documented on
+     * this class, so a merely-slow network still gets its full retry window, while
+     * a permanently unreachable server or dead network eventually terminates
+     * instead of retrying forever.
+     */
+    private static final int MAX_ATTEMPTS = 15;
+
     public AccountLockWorker(@NonNull Context ctx, @NonNull WorkerParameters params) {
         super(ctx, params);
     }
@@ -155,14 +169,38 @@ public class AccountLockWorker extends Worker {
                     Log.w(TAG, "Lock nonce expired (HTTP 401) — no retry path available post-wipe; dropping.");
                     return Result.success();
                 }
-                Log.w(TAG, "Push server returned HTTP " + code + " — will retry.");
-                return Result.retry();
+                return retryOrGiveUp("Push server returned HTTP " + code);
             } finally {
                 conn.disconnect();
             }
         } catch (Exception e) {
-            Log.w(TAG, "Account lock push failed — will retry: " + e.getMessage());
-            return Result.retry();
+            return retryOrGiveUp("Account lock push failed — " + e.getMessage());
         }
+    }
+
+    /**
+     * Bounds retryable failures (5xx responses, network exceptions) to
+     * {@link #MAX_ATTEMPTS} attempts (S06-L4). Below the cap this behaves exactly
+     * as the unconditional {@code Result.retry()} it replaces — legitimate
+     * transient-failure retry semantics are preserved. At/above the cap it reports
+     * a genuine failure via {@code Log.e} (kept in release builds — see
+     * SEC-L03 in proguard-rules.pro) and returns {@code Result.failure()} instead
+     * of rescheduling forever. It deliberately does NOT clear the durable pending-
+     * lock intent in {@link PendingLockStore}: the same "surface the failure
+     * rather than silently deciding it doesn't matter" reasoning documented on the
+     * HTTP 401 branch above applies here — {@code hasLockIntent()} keeps reporting
+     * "believed unlocked" so this exhausted-retries failure is observable instead
+     * of disappearing.
+     */
+    @NonNull
+    private Result retryOrGiveUp(String reason) {
+        int attempt = getRunAttemptCount();
+        if (attempt + 1 >= MAX_ATTEMPTS) {
+            Log.e(TAG, reason + " — giving up after " + (attempt + 1)
+                    + " attempts (S06-L4 bounded retry cap). Account lock push NOT confirmed.");
+            return Result.failure();
+        }
+        Log.w(TAG, reason + " — will retry (attempt " + (attempt + 1) + "/" + MAX_ATTEMPTS + ").");
+        return Result.retry();
     }
 }

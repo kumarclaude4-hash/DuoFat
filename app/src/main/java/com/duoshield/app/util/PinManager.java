@@ -40,10 +40,28 @@ public class PinManager {
 
     private static final String KEY_PIN_PREFIX    = "app_pin_hash_";
     private static final String KEY_PIN_LEGACY    = "app_pin_hash";
+    // KEY_LEN_PREFIX is now read-only-for-migration: PinManager no longer WRITES a
+    // plaintext PIN-length integer beside the salt:hash string (S08-L3 — an attacker
+    // with app-process or decrypted-prefs read access previously learned the exact
+    // PIN length, cutting the brute-force keyspace to a single length instead of the
+    // full 4–6 digit range, for free and without doing any of the PBKDF2 work the
+    // hash itself demands). setPin()/setDevicePin() now scrub this key instead of
+    // populating it; getPinLength()/getDevicePinLength() return the fixed
+    // MAX_PIN_LEN upper bound below for UI sizing only, never a per-account secret.
     private static final String KEY_LEN_PREFIX    = "app_pin_length_";
     private static final int    ITERATIONS        = 310_000;
     private static final int    KEY_LEN           = 256;
-    private static final int    DEFAULT_PIN_LEN   = 6;
+
+    /** Minimum PIN length accepted by setup screens (see SetupPinActivity, DevicePinGateActivity). */
+    public static final int MIN_PIN_LEN = 4;
+    /**
+     * Maximum PIN length accepted by setup screens, and — since S08-L3 — the fixed
+     * value {@link #getPinLength}/{@link #getDevicePinLength} return for sizing the
+     * numpad's dot indicator and input buffer. It is an upper bound shared by every
+     * account, not a disclosure of any one account's actual PIN length.
+     */
+    public static final int MAX_PIN_LEN = 6;
+    private static final int DEFAULT_PIN_LEN = MAX_PIN_LEN;
 
     /**
      * Device-scoped PIN — independent of any Firebase UID. Gates
@@ -84,8 +102,10 @@ public class PinManager {
             SharedPreferences.Editor ed = SecurePrefs.get(ctx).edit()
                     .putString(key, stored)
                     .remove(KEY_PIN_LEGACY);
+            // S08-L3: do not persist the plaintext PIN length beside the hash.
+            // Scrub any value a pre-fix build left behind for this account instead.
             if (user != null) {
-                ed.putInt(KEY_LEN_PREFIX + user.getUid(), pin.length());
+                ed.remove(KEY_LEN_PREFIX + user.getUid());
             }
             ed.apply();
 
@@ -182,14 +202,23 @@ public class PinManager {
     }
 
     /**
-     * Returns the length of the PIN the user set (4–6).
-     * Defaults to {@link #DEFAULT_PIN_LEN} if the length was never stored
-     * (e.g. the PIN was set on an older build).
+     * Returns {@link #MAX_PIN_LEN} — the fixed upper bound {@code LockScreenActivity}
+     * uses to size the numpad's dot indicator and input buffer.
+     *
+     * <p>Before S08-L3, this returned the caller's actual, per-account PIN length,
+     * read back from a plaintext integer stored beside the PIN's salt:hash. That let
+     * anyone with app-process or decrypted-SecurePrefs read access learn the exact
+     * PIN length for free, cutting a brute-force attempt down to a single length
+     * out of the accepted {@link #MIN_PIN_LEN}–{@link #MAX_PIN_LEN} range instead of
+     * needing to try all of them. Callers that used the old exact length purely to
+     * know when to auto-submit no longer need to: the numpad now submits once
+     * {@link #MAX_PIN_LEN} digits are entered, or after a short pause once at least
+     * {@link #MIN_PIN_LEN} digits are entered (see {@code LockScreenActivity}/
+     * {@code DevicePinGateActivity}'s debounced auto-submit) — neither needs to know
+     * the account's real length in advance.
      */
     public static int getPinLength(Context ctx) {
-        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-        if (user == null) return DEFAULT_PIN_LEN;
-        return SecurePrefs.get(ctx).getInt(KEY_LEN_PREFIX + user.getUid(), DEFAULT_PIN_LEN);
+        return MAX_PIN_LEN;
     }
 
     public static boolean hasPinSet(Context ctx) {
@@ -258,8 +287,9 @@ public class PinManager {
         SharedPreferences legacySp = SecurePrefs.get(ctx);
         String legacy = legacySp.getString(KEY_DEVICE_PIN_HASH, null);
         if (legacy == null) return false;
-        int len = legacySp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
-        sp.edit().putString(KEY_DEVICE_PIN_HASH, legacy).putInt(KEY_DEVICE_PIN_LEN, len).apply();
+        // S08-L3: migrate only the hash — the plaintext length that used to travel
+        // alongside it is deliberately dropped here rather than carried forward.
+        sp.edit().putString(KEY_DEVICE_PIN_HASH, legacy).apply();
         legacySp.edit().remove(KEY_DEVICE_PIN_HASH).remove(KEY_DEVICE_PIN_LEN).apply();
         android.util.Log.i("PinManager", "Migrated device-gate PIN hash to its isolated storage file.");
         return true;
@@ -271,17 +301,23 @@ public class PinManager {
             new SecureRandom().nextBytes(salt);
             byte[] hash = pbkdf2(pin, salt);
             String stored = bytesToHex(salt) + ":" + bytesToHex(hash);
+            // S08-L3: do not persist the plaintext PIN length beside the hash. Scrub
+            // any value a pre-fix build left behind for this device instead.
             SecurePrefs.getDeviceGate(ctx).edit()
                     .putString(KEY_DEVICE_PIN_HASH, stored)
-                    .putInt(KEY_DEVICE_PIN_LEN, pin.length())
+                    .remove(KEY_DEVICE_PIN_LEN)
                     .apply();
         } catch (Exception e) {
             android.util.Log.e("PinManager", "Failed to store device-level PIN hash", e);
         }
     }
 
+    /**
+     * Returns {@link #MAX_PIN_LEN}. See {@link #getPinLength} — the same S08-L3
+     * fix applies to the device-scoped gate PIN.
+     */
     public static int getDevicePinLength(Context ctx) {
-        return SecurePrefs.getDeviceGate(ctx).getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        return MAX_PIN_LEN;
     }
 
     public static boolean verifyDevicePin(Context ctx, String entered) {
@@ -325,10 +361,16 @@ public class PinManager {
         SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
         String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
         if (stored == null) return;
-        int len = sp.getInt(KEY_DEVICE_PIN_LEN, DEFAULT_PIN_LEN);
+        // S08-L3: this used to also read the device gate's plaintext KEY_DEVICE_PIN_LEN
+        // (or DEFAULT_PIN_LEN when absent) and copy it into the promoted account's
+        // KEY_LEN_PREFIX entry — reintroducing, for any account that went through
+        // account creation / restore, exactly the plaintext PIN-length disclosure
+        // setPin()/setDevicePin() were fixed to stop writing. Copy only the salt:hash
+        // string, and scrub any KEY_LEN_PREFIX value a pre-fix build left behind for
+        // this account, mirroring setPin()'s scrub.
         SecurePrefs.get(ctx).edit()
                 .putString(KEY_PIN_PREFIX + user.getUid(), stored)
-                .putInt(KEY_LEN_PREFIX + user.getUid(), len)
+                .remove(KEY_LEN_PREFIX + user.getUid())
                 .apply();
     }
 
