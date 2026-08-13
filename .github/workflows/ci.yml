@@ -251,12 +251,17 @@ jobs:
       # Covers the classpath graph plus every configuration the other CI jobs
       # resolve: lint, debug build, release build, and androidTest compilation
       # (compiling androidTest sources resolves the androidTestImplementation
-      # graph without needing an emulator).
-      - name: Generate verification metadata (sha256)
+      # graph without needing an emulator). --dry-run writes to
+      # gradle/verification-metadata.dryrun.xml instead of overwriting the
+      # committed gradle/verification-metadata.xml in place, so this job
+      # never mutates the enforced file — the output is only ever reviewed
+      # and merged by hand.
+      - name: Generate verification metadata (sha256, dry-run)
         run: |
-          ./gradlew --write-verification-metadata sha256 \
+          ./gradlew --write-verification-metadata sha256 --dry-run \
             :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest \
             --no-daemon --continue || true
+          ls -la gradle/
 
       - name: Upload generated metadata
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -264,6 +269,14 @@ jobs:
           name: verification-metadata-dryrun
           path: gradle/verification-metadata.dryrun.xml
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload generated keyring (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verification-keyring-dryrun
+          path: gradle/verification-keyring-dryrun.keys
+          if-no-files-found: warn
           retention-days: 14
 
   instrumented-tests:
