@@ -30,3 +30,16 @@ STATS_SECRET=
 #   MEDIA_TOKEN_SECRET=<same value>                (push server env)
 # NEVER compile this into the Android APK — that is the weakness it replaces.
 MEDIA_TOKEN_SECRET=
+
+# Server-to-server token for POST /adminLockout (the admin brute-force
+# lockout counter, backed by the ADMIN_LOCKOUT_DO Durable Object — see
+# src/adminLockoutDurableObject.js). REQUIRED — the Worker fails closed (401)
+# if this is unset. Must be byte-identical to Render's
+# ADMIN_LOCKOUT_WORKER_SECRET env var (see server/README.md). Generate once:
+#   openssl rand -base64 48
+# then set it in both places:
+#   npx wrangler secret put ADMIN_LOCKOUT_SECRET   (Worker)
+#   ADMIN_LOCKOUT_WORKER_SECRET=<same value>       (Render)
+# This is a distinct secret from STATS_SECRET on purpose: one authenticates
+# Render's server-to-server calls, the other an operator's browser session.
+ADMIN_LOCKOUT_SECRET=

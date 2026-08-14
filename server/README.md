@@ -66,6 +66,50 @@ messaging server over one would trade a small exposure for a total outage.
 | `TURN_TOKEN_ID`, `TURN_API_TOKEN` | Cloudflare TURN credentials for calls | `/turnCredentials` returns `503`; client-side behaviour after that is not documented here (not verified) |
 | `YOUTUBE_API_KEY` | YouTube Data API v3 (Watch Together search) | `POST /youtubeSearch` returns `503` |
 | `PUBLIC_BASE_URL` | Absolute origin of this server, used to build proxied preview-image URLs | Derived from `X-Forwarded-Proto`/`Host`; set it explicitly behind a proxy that rewrites `Host` |
+| `ADMIN_LOCKOUT_WORKER_URL`, `ADMIN_LOCKOUT_WORKER_SECRET` | Cloudflare Worker + Durable Object endpoint backing the admin brute-force lockout counter (`lib/adminLockoutStore.js`, S04-L3) | Falls back to a process-local counter — same behaviour as before this was made durable, i.e. it does NOT survive a Render restart/redeploy or span multiple instances. Both must be set together; the server still boots and serves traffic either way. |
+
+#### Cloudflare Durable Object setup (admin lockout durability + atomicity)
+
+As of 2026-08-14 this is backed by a Cloudflare Durable Object
+(`worker/src/adminLockoutDurableObject.js`), fronted by the `/adminLockout`
+route on the project's existing Cloudflare Worker (`worker/src/index.js`).
+This is **not** Cloudflare KV — an earlier same-day attempt to back this
+counter with plain KV (`GET`→increment→`PUT`) was found to have a genuine
+concurrency bug (concurrent failed admin-login attempts could undercount
+the lockout, widening an attacker's guess budget) and was replaced before
+ever shipping. Durable Objects guarantee that every request to the same
+instance is processed strictly one at a time, so the increment here is
+genuinely atomic — see `adminLockoutStore.js`'s header comment for the full
+fix history, and `adminLockoutDurableObject.js`'s for why the guarantee
+holds. This also replaces the original Upstash Redis-backed store
+(`KV_REST_API_URL`/`KV_REST_API_TOKEN` — **removed**, no longer read by
+`index.js`; safe to delete from Render and from wherever the Upstash
+integration provisioned them once this migration is deployed and verified).
+
+1. **Deploy the Worker with the Durable Object** — from `/worker`:
+   `npx wrangler deploy`. `wrangler.jsonc` already declares the
+   `ADMIN_LOCKOUT_DO` binding and the `new_sqlite_classes` migration for
+   `AdminLockoutCounter` — no manual dashboard step is needed to create the
+   Durable Object itself; deploying the Worker provisions it. The SQLite
+   storage backend Durable Objects use here is available on Cloudflare's
+   **free** Workers plan — no paid plan upgrade is required for this.
+2. **Generate and set the shared secret** — `openssl rand -base64 48`, then:
+   - Worker side: `npx wrangler secret put ADMIN_LOCKOUT_SECRET` (from `/worker`)
+   - Render side: set `ADMIN_LOCKOUT_WORKER_SECRET` to the same value
+   These must be byte-identical; this is a server-to-server credential, not
+   an operator-facing one, and is deliberately a different secret from
+   `STATS_SECRET` (see `isAdminLockoutAuthorized` in `worker/src/index.js`).
+3. **Set `ADMIN_LOCKOUT_WORKER_URL` on Render** — the deployed Worker's base
+   URL (e.g. `https://duoshield-storage.<subdomain>.workers.dev`, or a
+   custom domain if one is configured), with **no** path suffix — the
+   client appends `/adminLockout` itself.
+4. **Verify, then remove the old Upstash variables** — once a deploy with
+   both Render variables above is confirmed working (check for `admin
+   lockout: Durable-Object-backed (durable across restarts/instances, atomic
+   under concurrency)` in the Render logs at startup), delete
+   `KV_REST_API_URL`/`KV_REST_API_TOKEN` from Render and disconnect/delete
+   the Upstash integration if it is not used for anything else in this
+   project.
 
 ### Rotation
 

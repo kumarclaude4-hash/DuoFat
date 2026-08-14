@@ -1,0 +1,134 @@
+// ── AdminLockoutCounter: atomic admin brute-force lockout counter ───────────
+//
+// WHY THIS EXISTS (follow-up to the 2026-08-14 Upstash → Cloudflare KV
+// migration; see server/lib/adminLockoutStore.js's "MIGRATION" note and
+// BUG_TRACKER.md's S04-L3 row for the full history)
+//
+// The first Cloudflare KV version of this counter used a plain
+// GET → increment → PUT against KV's REST API, which has no INCR/CAS
+// equivalent. That was flagged as a real race — not a theoretical one:
+// concurrent failed admin-login requests can each read the same
+// pre-increment count and each write count+1, so the lockout counter
+// UNDERCOUNTS under concurrency. For a brute-force gate specifically, that
+// is not an acceptable tradeoff to wave away by analogy to this repo's other
+// (non-security) best-effort KV counters — it needs an actual fix, not a
+// bigger comment.
+//
+// THE FIX: a Durable Object.
+//
+// Cloudflare Durable Objects guarantee that all requests routed to the SAME
+// object instance are processed one at a time — the runtime's input/output
+// gating means a `fetch()` handler's storage reads and writes cannot
+// interleave with another concurrent `fetch()` call to that same instance,
+// with no manual locking required. (See Cloudflare's Durable Objects docs:
+// "Requests to the same Durable Object are delivered in order and processed
+// one at a time.") Every (normalized IP)'s lockout state lives in exactly
+// one Durable Object instance (`idFromName(key)`), so incrementing that
+// instance's counter is a true atomic operation: two concurrent failures
+// for the same IP are guaranteed to be applied as two increments, never
+// collapsed into one.
+//
+// This is available on the Cloudflare Workers FREE plan as of the SQLite
+// storage backend (`new_sqlite_classes` migration in wrangler.jsonc) — no
+// paid plan is required, contrary to this repo's older assumption (see the
+// superseded comment this replaces in adminLockoutStore.js and the Worker's
+// S03-I2 "no Durable Objects" note, which predates this fix and no longer
+// applies to this one counter).
+//
+// SCOPE: this Durable Object exists ONLY for the admin lockout counter. It
+// does not replace or generalize to the Worker's other KV-backed counters
+// (rate limiting, storage quotas) — those remain best-effort KV as before,
+// because their failure mode (an approximate quota/rate limit) does not
+// carry the same "brute-force gate must not undercount" requirement that
+// motivated this specific fix.
+//
+// WHAT IS STORED: `{ count, windowStart }` only, in this instance's own
+// transactional storage (`state.storage`, SQLite-backed) — no tokens,
+// secrets, or PII. Structurally identical to the record shape the KV
+// version stored, but see the API surface: this Durable Object is called
+// with a single atomic RPC per admin lockout operation (`record` /
+// `status` / `reset`), not raw get/put/delete, precisely because the
+// atomicity guarantee lives in "one instance processes one request fully
+// before starting the next", not in any single storage call.
+//
+// AUTHENTICATION: this class has no fetch handler of its own reachable from
+// the public Internet — Durable Object instances are only reachable via a
+// binding from within this same Worker (`env.ADMIN_LOCKOUT_DO`), never
+// exposed on a public route directly. The Worker's own `/adminLockout` route
+// (see index.js) is what's Internet-reachable, and that route enforces
+// `ADMIN_LOCKOUT_SECRET` (same fail-closed, timing-safe pattern as
+// `STATS_SECRET`) before ever touching this class. This module therefore
+// does not re-check auth — by the time a request reaches here, the Worker
+// has already authorized it.
+
+const DEFAULT_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_MAX_FAILS = 10;
+const STORAGE_KEY = "record";
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export class AdminLockoutCounter {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "Malformed request body" }, 400);
+    }
+    if (!body || typeof body !== "object") {
+      return json({ error: "Malformed request body" }, 400);
+    }
+
+    const { action } = body;
+    const windowMs = Number.isFinite(body.windowMs) && body.windowMs > 0 ? body.windowMs : DEFAULT_WINDOW_MS;
+    const maxFails = Number.isFinite(body.maxFails) && body.maxFails > 0 ? body.maxFails : DEFAULT_MAX_FAILS;
+    const now = Date.now();
+
+    // Every branch below reads then writes `this.state.storage` at most
+    // once each, with no I/O to anything else in between — this is what the
+    // Durable Object runtime's per-instance serialization actually
+    // protects. A version of this code that awaited some OTHER I/O (e.g. an
+    // outbound fetch) between the read and the write would reopen exactly
+    // the race this class exists to close, because the runtime only
+    // guarantees no other REQUEST's JS interleaves — it does not turn
+    // unrelated async gaps within a single request into a lock across
+    // requests by itself. Keep it this way: read storage, compute, write
+    // storage, return — nothing else in between.
+    if (action === "record") {
+      const existing = await this.state.storage.get(STORAGE_KEY);
+      const next =
+        !existing || now - existing.windowStart >= windowMs
+          ? { count: 1, windowStart: now }
+          : { count: existing.count + 1, windowStart: existing.windowStart };
+      await this.state.storage.put(STORAGE_KEY, next);
+      return json({ count: next.count, locked: next.count >= maxFails, windowStart: next.windowStart });
+    }
+
+    if (action === "status") {
+      const existing = await this.state.storage.get(STORAGE_KEY);
+      if (!existing || now - existing.windowStart >= windowMs) {
+        return json({ count: 0, locked: false, windowStart: null });
+      }
+      return json({ count: existing.count, locked: existing.count >= maxFails, windowStart: existing.windowStart });
+    }
+
+    if (action === "reset") {
+      await this.state.storage.delete(STORAGE_KEY);
+      return json({ ok: true });
+    }
+
+    return json({ error: `Unknown action: ${String(action)}` }, 400);
+  }
+}
+
+export { DEFAULT_WINDOW_MS, DEFAULT_MAX_FAILS };

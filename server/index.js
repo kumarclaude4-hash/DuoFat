@@ -8,7 +8,7 @@ const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
 const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
 const { createAdminLockoutStore } = require("./lib/adminLockoutStore");
 const { createAdminSessionStore } = require("./lib/adminSessionStore");
-const { Redis } = require("@upstash/redis");
+const { createAdminLockoutWorkerClient } = require("./lib/adminLockoutWorkerClient");
 
 let serviceAccount;
 try {
@@ -749,39 +749,44 @@ setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
 // restart silently reset every IP's count to zero — the only ceiling in
 // front of ADMIN_TOKEN (see lib/adminSecret.js's S05-H1 note) never actually
 // accumulated across the instance's lifetime. `createAdminLockoutStore()`
-// (lib/adminLockoutStore.js) backs the same counter with Upstash Redis so it
-// survives restarts and is shared across instances, and degrades to an
-// in-memory fallback (same semantics as the code this replaces) only if
-// Redis is unconfigured or unreachable — see that module's header comment
-// for the full fail-safe/atomicity rationale.
+// (lib/adminLockoutStore.js) backs the same counter with a Cloudflare
+// Durable Object (via the project's existing `/worker`) so it survives
+// restarts, is shared across instances, AND stays exactly atomic under
+// concurrent failures — see that module's header comment for the full
+// fail-safe/atomicity rationale and fix history (Upstash Redis → a
+// same-day-superseded Cloudflare KV attempt → this Durable Object fix,
+// all on 2026-08-14).
 //
-// KV_REST_API_URL / KV_REST_API_TOKEN are the standard Upstash Redis REST
-// credentials; this server intentionally does not invent new env var names.
-// Both are optional: an operator who has not provisioned Redis still gets a
-// working (process-local, pre-fix-equivalent) lockout rather than a crash.
-const adminRedisClient = (() => {
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  if (!url || !token) {
+// ADMIN_LOCKOUT_WORKER_URL / ADMIN_LOCKOUT_WORKER_SECRET are required to
+// enable the durable path; the secret must match the Worker's
+// ADMIN_LOCKOUT_SECRET (see server/README.md and worker/wrangler.jsonc).
+// Both are optional here: an operator who has not deployed the Worker's
+// admin-lockout route still gets a working (process-local,
+// pre-fix-equivalent) lockout rather than a crash.
+const adminLockoutWorkerClient = (() => {
+  const workerUrl = process.env.ADMIN_LOCKOUT_WORKER_URL;
+  const workerSecret = process.env.ADMIN_LOCKOUT_WORKER_SECRET;
+  if (!workerUrl || !workerSecret) {
     console.warn(
-      "admin lockout: KV_REST_API_URL/KV_REST_API_TOKEN not set — falling back to " +
-      "process-local lockout state, which does NOT survive a restart or span multiple " +
-      "instances. Set both to enable the durable, Redis-backed lockout (S04-L3)."
+      "admin lockout: ADMIN_LOCKOUT_WORKER_URL/ADMIN_LOCKOUT_WORKER_SECRET " +
+      "not fully set — falling back to process-local lockout state, which does NOT survive " +
+      "a restart or span multiple instances. Set both to enable the durable, " +
+      "Durable-Object-backed, atomic lockout (S04-L3)."
     );
     return null;
   }
-  return new Redis({ url, token });
+  return createAdminLockoutWorkerClient({ workerUrl, workerSecret });
 })();
 
 const adminLockoutStore = createAdminLockoutStore({
-  redis: adminRedisClient,
+  client: adminLockoutWorkerClient,
   windowMs: ADMIN_IP_WINDOW_MS,
   maxFails: ADMIN_IP_MAX_FAILS,
   normalizeIp: pure.normalizeIpForRateLimit,
-  onError: (op, err) => console.warn(`admin lockout: Redis ${op} failed, using local fallback:`, err.message),
+  onError: (op, err) => console.warn(`admin lockout: Worker/Durable Object ${op} failed, using local fallback:`, err.message),
 });
-if (adminRedisClient) {
-  console.log("admin lockout: Redis-backed (durable across restarts/instances)");
+if (adminLockoutWorkerClient) {
+  console.log("admin lockout: Durable-Object-backed (durable across restarts/instances, atomic under concurrency)");
 }
 
 // S04-M1: see the comment on checkWaitlistIpRateLimit above — same fix. The
@@ -1644,7 +1649,7 @@ function markUpdated() {
   if (el) el.textContent = "Updated " + new Date().toLocaleTimeString();
 }
 
-// ── Refresh buttons: shared loading feedback ─────────────────────────────────
+// ── Refresh buttons: shared loading feedback ────────────────────────────────��
 // Wraps a section (or "refresh all") load call so the triggering button shows a
 // busy state and the "Last updated" stamp advances on success.
 async function reload(btn, fn) {
@@ -2614,7 +2619,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /waitlistStatus?requestId=... ────────────────────────────────────────
+  // ── GET /waitlistStatus?requestId=... ───────���────────────────────────────────
   //
   // Returns { status: "pending" | "approved" | "used" | "not_found" }.
   // No auth required (the requestId itself is an unguessable 128-bit token,
@@ -4348,7 +4353,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/locked/unfreeze ───────────────────────────────────────
+  // ── POST /admin/api/locked/unfreeze ─────────────���─────────────────────────
   //
   // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be

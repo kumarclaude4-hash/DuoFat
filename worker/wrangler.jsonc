@@ -23,6 +23,22 @@
     }
   ],
 
+  // Admin brute-force lockout counter (see src/adminLockoutDurableObject.js).
+  // Uses the SQLite storage backend, which is available on the Workers FREE
+  // plan — no paid plan upgrade required for this one Durable Object class.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ADMIN_LOCKOUT_DO", "class_name": "AdminLockoutCounter" }
+    ]
+  },
+
+  // Required the first time a Durable Object class is added to a Worker;
+  // `new_sqlite_classes` (rather than `new_classes`) selects the free-plan
+  // SQLite storage backend for this class.
+  "migrations": [
+    { "tag": "v1-admin-lockout-do", "new_sqlite_classes": ["AdminLockoutCounter"] }
+  ],
+
   "vars": {
     // Your Backblaze B2 S3-compatible endpoint, bucket name, and region.
     "B2_ENDPOINT": "https://s3.eu-central-003.backblazeb2.com",
@@ -56,6 +72,7 @@
   // npx wrangler secret put B2_SECRET_ACCESS_KEY   ← Backblaze application key
   // npx wrangler secret put STATS_SECRET            ← operator-only /stats token (S08-H1; never shipped to a client; replaces the leaked WORKER_SECRET)
   // npx wrangler secret put MEDIA_TOKEN_SECRET      ← per-object capability-token signing key (must match the push server)
+  // npx wrangler secret put ADMIN_LOCKOUT_SECRET    ← server-to-server token for POST /adminLockout (must match Render's ADMIN_LOCKOUT_WORKER_SECRET; see server/README.md)
 
   // Daily tiering cron (02:00 UTC every day)
   "triggers": {
