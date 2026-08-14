@@ -737,9 +737,20 @@ const ADMIN_IP_MAX_FAILS = 10;
 const ADMIN_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const ADMIN_SESSION_TTL_MS = ADMIN_SESSION_IDLE_TTL_MS;
 const ADMIN_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000; // 8h
+// S07-H1: `bindIp` defaults to OFF. Enforcing the IP dimension of the session
+// binding logged mobile operators out constantly — a phone switching WiFi to
+// LTE, a carrier-grade NAT reassigning an address, or a dual-stack client
+// flipping between its IPv4 and IPv6 route all change the client address
+// mid-session, and each one surfaced as "Your session expired. Sign in
+// again." on the very first /admin/api/* call after a SUCCESSFUL login. The
+// User-Agent binding (stable across a network change) still rejects a cookie
+// replayed from a different client. Set ADMIN_BIND_SESSION_IP=1 to re-enable
+// IP binding on a deployment with a guaranteed-stable client address.
+const ADMIN_BIND_SESSION_IP = process.env.ADMIN_BIND_SESSION_IP === "1";
 const adminSessionStore = createAdminSessionStore({
   idleTtlMs: ADMIN_SESSION_IDLE_TTL_MS,
   absoluteTtlMs: ADMIN_SESSION_ABSOLUTE_TTL_MS,
+  bindIp: ADMIN_BIND_SESSION_IP,
 });
 
 setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
@@ -4041,21 +4052,41 @@ const server = http.createServer((req, res) => {
       const params = new URLSearchParams(body);
       const supplied = (params.get("token") || "").trim();
       const ip = getClientIp(req);
+      // S07-H1 (second half of the reported bug): every failure branch below
+      // used to redirect back to /admin WITHOUT touching the session cookie.
+      // If a stale/al­ready-authenticated cookie was still in the jar, GET
+      // /admin then rendered the full dashboard — so entering a WRONG token
+      // visibly "logged you in" for a moment before the first API call 401'd
+      // and bounced back to the gate. Failing a login must always leave the
+      // browser with no session at all, so a wrong token can never render the
+      // dashboard even for one frame. Built once here and reused by every
+      // failure branch.
+      const clearedSessionCookie = adminSessionCookie("", req, 0);
+      const staleSessionId = getCookie(req, "duoshield_admin_session");
+      const failLogin = (errorCode) => {
+        // Also revoke server-side so the cookie cannot be replayed by anything
+        // that captured it before this failed attempt.
+        if (staleSessionId) adminSessionStore.revoke(staleSessionId);
+        res.writeHead(303, {
+          Location: `/admin?error=${errorCode}`,
+          "Cache-Control": "no-store",
+          "Set-Cookie": clearedSessionCookie,
+        });
+        res.end();
+      };
       if (await adminIpLocked(ip)) {
         console.warn(`admin login: locked out ip=${ip}`);
         // S05-H3: the login gate is the event an investigator cares about most,
         // and until this call existed it was recorded ONLY in Render's rolling
         // console. Every branch below writes durably for the same reason.
         auditAdminEvent("admin_login_blocked_locked_out", req);
-        res.writeHead(303, { "Location": "/admin?error=locked", "Cache-Control": "no-store" });
-        res.end();
+        failLogin("locked");
         return;
       }
       if (!ADMIN_TOKEN) {
         console.error("admin login: ADMIN_TOKEN is not configured on the server");
         auditAdminEvent("admin_login_unconfigured", req);
-        res.writeHead(303, { "Location": "/admin?error=unconfigured", "Cache-Control": "no-store" });
-        res.end();
+        failLogin("unconfigured");
         return;
       }
       if (!supplied || !safeTokenEqual(supplied, ADMIN_TOKEN)) {
@@ -4069,8 +4100,7 @@ const server = http.createServer((req, res) => {
           suppliedLength: supplied.length,
           failuresInWindow: await adminLockoutStore.count(ip),
         });
-        res.writeHead(303, { "Location": "/admin?error=invalid", "Cache-Control": "no-store" });
-        res.end();
+        failLogin("invalid");
         return;
       }
       // S04-L3: clear any accumulated failures now that this IP has proven it
@@ -4078,6 +4108,10 @@ const server = http.createServer((req, res) => {
       // operator's earlier mistyped attempts shouldn't count toward a future
       // lockout window. (See adminLockoutStore.reset()'s doc comment.)
       await resetAdminAuthFailures(ip);
+      // Session-id rotation on login: drop whatever session the browser
+      // arrived with before minting the new one, so a pre-set (fixated) or
+      // simply stale id is never the one that ends up authenticated.
+      if (staleSessionId) adminSessionStore.revoke(staleSessionId);
       const sessionId = createAdminSession(req);
       console.log(`admin login: success ip=${ip}`);
       // Success is audited as deliberately as failure: "nobody failed" is not
@@ -4353,7 +4387,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/locked/unfreeze ─────────────���─────────────────────────
+  // ── POST /admin/api/locked/unfreeze ─────────────���───────────���─────────────
   //
   // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Deletes the accountLock/{uid} doc — the only way this doc can ever be
@@ -4509,7 +4543,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/account/lookup?uid=... ───────���────────────────────────
+  // ── GET /admin/api/account/lookup?uid=... ──���────���────────────────────────
   //
   // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Looks up whether an account with this UID
   // actually exists (identities/{uid}) and its current duress-PIN eligibility

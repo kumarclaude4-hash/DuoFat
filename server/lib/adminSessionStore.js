@@ -92,6 +92,12 @@ function defaultRandomId() {
  * @param {number} [opts.absoluteTtlMs] - Absolute lifetime ceiling in ms,
  *   measured from `createdAt`. Must be >= idleTtlMs to have any effect
  *   beyond the idle timeout; callers are expected to configure it larger.
+ * @param {boolean} [opts.bindIp] - Whether `validate()` enforces the IP
+ *   dimension of the binding. Default `false`: a mobile client's address
+ *   legitimately changes mid-session (WiFi/LTE handover, CGNAT reassignment,
+ *   IPv4/IPv6 route switching), and enforcing it there produced spurious
+ *   "session expired" logouts (S07-H1). The User-Agent binding is always
+ *   enforced. Set `true` only where the client address is guaranteed stable.
  * @param {() => number} [opts.now] - Clock, injectable for deterministic
  *   tests. Defaults to `Date.now`.
  * @param {() => string} [opts.randomId] - Session id generator, injectable
@@ -100,6 +106,7 @@ function defaultRandomId() {
 function createAdminSessionStore({
   idleTtlMs = DEFAULT_IDLE_TTL_MS,
   absoluteTtlMs = DEFAULT_ABSOLUTE_TTL_MS,
+  bindIp = false,
   now = () => Date.now(),
   randomId = defaultRandomId,
 } = {}) {
@@ -168,7 +175,19 @@ function createAdminSessionStore({
 
     // Binding checks reject THIS request without deleting the session — see
     // the module doc comment's "DESIGN NOTE ON THE BINDING CHECK" above.
-    if (ctx.ip !== undefined && rec.ip !== ctx.ip) {
+    //
+    // S07-H1: the IP dimension is now opt-in (`bindIp`, default off) rather
+    // than always-on. On a mobile network the client address legitimately
+    // changes mid-session — WiFi to LTE, a carrier-grade NAT reassigning an
+    // address, a dual-stack client switching between its IPv4 and IPv6 route —
+    // and each of those turned into a hard `ip_mismatch` that bounced the
+    // operator to the login gate with "Your session expired" while the cookie
+    // was in fact still perfectly valid. That is exactly the reported bug on
+    // mobile. The User-Agent binding (which does NOT change across a network
+    // switch) is kept mandatory, so a cookie replayed from a different client
+    // is still refused; IP binding remains available for deployments that can
+    // guarantee a stable client address.
+    if (bindIp && ctx.ip !== undefined && rec.ip !== ctx.ip) {
       return { valid: false, reason: "ip_mismatch" };
     }
     if (ctx.userAgent !== undefined && rec.userAgent !== ctx.userAgent) {

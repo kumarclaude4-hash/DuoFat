@@ -229,6 +229,27 @@ function collectStaleKeys(entries, now, ttlMs) {
 //               original "rightmost" behavior byte-for-byte).
 // Malformed/insufficient entries fall back to the socket address rather than
 // guessing, so a misconfigured hop count fails toward "less trust", not more.
+//
+// S07-H1 (the admin-panel "session expired" bug): picking a FIXED
+// Nth-from-right entry is wrong on Render. Render's edge does not append
+// exactly one entry — the request passes through an internal load balancer
+// that appends its own private address too, and that address is drawn from a
+// rotating internal pool (10.26.x.x on one request, 10.28.x.x on the next).
+// So the "client IP" this returned changed on virtually every request, which
+// (a) made every IP-keyed limiter/lockout bucket meaningless and (b) made the
+// admin session's IP binding fail with `ip_mismatch` on the very first
+// /admin/api/* call after a successful login — the operator was bounced
+// straight back to the gate with "Your session expired".
+//
+// The fix walks LEFT from the Nth-from-right entry and returns the first
+// entry that is not an internal/private address. That is safe even though
+// the leftmost entries are client-controlled: a request arriving from the
+// public internet always has a PUBLIC address appended by the terminating
+// proxy, so the walk stops at that real address before it can ever reach a
+// forged one further left. A client that forges
+// `X-Forwarded-For: 203.0.113.9` only produces
+// `203.0.113.9, <real public client>, 10.26.x.x` — the walk skips the one
+// private hop and returns the real address, not the forged one.
 function pickClientIp(forwardedHeader, remoteAddress, trustedHops) {
   const fallback = remoteAddress || "unknown";
   const hops = Number.isInteger(trustedHops) ? trustedHops : 1;
@@ -237,8 +258,49 @@ function pickClientIp(forwardedHeader, remoteAddress, trustedHops) {
   const entries = String(forwardedHeader).split(",").map((s) => s.trim()).filter(Boolean);
   if (entries.length < hops) return fallback;
 
-  const picked = entries[entries.length - hops];
-  return picked || fallback;
+  for (let i = entries.length - hops; i >= 0; i--) {
+    if (entries[i] && !isInternalIpAddress(entries[i])) return entries[i];
+  }
+  // Every trusted entry was internal (a same-network health check, an
+  // internal probe, or local dev): there is no public client address to
+  // report, so fall back rather than inventing one.
+  return fallback;
+}
+
+// ── Internal/private address classification (pure) ───────────────────────────
+// Used by pickClientIp() to recognise proxy hops that can never be a real
+// public client. Covers loopback, RFC1918 private space, RFC6598 carrier-grade
+// NAT, link-local, IPv6 loopback/link-local/unique-local, and the "unknown"
+// sentinel getClientIp() falls back to. Anything unrecognised is treated as
+// PUBLIC (i.e. a usable client address), so a parse failure cannot silently
+// make the walk skip past a genuine client entry.
+function isInternalIpAddress(ip) {
+  if (typeof ip !== "string") return true;
+  let addr = ip.trim().toLowerCase();
+  if (!addr || addr === "unknown") return true;
+  if (addr.startsWith("[")) addr = addr.replace(/^\[|\]$/g, "");
+  addr = addr.split("%")[0];
+
+  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) addr = mapped[1];
+
+  if (addr.includes(":")) {
+    if (addr === "::" || addr === "::1") return true;
+    if (/^fe[89ab]/.test(addr)) return true; // fe80::/10 link-local
+    if (/^f[cd]/.test(addr)) return true;    // fc00::/7 unique-local
+    return false;
+  }
+
+  const octets = addr.split(".");
+  if (octets.length !== 4) return true; // not an address we can reason about
+  const [a, b] = octets.map((o) => parseInt(o, 10));
+  if (!Number.isInteger(a) || !Number.isInteger(b)) return true;
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true; // link-local
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  return false;
 }
 
 // ── IPv6 /64-aware rate-limit key normalization (pure) ────────────────────────
@@ -509,6 +571,7 @@ module.exports = {
   evaluateFixedWindow,
   collectStaleKeys,
   pickClientIp,
+  isInternalIpAddress,
   normalizeIpForRateLimit,
   // YouTube search (Watch Together)
   SEARCH_QUERY_MIN_LEN,
