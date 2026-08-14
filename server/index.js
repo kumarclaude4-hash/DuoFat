@@ -737,20 +737,48 @@ const ADMIN_IP_MAX_FAILS = 10;
 const ADMIN_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const ADMIN_SESSION_TTL_MS = ADMIN_SESSION_IDLE_TTL_MS;
 const ADMIN_SESSION_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000; // 8h
-// S07-H1: `bindIp` defaults to OFF. Enforcing the IP dimension of the session
-// binding logged mobile operators out constantly — a phone switching WiFi to
-// LTE, a carrier-grade NAT reassigning an address, or a dual-stack client
-// flipping between its IPv4 and IPv6 route all change the client address
-// mid-session, and each one surfaced as "Your session expired. Sign in
-// again." on the very first /admin/api/* call after a SUCCESSFUL login. The
-// User-Agent binding (stable across a network change) still rejects a cookie
-// replayed from a different client. Set ADMIN_BIND_SESSION_IP=1 to re-enable
-// IP binding on a deployment with a guaranteed-stable client address.
-const ADMIN_BIND_SESSION_IP = process.env.ADMIN_BIND_SESSION_IP === "1";
+// S07-H2: admin sessions are SIGNED tokens, not process-local ids. The signing
+// key must stay the same across restarts and across instances, otherwise the
+// operator is thrown back to the login gate ("Your session expired") every
+// time Render redeploys, spins the free instance back up, or routes the next
+// request to a second instance — the reported "logs in for half a second, then
+// exits" bug. ADMIN_SESSION_SECRET pins it explicitly; by default it is
+// DERIVED from ADMIN_TOKEN, which is both stable across restarts and, as a
+// deliberate side effect, invalidates every existing session when the admin
+// token is rotated. The HKDF `info` label keeps this key distinct from the
+// token itself, so the cookie can never be reversed into the credential.
+// (No ADMIN_TOKEN → the panel already refuses every request, so a random
+// throwaway key is fine.)
+const ADMIN_SESSION_SECRET = (() => {
+  const explicit = String(process.env.ADMIN_SESSION_SECRET || "").trim();
+  if (explicit) return Buffer.from(explicit, "utf8");
+  if (ADMIN_TOKEN) {
+    return Buffer.from(
+      crypto.hkdfSync("sha256", Buffer.from(ADMIN_TOKEN, "utf8"), Buffer.alloc(0), "duoshield-admin-session-v1", 32)
+    );
+  }
+  return crypto.randomBytes(32);
+})();
+// S07-H2 (c): IP binding is gone from the validation path entirely — a phone
+// switching WiFi to LTE, a carrier-grade NAT reassigning an address, or a
+// dual-stack client flipping between its IPv4 and IPv6 route all changed the
+// client address mid-session, and each one surfaced as "Your session expired.
+// Sign in again." on the very first /admin/api/* call after a SUCCESSFUL
+// login. Leaving it as an opt-in flag left the same foot-gun one env var away
+// on the only deployment this panel runs on. The client address is still
+// recorded in the durable audit trail (auditAdminEvent), which is where it is
+// actually useful, and the User-Agent binding — stable across a network
+// change — still refuses a cookie replayed by a different client.
+if (process.env.ADMIN_BIND_SESSION_IP) {
+  console.warn(
+    "admin auth: ADMIN_BIND_SESSION_IP is set but no longer supported and is being ignored — " +
+    "IP-bound admin sessions logged mobile operators out on every network change (S07-H2)."
+  );
+}
 const adminSessionStore = createAdminSessionStore({
   idleTtlMs: ADMIN_SESSION_IDLE_TTL_MS,
   absoluteTtlMs: ADMIN_SESSION_ABSOLUTE_TTL_MS,
-  bindIp: ADMIN_BIND_SESSION_IP,
+  secret: ADMIN_SESSION_SECRET,
 });
 
 setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
@@ -919,17 +947,16 @@ function adminSessionCookie(sessionId, req, maxAgeSeconds) {
 
 const getCookie = pure.getCookie;
 
-// S05-M3: binds the new session to this request's client context — the
-// SAME pseudonymised IP tag S05-M1 already writes to the audit log (not the
-// raw IP), plus the raw User-Agent header. A cookie captured from any other
-// channel (shared machine, synced browser profile, log leak) then fails
-// adminSessionStore's binding check from any other context it's replayed
-// from — see lib/adminSessionStore.js's module doc for the full rationale,
-// including why a mismatch rejects the request rather than deleting the
-// session outright.
+// S05-M3 / S07-H2: binds the new session to this request's User-Agent, so a
+// cookie captured from another channel (shared machine, synced browser
+// profile, log leak) fails adminSessionStore's binding check when replayed by
+// a different client. The client ADDRESS is deliberately not part of the
+// binding any more (see the ADMIN_BIND_SESSION_IP note above): it changes
+// mid-session on mobile networks and produced exactly the spurious
+// "session expired" logouts this fix removes. It is still written to the
+// durable audit trail via auditAdminEvent().
 function createAdminSession(req) {
   return adminSessionStore.create({
-    ip: ipTag(getClientIp(req)),
     userAgent: req.headers["user-agent"] || "",
   });
 }
