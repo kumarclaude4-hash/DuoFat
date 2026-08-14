@@ -66,6 +66,42 @@ messaging server over one would trade a small exposure for a total outage.
 | `TURN_TOKEN_ID`, `TURN_API_TOKEN` | Cloudflare TURN credentials for calls | `/turnCredentials` returns `503`; client-side behaviour after that is not documented here (not verified) |
 | `YOUTUBE_API_KEY` | YouTube Data API v3 (Watch Together search) | `POST /youtubeSearch` returns `503` |
 | `PUBLIC_BASE_URL` | Absolute origin of this server, used to build proxied preview-image URLs | Derived from `X-Forwarded-Proto`/`Host`; set it explicitly behind a proxy that rewrites `Host` |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_KV_NAMESPACE_ID` | Cloudflare Workers KV credentials backing the admin brute-force lockout counter (`lib/adminLockoutStore.js`, S04-L3) | Falls back to a process-local counter — same behaviour as before this was made durable, i.e. it does NOT survive a Render restart/redeploy or span multiple instances. All three must be set together; the server still boots and serves traffic either way. |
+
+#### Cloudflare Workers KV setup (admin lockout durability)
+
+As of 2026-08-14 this replaces the prior Upstash Redis-backed store (`KV_REST_API_URL`/
+`KV_REST_API_TOKEN` — **removed**, no longer read by `index.js`; safe to delete
+from Render and from wherever the Upstash integration provisioned them once
+this migration is deployed and verified). See `lib/adminLockoutStore.js`'s
+header comment for exactly what changed in the store's atomicity/TTL
+semantics as a result.
+
+1. **Create the KV namespace** — Cloudflare dashboard → Workers & Pages →
+   KV → Create namespace (e.g. `duoshield-admin-lockout`). Or via Wrangler:
+   `wrangler kv namespace create duoshield-admin-lockout`.
+2. **Get the Account ID** — Cloudflare dashboard → any domain/Workers
+   overview page → "Account ID" in the right-hand sidebar.
+3. **Get the Namespace ID** — shown on the KV namespace's page in the
+   dashboard (or in the output of the `wrangler kv namespace create` command
+   above).
+4. **Create a least-privilege API token** — Cloudflare dashboard → My
+   Profile → API Tokens → Create Token → Custom token. Grant **only**
+   `Workers KV Storage: Edit` (which covers the read/write/delete this
+   module needs), scoped to **this one account**, with no other
+   permissions. Do not reuse the Global API Key or a broader token — a
+   token scoped only to KV editing on one account limits the blast radius of
+   a leak to this one namespace's contents (small integers, no secrets — see
+   `adminLockoutStore.js`'s "KEY DESIGN" note) rather than the whole
+   Cloudflare account.
+5. **Set the Render environment variables** — `CLOUDFLARE_ACCOUNT_ID`,
+   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_KV_NAMESPACE_ID` from steps 1–4.
+6. **Verify, then remove the old Upstash variables** — once a deploy with
+   the three variables above is confirmed working (check for `admin lockout:
+   Cloudflare-KV-backed (durable across restarts/instances)` in the Render
+   logs at startup), delete `KV_REST_API_URL`/`KV_REST_API_TOKEN` from Render
+   and disconnect/delete the Upstash integration if it is not used for
+   anything else in this project.
 
 ### Rotation
 
