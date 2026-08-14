@@ -31,8 +31,14 @@
 //     (closes weakness 2);
 //   - an ABSOLUTE lifetime ceiling (`absoluteTtlMs`), recorded INSIDE the
 //     signed token itself, which no refresh can push past (weakness 1);
-//   - binding to the caller's User-Agent, captured at issue time and
-//     compared on every `validate()` call (weakness 3);
+//   - OPTIONAL binding to the caller's User-Agent, captured at issue time and
+//     compared on every `validate()` call — opt-in via `bindUserAgent: true`
+//     and OFF by default (see the S07-H3 section below for why enforcing it
+//     broke real mobile logins). Weakness 3 — "a leaked cookie is a full
+//     admin credential from anywhere" — is therefore addressed by the
+//     cookie's own properties (HMAC-signed, HttpOnly, Secure, SameSite=Lax,
+//     Path=/admin, short idle + absolute TTL, rotation on login) plus
+//     `revokeAll()`, NOT by client-context binding;
 //   - `revoke()` (single session) and `revokeAll()` (every session), the
 //     latter wired to the panel's "Sign out everywhere" action (weakness 5).
 //
@@ -130,7 +136,7 @@ const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000; // 30 min sliding idle timeout
 const DEFAULT_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000; // 8h hard ceiling, no refresh extends past this
 
 // Long User-Agent strings are truncated before they are stored or compared.
-// The exact limit does not matter; applying it on BOTH sides does — see (a) in
+// The exact limit does not matter; applying it on BOTH sides does ��� see (a) in
 // the header comment.
 const UA_MAX_LEN = 200;
 

@@ -783,7 +783,7 @@ const adminSessionStore = createAdminSessionStore({
   absoluteTtlMs: ADMIN_SESSION_ABSOLUTE_TTL_MS,
   secret: ADMIN_SESSION_SECRET,
   // S07-H3: off — WebView fetch()/navigation UA mismatch bounced real logins.
-  bindUserAgent: process.env.__UA_BIND_CONTROL_TEST === "1",
+  bindUserAgent: false,
 });
 
 setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
