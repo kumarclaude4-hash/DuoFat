@@ -759,26 +759,31 @@ const ADMIN_SESSION_SECRET = (() => {
   }
   return crypto.randomBytes(32);
 })();
-// S07-H2 (c): IP binding is gone from the validation path entirely — a phone
-// switching WiFi to LTE, a carrier-grade NAT reassigning an address, or a
-// dual-stack client flipping between its IPv4 and IPv6 route all changed the
-// client address mid-session, and each one surfaced as "Your session expired.
-// Sign in again." on the very first /admin/api/* call after a SUCCESSFUL
-// login. Leaving it as an opt-in flag left the same foot-gun one env var away
-// on the only deployment this panel runs on. The client address is still
-// recorded in the durable audit trail (auditAdminEvent), which is where it is
-// actually useful, and the User-Agent binding — stable across a network
-// change — still refuses a cookie replayed by a different client.
-if (process.env.ADMIN_BIND_SESSION_IP) {
+// S07-H2 (c) / S07-H3: neither the IP nor the User-Agent is part of the
+// validation reject path any more. A phone switching WiFi to LTE, CGNAT
+// reassigning an address, or a dual-stack client flipping between IPv4 and
+// IPv6 all changed the client ADDRESS mid-session; Android in-app/WebView
+// browsers send a different USER-AGENT on fetch()/XHR than on the top-level
+// navigation that loaded the page. Either one surfaced as "Your session
+// expired. Sign in again." on the very first /admin/api/* call after a
+// SUCCESSFUL login — the reported "logs in for half a second, then exits"
+// bug. Both dimensions are still recorded in the durable audit trail
+// (auditAdminEvent), which is where they are actually useful. The session
+// cookie itself remains the control: HMAC-signed, HttpOnly, Secure,
+// SameSite=Lax, Path=/admin, short-lived, and rotated on every login.
+// See lib/adminSessionStore.js's header comment (c) and the S07-H3 note.
+if (process.env.ADMIN_BIND_SESSION_IP || process.env.ADMIN_BIND_SESSION_UA) {
   console.warn(
-    "admin auth: ADMIN_BIND_SESSION_IP is set but no longer supported and is being ignored — " +
-    "IP-bound admin sessions logged mobile operators out on every network change (S07-H2)."
+    "admin auth: ADMIN_BIND_SESSION_IP / ADMIN_BIND_SESSION_UA are not honored by default — " +
+    "IP- and UA-bound admin sessions logged mobile/WebView operators out mid-session (S07-H2/H3)."
   );
 }
 const adminSessionStore = createAdminSessionStore({
   idleTtlMs: ADMIN_SESSION_IDLE_TTL_MS,
   absoluteTtlMs: ADMIN_SESSION_ABSOLUTE_TTL_MS,
   secret: ADMIN_SESSION_SECRET,
+  // S07-H3: off — WebView fetch()/navigation UA mismatch bounced real logins.
+  bindUserAgent: false,
 });
 
 setInterval(() => adminSessionStore.sweep(), 5 * 60 * 1000);
