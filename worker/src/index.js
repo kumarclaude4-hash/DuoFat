@@ -1,4 +1,10 @@
 import { AwsClient } from 'aws4fetch';
+import { AdminLockoutCounter } from './adminLockoutDurableObject.js';
+
+// Durable Object classes must be exported from this entry module for the
+// `durable_objects` binding in wrangler.jsonc to resolve them — see
+// adminLockoutDurableObject.js for what this class does and why it exists.
+export { AdminLockoutCounter };
 
 // ─── Hard limits ──────────────────────────────────────────────────────────────
 // R2 free tier: 10 GB storage, 1 M Class A ops/month, 10 M Class B ops/month.
@@ -157,6 +163,34 @@ async function isStatsAuthorized(request, env) {
   }
   const match = await crypto.subtle.timingSafeEqual(a, b);
   return match;
+}
+
+// ─── /adminLockout authentication ───────────────────────────────────────────
+// Set via: npx wrangler secret put ADMIN_LOCKOUT_SECRET
+// Render (the ONLY intended caller — see server/lib/adminLockoutWorkerClient.js)
+// authenticates with:
+//   Authorization: Bearer <ADMIN_LOCKOUT_SECRET>
+//
+// Same fail-closed, constant-time-comparison shape as isStatsAuthorized
+// above, deliberately kept as a separate secret rather than reusing
+// STATS_SECRET: /adminLockout and /stats are different trust boundaries
+// (one server-to-server credential meant only for Render, one operator
+// bearer token), and a leak of one must not also grant the other.
+async function isAdminLockoutAuthorized(request, env) {
+  if (!env.ADMIN_LOCKOUT_SECRET) {
+    console.error('ADMIN_LOCKOUT_SECRET is not configured — denying /adminLockout (fail closed)');
+    return false;
+  }
+  const supplied = request.headers.get('Authorization') ?? '';
+  const expected = `Bearer ${env.ADMIN_LOCKOUT_SECRET}`;
+  const enc = new TextEncoder();
+  const a = enc.encode(supplied);
+  const b = enc.encode(expected);
+  if (a.byteLength !== b.byteLength) {
+    await crypto.subtle.digest('SHA-256', a); // consume time, no short-circuit on length
+    return false;
+  }
+  return crypto.subtle.timingSafeEqual(a, b);
 }
 
 // ─── Scoped capability tokens (SEC-A01) ───────────────────────────────────────
@@ -532,6 +566,61 @@ export default {
           remaining_approx: Math.max(0, MAX_DAILY_REQUESTS - reqCount),
           note:             'Sampled counter (±10 accuracy). Resets at midnight UTC.',
         },
+      });
+    }
+
+    // ── /adminLockout — atomic brute-force lockout counter for the Render ────
+    // admin panel, gated by ADMIN_LOCKOUT_SECRET (server-to-server only, not
+    // an operator-facing view like /stats). See adminLockoutDurableObject.js
+    // for why this is a Durable Object rather than a KV counter, and
+    // server/lib/adminLockoutWorkerClient.js for the caller.
+    //
+    // Request shape: POST /adminLockout, JSON body
+    //   { action: 'record' | 'status' | 'reset', key: '<normalized-ip>', windowMs?, maxFails? }
+    // `key` is opaque to this Worker — it is whatever
+    // pure.normalizeIpForRateLimit produced on the Render side (S04-M1's
+    // /64-collapsed IPv6 form or a plain IPv4 literal) and is used only as
+    // the Durable Object instance name, never parsed or validated as an IP
+    // here. Bounded length only, to keep `idFromName` inputs sane.
+    if (url.pathname === '/adminLockout') {
+      if (!await isAdminLockoutAuthorized(request, env)) {
+        return respond({ error: 'Unauthorized' }, 401);
+      }
+      if (request.method !== 'POST') {
+        return respond({ error: 'Method not allowed' }, 405);
+      }
+      if (!env.ADMIN_LOCKOUT_DO) {
+        // Fail closed on the Worker's own response (the caller's fallback
+        // is Render-side — see adminLockoutStore.js) rather than throwing
+        // an unhandled error that could produce an ambiguous 5xx.
+        return respond({ error: 'Admin lockout Durable Object not configured' }, 503);
+      }
+
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return respond({ error: 'Malformed request body' }, 400);
+      }
+      const { action, key, windowMs, maxFails } = body ?? {};
+      if (typeof key !== 'string' || key.length === 0 || key.length > 128) {
+        return respond({ error: 'Missing or invalid key' }, 400);
+      }
+      if (!['record', 'status', 'reset'].includes(action)) {
+        return respond({ error: 'Missing or invalid action' }, 400);
+      }
+
+      const id = env.ADMIN_LOCKOUT_DO.idFromName(key);
+      const stub = env.ADMIN_LOCKOUT_DO.get(id);
+      const doResponse = await stub.fetch('https://admin-lockout.internal/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, windowMs, maxFails }),
+      });
+      const text = await doResponse.text();
+      return new Response(text, {
+        status: doResponse.status,
+        headers: { 'Content-Type': 'application/json', ...cors },
       });
     }
 
