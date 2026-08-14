@@ -1,6 +1,6 @@
 "use strict";
 
-// ── Admin session lifecycle store (S05-M3) ────────────────────────────────────
+// ── Admin session lifecycle store (S05-M3, S07-H1, S07-H2) ────────────────────
 //
 // WHAT WAS ACTUALLY WRONG (audit/SESSION-05-ADMIN.md:452-498)
 //
@@ -21,197 +21,305 @@
 //   5. No bulk revocation — rotating ADMIN_TOKEN or responding to a suspected
 //      compromise could not invalidate sessions already minted.
 //
-// THE FIX
+// THE FIX (S05-M3)
 //
-// This module is a small, testable, in-memory session store used by
-// server/index.js in place of the bare Map. It enforces, together:
+// This module enforces, together:
 //   - a sliding IDLE timeout (`idleTtlMs`), refreshed only when the caller
 //     passes `{ refresh: true }` (the default) — index.js passes
 //     `{ refresh: false }` from the unauthenticated `GET /admin` render
 //     check specifically so that route can no longer extend a session
 //     (closes weakness 2);
-//   - an ABSOLUTE lifetime ceiling (`absoluteTtlMs`) recorded from
-//     `createdAt` at creation time, which no refresh can push past — closes
-//     weakness 1;
-//   - binding to caller-supplied client-context values (an IP tag and/or a
-//     User-Agent string, captured at creation and compared on every
-//     `validate()` call) — closes weakness 3. index.js passes `ipTag(...)`
-//     (the same pseudonymised HMAC tag S05-M1 already introduced for audit
-//     logs), not the raw IP, so this fix does not add a new place that
-//     stores an identifying value in the clear;
-//   - `revoke()` (single session) and `revokeAll()` (every session) —
-//     `revokeAll()` closes weakness 5 and is wired to a new admin-panel
-//     "Sign out everywhere" action, itself gated by the same
-//     `requireAdminAuth()` every other admin mutation uses.
+//   - an ABSOLUTE lifetime ceiling (`absoluteTtlMs`), recorded INSIDE the
+//     signed token itself, which no refresh can push past (weakness 1);
+//   - binding to the caller's User-Agent, captured at issue time and
+//     compared on every `validate()` call (weakness 3);
+//   - `revoke()` (single session) and `revokeAll()` (every session), the
+//     latter wired to the panel's "Sign out everywhere" action (weakness 5).
 //
-// DESIGN NOTE ON THE BINDING CHECK
+// ── S07-H2: THE "LOGS IN FOR HALF A SECOND, THEN BOUNCES BACK" BUG ────────────
 //
-// A mismatch REJECTS the individual request (`{valid: false, reason:
-// "ip_mismatch" | "ua_mismatch"}`) but does not delete the session record.
-// This is deliberate: an attacker replaying a stolen cookie from a
-// different IP/UA is refused every single time they try, from that
-// context — the binding does its job. But it does not turn a legitimate
-// operator's transient network change (switching wifi to LTE mid-session,
-// a carrier-grade NAT reassigning an address) into a forced full
-// re-authentication the moment they return to their original context,
-// which the task's own "preserve legitimate admin sessions" requirement
-// rules out as an acceptable side effect. True expiry (idle or absolute)
-// still deletes the record outright, since there nothing legitimate can
-// ever make that request valid again.
+// Two defects in the previous revision of this file made a SUCCESSFUL login
+// fall straight back to the gate with "Your session expired. Sign in again."
+// — the exact reported symptom, and the reason the previous fix attempt only
+// half-worked:
 //
-// WHAT THIS DOES NOT DO (left out of S05-M3's scope, not silently missed)
+//   (a) USER-AGENT TRUNCATION ASYMMETRY. `create()` stored
+//       `String(ua).slice(0, 200)` while `validate()` compared the stored
+//       value against the RAW, untruncated header. Any browser whose
+//       User-Agent exceeds 200 characters — routine for Android in-app
+//       webviews (Instagram/Facebook/Chrome-on-Android with device and build
+//       tokens appended) — therefore failed `ua_mismatch` on EVERY request,
+//       forever, immediately after a correct login. Reproduced locally with a
+//       262-character Android webview UA: login 303'd with a cookie,
+//       `GET /admin` rendered the gate, and the first `/admin/api/*` call
+//       401'd. Both sides now normalise through `normalizeUserAgent()`, so
+//       the comparison is between two values produced the same way.
 //
-//   - Session-id rotation after login / step-up re-authentication for
-//     destructive actions (unfreeze, duress enroll) — named in the original
-//     finding's fix list but not in this task's own six-item scope. A
-//     future finding, not claimed fixed here.
-//   - Clearing all sessions automatically when ADMIN_TOKEN is rotated —
-//     ADMIN_TOKEN is read once at module load (index.js), so this would
-//     need a config-reload hook that does not currently exist; out of
-//     scope for a session-store change alone.
-//   - Durability across a restart / sharing across instances — like the
-//     pre-fix Map, this store is process-local (the cross-reference at the
-//     end of the original finding already calls this an existing,
-//     documented S04-L3-adjacent characteristic, not something this fix
-//     claims to change).
+//   (b) PROCESS-LOCAL SESSION IDS. The session id was a random opaque string
+//       whose ONLY record of existence was this process's Map. A Render
+//       deploy, restart, idle spin-down, or a second instance behind the load
+//       balancer left the browser holding a cookie the server had no memory
+//       of (`not_found`) — again indistinguishable, to the operator, from
+//       "my correct password logged me out". Sessions are now SIGNED TOKENS:
+//       `sid.iat.exp.uaTag.sig`, HMAC'd with a server secret that is stable
+//       across restarts (index.js derives it from ADMIN_TOKEN unless
+//       ADMIN_SESSION_SECRET is set). Validation is therefore
+//       self-contained — an unforgeable token still carrying a live absolute
+//       expiry is accepted after a restart and re-adopted into the local map
+//       (which then resumes the sliding idle timeout for it). Nothing about
+//       the token is trusted without the signature check, and the token
+//       carries no operator data — just an id, two timestamps and a keyed
+//       UA tag.
+//
+//   (c) IP BINDING REMOVED FROM THE REJECT PATH. Enforcing the IP dimension
+//       logged mobile operators out constantly (WiFi→LTE handover, CGNAT
+//       reassignment, a dual-stack client flipping between its IPv4 and IPv6
+//       route). It was already default-off, but left available via
+//       `ADMIN_BIND_SESSION_IP=1`, i.e. still a foot-gun that reproduces this
+//       exact bug on the one deployment target this panel actually runs on.
+//       `validate()` no longer looks at the client address at all; the
+//       address is still recorded in the durable audit trail
+//       (`auditAdminEvent`), which is where it is useful. The User-Agent
+//       binding — stable across a network change — remains mandatory, so a
+//       cookie replayed by a different client is still refused.
+//
+// WHAT THIS DOES NOT DO (left out of scope, not silently missed)
+//
+//   - Step-up re-authentication for destructive actions (unfreeze, duress
+//     enroll). A future finding, not claimed fixed here.
+//   - Automatic invalidation when ADMIN_TOKEN is rotated is now IMPLICIT when
+//     the signing secret is derived from ADMIN_TOKEN (index.js's default):
+//     rotating the token changes the secret, so every previously issued token
+//     fails its signature check. Setting ADMIN_SESSION_SECRET explicitly
+//     decouples the two.
+//   - Cross-instance REVOCATION. Single-session revoke and revokeAll are
+//     still process-local (a revoked token would remain valid on a second
+//     instance until its absolute expiry). Accepted, and strictly better than
+//     the pre-fix state where a restart invalidated every session at random
+//     while revocation was equally process-local.
 
 const crypto = require("node:crypto");
 
 const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000; // 30 min sliding idle timeout
 const DEFAULT_ABSOLUTE_TTL_MS = 8 * 60 * 60 * 1000; // 8h hard ceiling, no refresh extends past this
 
+// Long User-Agent strings are truncated before they are stored or compared.
+// The exact limit does not matter; applying it on BOTH sides does — see (a) in
+// the header comment.
+const UA_MAX_LEN = 200;
+
+function normalizeUserAgent(ua) {
+  if (ua === undefined) return undefined;
+  if (ua === null) return null;
+  return String(ua).slice(0, UA_MAX_LEN);
+}
+
 function defaultRandomId() {
   return crypto.randomBytes(32).toString("hex");
 }
 
 /**
- * Creates an in-memory admin session store.
+ * Creates an admin session store.
  *
  * @param {object} [opts]
  * @param {number} [opts.idleTtlMs] - Sliding idle timeout in ms.
  * @param {number} [opts.absoluteTtlMs] - Absolute lifetime ceiling in ms,
- *   measured from `createdAt`. Must be >= idleTtlMs to have any effect
- *   beyond the idle timeout; callers are expected to configure it larger.
- * @param {boolean} [opts.bindIp] - Whether `validate()` enforces the IP
- *   dimension of the binding. Default `false`: a mobile client's address
- *   legitimately changes mid-session (WiFi/LTE handover, CGNAT reassignment,
- *   IPv4/IPv6 route switching), and enforcing it there produced spurious
- *   "session expired" logouts (S07-H1). The User-Agent binding is always
- *   enforced. Set `true` only where the client address is guaranteed stable.
- * @param {() => number} [opts.now] - Clock, injectable for deterministic
- *   tests. Defaults to `Date.now`.
- * @param {() => string} [opts.randomId] - Session id generator, injectable
- *   for deterministic tests. Defaults to a 256-bit hex token.
+ *   measured from issue time. No refresh can extend a session past it.
+ * @param {string|Buffer} [opts.secret] - HMAC key used to sign session
+ *   tokens. When supplied (production does), sessions survive a restart or a
+ *   second instance — see (b) in the header comment. When omitted, the store
+ *   falls back to opaque, process-local ids (used by unit tests that only
+ *   exercise TTL/revocation semantics).
+ * @param {() => number} [opts.now] - Clock, injectable for deterministic tests.
+ * @param {() => string} [opts.randomId] - Session id generator, injectable.
  */
 function createAdminSessionStore({
   idleTtlMs = DEFAULT_IDLE_TTL_MS,
   absoluteTtlMs = DEFAULT_ABSOLUTE_TTL_MS,
-  bindIp = false,
+  secret = null,
   now = () => Date.now(),
   randomId = defaultRandomId,
 } = {}) {
-  // sessionId -> { createdAt, expiresAt, absoluteExpiresAt, ip, userAgent }
+  // sid -> { createdAt, expiresAt, absoluteExpiresAt, userAgent }
   const sessions = new Map();
+  // sid -> time after which the revocation record itself can be forgotten
+  // (never before the token it revokes would have expired on its own).
+  const revoked = new Map();
+  // Set by revokeAll(): any token issued at or before this instant is refused
+  // even if its signature and absolute expiry are still fine.
+  let revokedBeforeMs = 0;
 
-  /**
-   * Creates a new session bound to the given client context.
-   *
-   * @param {{ip?: string|null, userAgent?: string|null}} [ctx] - Context to
-   *   bind the session to. Pass whatever the caller wants matched on every
-   *   later `validate()` call (index.js passes `ipTag(getClientIp(req))`
-   *   and the raw `User-Agent` header, truncated). Omitting a field (or
-   *   passing `null`) means that dimension is not bound and `validate()`
-   *   will not check it unless the caller of `validate()` also omits it —
-   *   see `validate()`'s doc comment for the exact matching rule.
-   * @returns {string} the new opaque session id.
-   */
-  function create(ctx = {}) {
-    const createdAt = now();
-    const sessionId = randomId();
-    sessions.set(sessionId, {
-      createdAt,
-      expiresAt: createdAt + idleTtlMs,
-      absoluteExpiresAt: createdAt + absoluteTtlMs,
-      ip: ctx.ip === undefined ? null : ctx.ip,
-      userAgent: ctx.userAgent === undefined || ctx.userAgent === null
-        ? null
-        : String(ctx.userAgent).slice(0, 200),
-    });
-    return sessionId;
+  const signingKey = secret
+    ? (Buffer.isBuffer(secret) ? secret : Buffer.from(String(secret), "utf8"))
+    : null;
+
+  function sign(payload) {
+    return crypto.createHmac("sha256", signingKey).update(payload).digest("hex").slice(0, 32);
+  }
+
+  function tagUserAgent(ua) {
+    if (ua === null || ua === undefined || ua === "") return "-";
+    return crypto.createHmac("sha256", signingKey).update(ua).digest("hex").slice(0, 12);
   }
 
   /**
-   * Validates a session id against the current request's client context.
+   * Parses a signed token. Returns null when the store is unsigned, the shape
+   * is wrong, or the signature does not verify — callers must treat null as
+   * "this is not a token I issued".
+   */
+  function parseToken(token) {
+    if (!signingKey || typeof token !== "string") return null;
+    const parts = token.split(".");
+    if (parts.length !== 5) return null;
+    const [sid, iatRaw, expRaw, uaTag, sig] = parts;
+    const payload = `${sid}.${iatRaw}.${expRaw}.${uaTag}`;
+    const expected = sign(payload);
+    // Constant-time: a byte-by-byte early return would leak the signature.
+    if (sig.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const iat = parseInt(iatRaw, 36);
+    const exp = parseInt(expRaw, 36);
+    if (!Number.isFinite(iat) || !Number.isFinite(exp)) return null;
+    return { sid, iat, exp, uaTag };
+  }
+
+  /** True once revoke()/revokeAll() has retired this token. */
+  function isRevoked(sid, iat) {
+    if (revoked.has(sid)) return true;
+    return iat <= revokedBeforeMs;
+  }
+
+  function recordRevocation(sid, until) {
+    revoked.set(sid, until);
+  }
+
+  /**
+   * Issues a new session bound to the given client context.
    *
-   * @param {string} sessionId
-   * @param {{ip?: string|null, userAgent?: string|null}} [ctx] - The
-   *   CURRENT request's context. A field present here (including explicit
-   *   `null`) is compared against what `create()` stored for that field;
-   *   omitting a field skips that dimension's check entirely. index.js
-   *   always passes both fields, so in practice both are always checked —
-   *   the "omit to skip" behavior exists so unit tests can isolate TTL
-   *   behavior from binding behavior without contriving matching context.
-   * @param {{refresh?: boolean}} [opts] - `refresh` (default `true`):
-   *   whether a successful validation should slide the idle expiry
-   *   forward, capped at the absolute ceiling. index.js passes `false`
-   *   from the unauthenticated `GET /admin` render check.
+   * @param {{ip?: string|null, userAgent?: string|null}} [ctx] - `userAgent`
+   *   is bound and checked on every later `validate()`. `ip` is accepted and
+   *   ignored — see (c) in the header comment; index.js records the address in
+   *   the audit trail instead.
+   * @returns {string} the session token to put in the cookie.
+   */
+  function create(ctx = {}) {
+    const createdAt = now();
+    const sid = randomId();
+    const userAgent = normalizeUserAgent(ctx.userAgent === undefined ? null : ctx.userAgent);
+    const absoluteExpiresAt = createdAt + absoluteTtlMs;
+    sessions.set(sid, {
+      createdAt,
+      expiresAt: createdAt + idleTtlMs,
+      absoluteExpiresAt,
+      userAgent,
+    });
+    if (!signingKey) return sid;
+    const payload = `${sid}.${createdAt.toString(36)}.${absoluteExpiresAt.toString(36)}.${tagUserAgent(userAgent)}`;
+    return `${payload}.${sign(payload)}`;
+  }
+
+  /**
+   * Validates a session token against the current request's client context.
+   *
+   * @param {string} token
+   * @param {{ip?: string|null, userAgent?: string|null}} [ctx] - Current
+   *   request context. `userAgent`, when present, must match what was bound at
+   *   issue time. Omitting it skips that check (unit tests isolating TTL
+   *   behaviour do this); index.js always passes it. `ip` is ignored.
+   * @param {{refresh?: boolean}} [opts] - `refresh` (default `true`): whether
+   *   a successful validation slides the idle expiry forward, capped at the
+   *   absolute ceiling. index.js passes `false` from the unauthenticated
+   *   `GET /admin` render check so it cannot extend a session.
    * @returns {{valid: true}|{valid: false, reason: string}}
    */
-  function validate(sessionId, ctx = {}, opts = {}) {
+  function validate(token, ctx = {}, opts = {}) {
     const refresh = opts.refresh !== false;
-    if (!sessionId) return { valid: false, reason: "missing" };
-    const rec = sessions.get(sessionId);
-    if (!rec) return { valid: false, reason: "not_found" };
-
+    if (!token) return { valid: false, reason: "missing" };
     const t = now();
+    const parsed = parseToken(token);
+    const sid = parsed ? parsed.sid : token;
+
+    // Unsigned/unrecognised value while signing is enabled: it cannot be a
+    // token this store issued, so it is refused outright rather than being
+    // looked up (a bare sid must never be accepted as a credential).
+    if (signingKey && !parsed) return { valid: false, reason: "not_found" };
+
+    if (parsed) {
+      if (t >= parsed.exp) {
+        sessions.delete(sid);
+        return { valid: false, reason: "absolute_expired" };
+      }
+      if (isRevoked(sid, parsed.iat)) return { valid: false, reason: "not_found" };
+      if (ctx.userAgent !== undefined) {
+        const currentTag = tagUserAgent(normalizeUserAgent(ctx.userAgent));
+        if (currentTag !== parsed.uaTag) return { valid: false, reason: "ua_mismatch" };
+      }
+    }
+
+    let rec = sessions.get(sid);
+
+    if (!rec) {
+      // Unsigned store: nothing more to check against.
+      if (!parsed) return { valid: false, reason: "not_found" };
+      // Signed token with no local record — this instance restarted, or the
+      // request landed on a different instance. The signature and the
+      // in-token absolute expiry are the actual controls, so accept it, and
+      // (only on a real authenticated call) re-adopt it locally so the
+      // sliding idle timeout resumes from now.
+      if (!refresh) return { valid: true };
+      rec = {
+        createdAt: parsed.iat,
+        expiresAt: Math.min(t + idleTtlMs, parsed.exp),
+        absoluteExpiresAt: parsed.exp,
+        userAgent: normalizeUserAgent(ctx.userAgent === undefined ? null : ctx.userAgent),
+      };
+      sessions.set(sid, rec);
+      return { valid: true };
+    }
+
     if (t >= rec.absoluteExpiresAt) {
-      sessions.delete(sessionId);
+      sessions.delete(sid);
       return { valid: false, reason: "absolute_expired" };
     }
     if (t >= rec.expiresAt) {
-      sessions.delete(sessionId);
+      sessions.delete(sid);
+      // Remember the idle expiry, otherwise the signed token would simply be
+      // re-adopted by the branch above on the very next request and the idle
+      // timeout would never actually bite.
+      if (parsed) recordRevocation(sid, rec.absoluteExpiresAt);
       return { valid: false, reason: "idle_expired" };
     }
 
-    // Binding checks reject THIS request without deleting the session — see
-    // the module doc comment's "DESIGN NOTE ON THE BINDING CHECK" above.
-    //
-    // S07-H1: the IP dimension is now opt-in (`bindIp`, default off) rather
-    // than always-on. On a mobile network the client address legitimately
-    // changes mid-session — WiFi to LTE, a carrier-grade NAT reassigning an
-    // address, a dual-stack client switching between its IPv4 and IPv6 route —
-    // and each of those turned into a hard `ip_mismatch` that bounced the
-    // operator to the login gate with "Your session expired" while the cookie
-    // was in fact still perfectly valid. That is exactly the reported bug on
-    // mobile. The User-Agent binding (which does NOT change across a network
-    // switch) is kept mandatory, so a cookie replayed from a different client
-    // is still refused; IP binding remains available for deployments that can
-    // guarantee a stable client address.
-    if (bindIp && ctx.ip !== undefined && rec.ip !== ctx.ip) {
-      return { valid: false, reason: "ip_mismatch" };
-    }
-    if (ctx.userAgent !== undefined && rec.userAgent !== ctx.userAgent) {
-      return { valid: false, reason: "ua_mismatch" };
+    // Unsigned store keeps its original in-memory UA comparison; the signed
+    // path already checked the UA tag above. A mismatch rejects THIS request
+    // without deleting the session, so an attacker replaying a stolen cookie
+    // is refused every time without collaterally logging the real operator out.
+    if (!parsed && ctx.userAgent !== undefined) {
+      if (rec.userAgent !== normalizeUserAgent(ctx.userAgent)) {
+        return { valid: false, reason: "ua_mismatch" };
+      }
     }
 
     if (refresh) {
-      // The line that closes weakness 1: sliding refresh is capped at the
-      // absolute ceiling, so no amount of continued activity can push
-      // expiresAt past absoluteExpiresAt.
       rec.expiresAt = Math.min(t + idleTtlMs, rec.absoluteExpiresAt);
     }
     return { valid: true };
   }
 
-  /** Revokes a single session. Returns true if it existed. */
-  function revoke(sessionId) {
-    return sessions.delete(sessionId);
+  /** Revokes a single session. Returns true if a live record existed. */
+  function revoke(token) {
+    const parsed = parseToken(token);
+    const sid = parsed ? parsed.sid : token;
+    const existed = sessions.delete(sid);
+    if (parsed) recordRevocation(sid, parsed.exp);
+    return existed;
   }
 
-  /** Revokes every active session. Returns the number revoked. */
+  /** Revokes every session issued so far. Returns the number tracked locally. */
   function revokeAll() {
     const count = sessions.size;
     sessions.clear();
+    revokedBeforeMs = now();
     return count;
   }
 
@@ -221,6 +329,9 @@ function createAdminSessionStore({
     for (const [id, rec] of sessions) {
       if (t >= rec.absoluteExpiresAt || t >= rec.expiresAt) sessions.delete(id);
     }
+    for (const [id, until] of revoked) {
+      if (t >= until) revoked.delete(id);
+    }
   }
 
   /** Count of sessions currently tracked (expired-but-unswept included). */
@@ -229,8 +340,9 @@ function createAdminSessionStore({
   }
 
   // Test/diagnostic helper only — not used by index.js's request path.
-  function _get(sessionId) {
-    const rec = sessions.get(sessionId);
+  function _get(token) {
+    const parsed = parseToken(token);
+    const rec = sessions.get(parsed ? parsed.sid : token);
     return rec ? Object.assign({}, rec) : null;
   }
 
@@ -239,6 +351,8 @@ function createAdminSessionStore({
 
 module.exports = {
   createAdminSessionStore,
+  normalizeUserAgent,
   DEFAULT_IDLE_TTL_MS,
   DEFAULT_ABSOLUTE_TTL_MS,
+  UA_MAX_LEN,
 };
