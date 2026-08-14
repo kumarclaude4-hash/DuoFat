@@ -224,14 +224,48 @@ test("S05-H2: POST /admin/api/waitlist/deny exists, is admin-gated, and sets sta
 // index.js is actually WIRED to that store correctly — same "wiring, not
 // re-testing the logic" split S05-H2 above uses.
 
-test("S05-M3: session creation binds ip and userAgent context, not just an id", () => {
+// S07-H3: this test previously required createAdminSession() to bind BOTH the
+// pseudonymised IP tag and the User-Agent. Both of those client-context
+// bindings have since been removed as enforced controls, because on real
+// mobile clients they rejected legitimate operators rather than attackers:
+//   - IP binding (removed first): mobile networks re-NAT mid-session, so the
+//     tag changed under a session that was still perfectly valid.
+//   - UA binding (S07-H3, removed here): an Android in-app WebView sends a
+//     DIFFERENT User-Agent on `fetch()`/XHR subrequests than on the top-level
+//     navigation, so every `/admin/api/*` call after a correct login failed
+//     `ua_mismatch` → 401 → the false "Your session expired." bounce.
+// The cookie's actual strength is unchanged and lives elsewhere: HMAC-signed,
+// HttpOnly, Secure, SameSite=Lax, Path=/admin, short idle + absolute TTL, and
+// rotation on login. UA is still CAPTURED (cheap, useful for the audit trail
+// and for operators who opt into `bindUserAgent: true` on a fleet with stable
+// clients), it is simply not enforced by default.
+test("S07-H3: session creation captures UA context but binds neither IP nor UA by default", () => {
   const fnStart = SERVER_SOURCE.indexOf("function createAdminSession(req)");
-  assert.ok(fnStart > 0, "createAdminSession(req) not found — must accept the request to bind client context");
+  assert.ok(fnStart > 0, "createAdminSession(req) not found — must accept the request to capture client context");
   const fnEnd = SERVER_SOURCE.indexOf("\n}", fnStart);
   const body = SERVER_SOURCE.slice(fnStart, fnEnd);
   assert.ok(body.includes("adminSessionStore.create("), "createAdminSession must delegate to adminSessionStore.create()");
-  assert.ok(/ip:\s*ipTag\(getClientIp\(req\)\)/.test(body), "the session must be bound to the pseudonymised IP tag, not the raw IP");
-  assert.ok(/userAgent:\s*req\.headers\["user-agent"\]/.test(body), "the session must be bound to the request's User-Agent");
+  assert.ok(
+    /userAgent:\s*req\.headers\["user-agent"\]/.test(body),
+    "the request's User-Agent must still be captured and passed to create()"
+  );
+  assert.ok(
+    !/\bip:/.test(body),
+    "createAdminSession must NOT bind any IP (raw or pseudonymised tag) — mobile re-NAT " +
+    "made it reject valid sessions; re-adding it reintroduces that false-expiry bug"
+  );
+
+  // The opt-in default is the load-bearing half of this fix: capturing the UA
+  // is harmless, but ENFORCING it by default is what bounced real logins.
+  const storeStart = SERVER_SOURCE.indexOf("createAdminSessionStore({");
+  assert.ok(storeStart > 0, "createAdminSessionStore({...}) construction not found in index.js");
+  const storeEnd = SERVER_SOURCE.indexOf("});", storeStart);
+  const storeOpts = SERVER_SOURCE.slice(storeStart, storeEnd);
+  assert.ok(
+    /bindUserAgent:\s*false/.test(storeOpts),
+    "index.js must construct the store with `bindUserAgent: false` — UA binding is opt-in, " +
+    "and must never be silently re-enabled (or left wired to a debug/env toggle) by default"
+  );
 });
 
 test("S05-M3: GET /admin does not refresh (extend) the session it merely reads", () => {
