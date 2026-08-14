@@ -79,9 +79,35 @@
 //       exact bug on the one deployment target this panel actually runs on.
 //       `validate()` no longer looks at the client address at all; the
 //       address is still recorded in the durable audit trail
-//       (`auditAdminEvent`), which is where it is useful. The User-Agent
-//       binding — stable across a network change — remains mandatory, so a
-//       cookie replayed by a different client is still refused.
+//       (`auditAdminEvent`), which is where it is useful.
+//
+// ── S07-H3: UA BINDING WAS THE *LAST* HALF-SECOND-LOGOUT FOOT-GUN ─────────────
+//
+// The S07-H2 note above (c) claimed the User-Agent binding was "stable across
+// a network change" and could stay mandatory. On the actual target platform it
+// is NOT stable within a SINGLE page view: Android in-app / WebView browsers
+// (and some privacy browsers) send a DIFFERENT `User-Agent` on `fetch()`/XHR
+// subrequests than on the top-level navigation that loaded the page — the
+// navigation carries the full `...; wv) ... Version/4.0 ...` WebView token and
+// device Build id, the subrequest sends a trimmed desktop-shaped UA. Because
+// the panel authenticates the initial `GET /admin` (navigation UA) and then
+// immediately fires `/admin/api/*` (fetch UA), the operator saw the dashboard
+// render for a frame and then get bounced to the gate with "Your session
+// expired." on the very first data call — the exact reported symptom, and the
+// reason the earlier fixes only "half worked". Reproduced against production:
+// same-UA `/admin/api/*` → 200, a UA differing only in the WebView token → 401
+// `ua_mismatch`.
+//
+// So UA binding is now OFF by default too (`bindUserAgent`, default false),
+// for the same reason IP binding was dropped in (c). The cookie is not left
+// "bound to nothing": it is HMAC-SIGNED (unforgeable), `HttpOnly` (no JS/XSS
+// read), `Secure` (HTTPS only), `SameSite=Lax` + `Path=/admin` (not sent
+// cross-site), short-lived (30-min idle / 8-h absolute) and ROTATED on every
+// login — a materially stronger credential than the bare, unbound `Map` id
+// that the original weakness-3 finding was written against. The UA is still
+// recorded on the session and in the audit trail. Deployments that genuinely
+// want the extra replay check back can pass `bindUserAgent: true`, but must
+// accept that it logs WebView operators out on their first click.
 //
 // WHAT THIS DOES NOT DO (left out of scope, not silently missed)
 //
@@ -139,6 +165,11 @@ function createAdminSessionStore({
   secret = null,
   now = () => Date.now(),
   randomId = defaultRandomId,
+  // S07-H3: whether validate() REJECTS a request whose User-Agent differs from
+  // the one bound at issue time. Default OFF — see (c) in the header comment.
+  // The UA is still recorded on the session and baked (as a keyed tag) into the
+  // signed token regardless, so turning this on later needs no token change.
+  bindUserAgent = false,
 } = {}) {
   // sid -> { createdAt, expiresAt, absoluteExpiresAt, userAgent }
   const sessions = new Map();
@@ -250,7 +281,7 @@ function createAdminSessionStore({
         return { valid: false, reason: "absolute_expired" };
       }
       if (isRevoked(sid, parsed.iat)) return { valid: false, reason: "not_found" };
-      if (ctx.userAgent !== undefined) {
+      if (bindUserAgent && ctx.userAgent !== undefined) {
         const currentTag = tagUserAgent(normalizeUserAgent(ctx.userAgent));
         if (currentTag !== parsed.uaTag) return { valid: false, reason: "ua_mismatch" };
       }
@@ -294,7 +325,7 @@ function createAdminSessionStore({
     // path already checked the UA tag above. A mismatch rejects THIS request
     // without deleting the session, so an attacker replaying a stolen cookie
     // is refused every time without collaterally logging the real operator out.
-    if (!parsed && ctx.userAgent !== undefined) {
+    if (bindUserAgent && !parsed && ctx.userAgent !== undefined) {
       if (rec.userAgent !== normalizeUserAgent(ctx.userAgent)) {
         return { valid: false, reason: "ua_mismatch" };
       }

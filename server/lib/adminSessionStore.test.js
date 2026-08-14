@@ -135,26 +135,34 @@ test("3b. a session refreshed while inside the idle window is still capped at th
 
 // ── 4. IP/UA mismatch handling ──────────────────────────────────────────────
 
-test("4. a request from a different ip tag is rejected as ip_mismatch, without deleting the session", () => {
+test("4. a request from a different ip tag is NOT rejected (S07-H2: IP is not in the reject path)", () => {
   const clock = makeClock();
   const store = makeStore(clock);
   const sessionId = store.create(CTX);
 
-  const attackerCtx = { ip: "iptag-attacker", userAgent: CTX.userAgent };
-  const result = store.validate(sessionId, attackerCtx);
-  assert.equal(result.valid, false);
-  assert.equal(result.reason, "ip_mismatch");
-
-  // The legitimate operator, from the ORIGINAL context, must still be able
-  // to use the session afterward — a hijack attempt from elsewhere must not
-  // collaterally log the real operator out. See the module's "DESIGN NOTE
-  // ON THE BINDING CHECK".
-  assert.equal(store.validate(sessionId, CTX).valid, true, "the legitimate context must still validate after a mismatched attempt");
+  // A phone switching WiFi→LTE, CGNAT reassignment, or an IPv4/IPv6 flip all
+  // change the client address mid-session. validate() must not care — the IP
+  // is recorded in the audit trail elsewhere, never enforced here.
+  const otherIpCtx = { ip: "iptag-different", userAgent: CTX.userAgent };
+  assert.equal(store.validate(sessionId, otherIpCtx).valid, true);
 });
 
-test("4b. a request with a different User-Agent is rejected as ua_mismatch, without deleting the session", () => {
+test("4b. (S07-H3) the DEFAULT store does NOT reject a changed User-Agent — the WebView fetch-vs-navigation bug", () => {
   const clock = makeClock();
-  const store = makeStore(clock);
+  const store = makeStore(clock); // bindUserAgent defaults to false
+  const sessionId = store.create(CTX);
+
+  // An Android WebView sends the full "...; wv) ... Version/4.0..." UA on the
+  // navigation that logs in, then a trimmed UA on the fetch() that loads data.
+  // With binding off, that second request must still validate — otherwise the
+  // operator is bounced to the gate half a second after a successful login.
+  const webviewFetchCtx = { ip: CTX.ip, userAgent: "some-other-browser/9.0" };
+  assert.equal(store.validate(sessionId, webviewFetchCtx).valid, true);
+});
+
+test("4c-ua. when bindUserAgent is opt-in, a different User-Agent is rejected as ua_mismatch without deleting the session", () => {
+  const clock = makeClock();
+  const store = makeStore(clock, { bindUserAgent: true });
   const sessionId = store.create(CTX);
 
   const spoofedUaCtx = { ip: CTX.ip, userAgent: "some-other-browser/9.0" };
