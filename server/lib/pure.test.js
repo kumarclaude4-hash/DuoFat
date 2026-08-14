@@ -373,11 +373,69 @@ test("collectStaleKeys returns an empty array for an empty input", () => {
 
 // ── pickClientIp (S04-M3) ──────────────────────────────────────────────────────
 
-test("pickClientIp with the default 1 trusted hop reproduces the original rightmost-entry behavior", () => {
+// S07-H1: the rightmost X-Forwarded-For entry on Render is an internal
+// load-balancer address drawn from a ROTATING pool, so returning it made every
+// IP-keyed limiter bucket meaningless AND broke the admin session's IP binding
+// on the first /admin/api/* call after login ("Your session expired"). The
+// resolver now walks left past internal hops to the real public client.
+test("pickClientIp skips a private proxy hop and returns the real public client address", () => {
   assert.equal(
     pure.pickClientIp("203.0.113.1, 10.0.0.5", "10.0.0.5", 1),
-    "10.0.0.5"
+    "203.0.113.1"
   );
+});
+
+test("pickClientIp skips MULTIPLE private hops (Render edge + rotating internal LB)", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.7, 10.26.4.9, 10.28.1.3", "10.28.1.3", 1),
+    "203.0.113.7"
+  );
+});
+
+test("pickClientIp returns the rightmost PUBLIC entry, never a client-forged one further left", () => {
+  // A client forging `X-Forwarded-For: 198.51.100.200` cannot win: the
+  // terminating proxy appends the real public address to the right of it, and
+  // the walk stops at the first public entry it meets.
+  assert.equal(
+    pure.pickClientIp("198.51.100.200, 203.0.113.44, 10.26.0.1", "10.26.0.1", 1),
+    "203.0.113.44"
+  );
+});
+
+test("pickClientIp falls back to the socket address when every trusted entry is internal", () => {
+  assert.equal(
+    pure.pickClientIp("10.0.0.9, 172.16.5.5", "10.0.0.1", 1),
+    "10.0.0.1"
+  );
+});
+
+test("pickClientIp treats an IPv4-mapped private address as internal and keeps walking", () => {
+  assert.equal(
+    pure.pickClientIp("203.0.113.5, ::ffff:10.0.0.7", "::ffff:10.0.0.7", 1),
+    "203.0.113.5"
+  );
+});
+
+test("pickClientIp returns a public IPv6 client address unchanged", () => {
+  assert.equal(
+    pure.pickClientIp("2001:db8::1234, 10.26.0.1", "10.26.0.1", 1),
+    "2001:db8::1234"
+  );
+});
+
+test("isInternalIpAddress classifies loopback, RFC1918, CGNAT, link-local and IPv6 ULA as internal", () => {
+  for (const ip of [
+    "127.0.0.1", "10.26.4.9", "172.16.0.1", "172.31.255.254", "192.168.1.10",
+    "169.254.1.1", "100.64.0.1", "::1", "fe80::1", "fd00::1", "unknown", "",
+  ]) {
+    assert.equal(pure.isInternalIpAddress(ip), true, ip + " must be internal");
+  }
+});
+
+test("isInternalIpAddress classifies real public addresses as external", () => {
+  for (const ip of ["203.0.113.1", "8.8.8.8", "172.32.0.1", "192.169.0.1", "2001:db8::1"]) {
+    assert.equal(pure.isInternalIpAddress(ip), false, ip + " must be public");
+  }
 });
 
 test("pickClientIp with 0 trusted hops ignores X-Forwarded-For entirely", () => {
@@ -387,7 +445,7 @@ test("pickClientIp with 0 trusted hops ignores X-Forwarded-For entirely", () => 
   );
 });
 
-test("pickClientIp with 2 trusted hops picks the second-from-right entry", () => {
+test("pickClientIp with 2 trusted hops starts its walk at the second-from-right entry", () => {
   assert.equal(
     pure.pickClientIp("203.0.113.1, 198.51.100.9, 10.0.0.5", "10.0.0.5", 2),
     "198.51.100.9"
@@ -411,7 +469,7 @@ test("pickClientIp falls back to the socket address when X-Forwarded-For is abse
 test("pickClientIp defaults to 1 hop when trustedHops is not an integer", () => {
   assert.equal(
     pure.pickClientIp("203.0.113.1, 10.0.0.5", "10.0.0.5", undefined),
-    "10.0.0.5"
+    "203.0.113.1"
   );
 });
 
