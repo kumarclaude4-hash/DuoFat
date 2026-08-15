@@ -138,7 +138,10 @@
         <item name="bottomSheetStyle">@style/Widget.DuoShield.BottomSheet</item>
         <item name="android:statusBarColor">@color/transparent</item>
     </style>
-    <style name="Widget.DuoShield.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+    <!-- Matched to the M3 overlay above: an M2 widget style nested under
+         ThemeOverlay.Material3.BottomSheetDialog resolves M2-only attrs against
+         an M3 theme, which is where bottom-sheet visual drift comes from. -->
+    <style name="Widget.DuoShield.BottomSheet" parent="Widget.Material3.BottomSheet.Modal">
         <item name="backgroundTint">@color/ds_surface_2</item>
         <item name="shapeAppearance">@style/ShapeLarge</item>
     </style>
