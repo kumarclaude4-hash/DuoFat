@@ -60,6 +60,12 @@
     <color name="ds_warning">#E7B15D</color>
     <color name="ds_pin">#9A81FF</color>
 
+    <!-- Media / overlays -->
+    <color name="ds_media_bg">#0F0C18</color>
+    <color name="ds_scrim">#BB000000</color>
+    <color name="ds_link_preview_bg">#14FFFFFF</color>
+    <color name="ds_text_seen">#559A81FF</color>
+
     <!-- Reply / reaction -->
     <color name="ds_reply_bar">#9A81FF</color>
     <color name="ds_reply_bg">#24202E</color>

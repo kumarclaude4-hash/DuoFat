@@ -14,6 +14,7 @@
 
         <!-- ── Header bar ── -->
         <LinearLayout
+            android:id="@+id/headerBar"
             android:layout_width="match_parent"
             android:layout_height="64dp"
             android:background="@color/ds_toolbar"
@@ -104,18 +105,19 @@
                 android:contentDescription="Menu"/>
         </LinearLayout>
 
-        <!-- ── Inline search bar ── -->
+        <!-- ── Inline search bar (replaces the header when active) ── -->
         <LinearLayout
             android:id="@+id/searchBar"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="64dp"
             android:background="@color/ds_toolbar"
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:paddingStart="16dp"
             android:paddingEnd="16dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:elevation="8dp"
             android:visibility="gone">
 
             <LinearLayout

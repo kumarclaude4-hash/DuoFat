@@ -60,13 +60,15 @@ public class BaseActivity extends AppCompatActivity {
      * activities now route through, matching what GroupChatActivity's and
      * ChatMediaActivity's onResume() comments already claimed was happening globally.
      *
-     * <p>Default is secure (FLAG_SECURE applied) when the preference has never been
-     * set, matching the settings screen's own default.
+     * <p>Default is screenshots ALLOWED (FLAG_SECURE cleared) when the preference has
+     * never been set, matching WhatsApp/Telegram behavior. Users can opt back into
+     * screenshot blocking via the "Allow screenshots" toggle in
+     * SecurityPrivacySettingsActivity, whose default must stay in sync with this one.
      */
     static void applyScreenshotSecurity(android.app.Activity activity) {
         boolean screenshotsAllowed = activity
                 .getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_APP_SCREENSHOT_ENABLED, false);
+                .getBoolean(KEY_APP_SCREENSHOT_ENABLED, true);
         if (screenshotsAllowed) {
             activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
         } else {

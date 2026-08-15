@@ -74,7 +74,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         // ── Restore saved state ───────────────────────────────────────────────
         if (switchAppScreenshot != null)
-            switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", false));
+            switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", true));
         if (switchShakeLock != null)
             switchShakeLock.setChecked(prefs.getBoolean("shake_to_lock_enabled", false));
         if (switchRelayOnlyCalls != null)
