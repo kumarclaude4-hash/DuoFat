@@ -211,13 +211,21 @@ public class SignInActivity extends AppCompatActivity {
         // Legacy accounts predating this flow never had the flag set, so they
         // are unaffected.
         if (prefs.getBoolean("pending_pin_setup_" + uid, false)) {
-            Log.i(TAG, "route: → SetupPinActivity (interrupted mid-setup)  uid=" + uid);
-            Intent setupIntent = new Intent(this, SetupPinActivity.class);
-            setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
-            setupIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            startActivity(setupIntent);
-            finish();
-            return;
+            // Same self-heal as MainActivity.route(): a PIN hash already existing for
+            // this account means setup did finish and the marker is stale, so clear it
+            // and carry on rather than re-prompting for a PIN the user already set.
+            if (PinManager.hasPinSet(this)) {
+                Log.i(TAG, "route: clearing stale pending_pin_setup_ (PIN already set)  uid=" + uid);
+                prefs.edit().remove("pending_pin_setup_" + uid).apply();
+            } else {
+                Log.i(TAG, "route: → SetupPinActivity (interrupted mid-setup)  uid=" + uid);
+                Intent setupIntent = new Intent(this, SetupPinActivity.class);
+                setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+                setupIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(setupIntent);
+                finish();
+                return;
+            }
         }
 
         Log.i(TAG, "route: → ConversationListActivity  uid=" + uid);

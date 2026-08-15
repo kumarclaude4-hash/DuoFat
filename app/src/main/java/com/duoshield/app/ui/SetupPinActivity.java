@@ -11,11 +11,15 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.R;
+import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.util.ButtonPressAnimator;
 import com.duoshield.app.util.PinManager;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Mandatory PIN setup for brand-new accounts. Shown once, right after
@@ -31,6 +35,8 @@ public class SetupPinActivity extends AppCompatActivity {
 
     /** Forwarded through unchanged to ConversationListActivity. */
     public static final String EXTRA_ACCOUNT_CREATED = SeedPhraseDisplayActivity.EXTRA_ACCOUNT_CREATED;
+
+    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,23 +64,65 @@ public class SetupPinActivity extends AppCompatActivity {
             }
 
             tvError.setVisibility(View.GONE);
-            PinManager.setPin(this, pin);
+            btnContinue.setEnabled(false);
 
-            // Setup is now complete — clear the "stuck mid-flow" marker so a
-            // future launch routes straight to ConversationListActivity instead
-            // of bouncing back here. See SeedPhraseDisplayActivity for where
-            // this flag is set and SignInActivity.route() for where it's read.
-            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-            if (user != null) {
-                SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
-                prefs.edit().remove("pending_pin_setup_" + user.getUid()).apply();
-            }
+            // Off the main thread: setPin() runs 310,000 PBKDF2 iterations, and on a
+            // device that already has a device-gate PIN it runs two more derivations
+            // (setDevicePin + ensureSecondarySlotInitialized). That is comfortably
+            // long enough to block the UI thread visibly, and it was previously all
+            // running inline in this click handler.
+            bgExecutor.execute(() -> {
+                // A restore can leave a still-armed secondary code from before the
+                // wipe (duress logout deliberately keeps the hash so a restore of the
+                // same account stays gated). Setting a primary PIN equal to that code
+                // would make every normal unlock trigger the wipe branch, with no way
+                // to ever unlock the account. Reject it here — the same two-way check
+                // SecurityPrivacySettingsActivity.doSavePin() already performs.
+                boolean clashWithSecondary = DuressManager.isDuressPin(this, pin);
+                boolean stored = !clashWithSecondary && PinManager.setPin(this, pin);
 
-            Intent intent = new Intent(this, ConversationListActivity.class);
-            intent.putExtra(EXTRA_ACCOUNT_CREATED, getIntent().getBooleanExtra(EXTRA_ACCOUNT_CREATED, false));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            startActivity(intent);
-            finish();
+                runOnUiThread(() -> {
+                    btnContinue.setEnabled(true);
+
+                    if (clashWithSecondary) {
+                        // Says nothing about why, for the same reason doSavePin()
+                        // doesn't: naming "another unlock code" would confirm to
+                        // anyone probing PINs here that a second one exists and
+                        // that they had just guessed it.
+                        showError(tvError, "That PIN can't be used. Choose a different one.");
+                        etConfirmPin.setText("");
+                        return;
+                    }
+                    if (!stored) {
+                        // setPin() returns false when no Firebase user is signed in
+                        // (nothing to scope the key to) or the write threw. Previously
+                        // this path still cleared pending_pin_setup_ and routed on, so
+                        // no PIN existed while the app believed setup was finished —
+                        // and the next launch asked for a PIN the user had already
+                        // set. Keep the user here so the attempt can be retried.
+                        showError(tvError, "Couldn't save your PIN. Try again.");
+                        etConfirmPin.setText("");
+                        return;
+                    }
+
+                    // Setup is genuinely complete — only now clear the "stuck
+                    // mid-flow" marker so a future launch routes straight to
+                    // ConversationListActivity instead of bouncing back here. See
+                    // SeedPhraseDisplayActivity for where this flag is set and
+                    // SignInActivity.route() for where it's read.
+                    FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+                    if (user != null) {
+                        SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
+                        prefs.edit().remove("pending_pin_setup_" + user.getUid()).apply();
+                    }
+
+                    Intent intent = new Intent(this, ConversationListActivity.class);
+                    intent.putExtra(EXTRA_ACCOUNT_CREATED, getIntent().getBooleanExtra(EXTRA_ACCOUNT_CREATED, false));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    startActivity(intent);
+                    finish();
+                });
+            });
         });
     }
 
@@ -86,5 +134,11 @@ public class SetupPinActivity extends AppCompatActivity {
     @Override
     public void onBackPressed() {
         // No skipping — a new account must leave this screen with a PIN set.
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        bgExecutor.shutdownNow();
     }
 }

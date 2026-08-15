@@ -219,10 +219,25 @@ public class LockScreenActivity extends AppCompatActivity {
             // for exactly this kind of asymmetry.
             boolean duress  = DuressManager.isDuressPin(this, entered);
             boolean real    = PinManager.verifyPin(this, entered);
-            boolean correct = real && !duress;
+            boolean correct = real;
+
+            // Defense in depth: if the entered code somehow matches BOTH slots, treat
+            // it as an ordinary unlock rather than a wipe. Every path that *sets* a
+            // code now rejects a value matching the other slot (SetupPinActivity,
+            // SecurityPrivacySettingsActivity.doSavePin, ManageUnlockCodesActivity),
+            // so this should be unreachable — but one path cannot check:
+            // PinManager.promoteDevicePinToCurrentUser() copies a stored salt:hash
+            // into the account slot during creation/restore and never sees the
+            // plaintext, so it cannot compare against a secondary code that survived
+            // a previous duress wipe of the same account. If that collision ever does
+            // occur, the old `real && !duress` meant the user's correct primary PIN
+            // was classified as duress and wiped the device on a normal unlock, with
+            // no way to recover the account. Failing toward "unlock" is strictly safer
+            // than failing toward an irreversible wipe.
+            boolean wipe = duress && !real;
 
             runOnUiThread(() -> {
-                if (duress) {
+                if (wipe) {
                     PinManager.clearFailedAttempts(this);
                     // The entered PIN is captured here — the plaintext never leaves this
                     // call stack — so DuressManager can promote it to the primary/device

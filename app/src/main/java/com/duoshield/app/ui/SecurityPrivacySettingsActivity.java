@@ -135,7 +135,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
     }
 
-    // ── App PIN logic ────────────────���───────────────────────────────────────
+    // ── App PIN logic ────────────────�����───────────────────────────────────────
 
     @Override
     protected void onResume() {
@@ -187,11 +187,20 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         bgExecutor.execute(() -> {
             boolean clashWithDuress = DuressManager.isDuressPin(this, pin);
-            if (!clashWithDuress) PinManager.setPin(this, pin);
+            // setPin()'s result was previously discarded, so a failed write (no
+            // signed-in user, or a Keystore/EncryptedSharedPreferences error) still
+            // reported "PIN set" and flipped the UI into its pin-is-set state while
+            // no hash existed.
+            boolean stored = !clashWithDuress && PinManager.setPin(this, pin);
 
             runOnUiThread(() -> {
                 if (btnSetPin != null) btnSetPin.setEnabled(true);
-                if (clashWithDuress) {
+                if (!clashWithDuress && !stored) {
+                    refreshPinStatus();
+                    Toast.makeText(this,
+                        "Couldn't save your PIN. Try again.",
+                        Toast.LENGTH_LONG).show();
+                } else if (clashWithDuress) {
                     // Deliberately says nothing about *why* — "another unlock code"
                     // confirmed to anyone testing PINs here that a second code
                     // exists and that they'd just guessed it.

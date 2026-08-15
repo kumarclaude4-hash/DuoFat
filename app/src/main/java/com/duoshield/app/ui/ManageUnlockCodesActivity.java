@@ -154,8 +154,26 @@ public class ManageUnlockCodesActivity extends BaseActivity {
         if (pendingCode == null) { showListPanel(); return; }
         String codeToSave = pendingCode;
         bgExecutor.execute(() -> {
-            DuressManager.setDuressPin(this, codeToSave);
+            // The return value used to be discarded, and "Code saved." + finish()
+            // ran unconditionally. setDuressPin() returns false without writing
+            // anything when no Firebase user is signed in (an expired token or a
+            // background sign-out leaves duressKey()/armedKey() null) or when the
+            // PBKDF2/EncryptedSharedPreferences write throws — so a save that armed
+            // nothing at all was indistinguishable from a successful one, and the
+            // user was told their second code was active when it was not.
+            boolean saved = DuressManager.setDuressPin(this, codeToSave);
             runOnUiThread(() -> {
+                if (!saved) {
+                    // Stay on this screen with the entry flow intact so the user can
+                    // retry immediately. Deliberately generic: the message must not
+                    // hint at *why* it failed, and it is the same string whatever the
+                    // cause. Nothing is armed, so refreshListPanel() below brings the
+                    // add button back rather than hiding it as it would after a real
+                    // save.
+                    Toast.makeText(this, "Could not save. Try again.", Toast.LENGTH_LONG).show();
+                    showListPanel();
+                    return;
+                }
                 Toast.makeText(this, "Code saved.", Toast.LENGTH_SHORT).show();
                 // Leave the screen entirely rather than returning to the list.
                 // Returning would show a bare "CODES / Primary code · Active" list

@@ -90,9 +90,25 @@ public class PinManager {
         return user != null ? KEY_PIN_PREFIX + user.getUid() : null;
     }
 
-    public static void setPin(Context ctx, String pin) {
+    /**
+     * Stores {@code pin} as this account's primary PIN.
+     *
+     * @return true only if a hash was actually written for the current account.
+     *         Returns false when no Firebase user is signed in (there is no
+     *         UID to scope the key to) or the write/derivation threw.
+     *
+     *         <p>This used to be {@code void}, which made both failure paths
+     *         completely silent: {@code SetupPinActivity} cleared its
+     *         {@code pending_pin_setup_<uid>} marker and routed on to the
+     *         conversation list regardless, so an account whose PIN never got
+     *         stored looked fully set up. The next launch then found no hash,
+     *         and the user was asked to set a PIN they had already set — the
+     *         "it keeps prompting me to set up a PIN again" report. Callers must
+     *         now branch on this value before treating setup as complete.
+     */
+    public static boolean setPin(Context ctx, String pin) {
         String key = pinKey();
-        if (key == null) return;
+        if (key == null) return false;
         try {
             byte[] salt = new byte[16];
             new SecureRandom().nextBytes(salt);
@@ -129,8 +145,10 @@ public class PinManager {
             // was still observable. Fully qualified to avoid a hard compile-time
             // dependency between the util and security packages.
             com.duoshield.app.security.DuressManager.ensureSecondarySlotInitialized(ctx);
+            return true;
         } catch (Exception e) {
             android.util.Log.e("PinManager", "Failed to store PIN hash", e);
+            return false;
         }
     }
 
@@ -354,13 +372,13 @@ public class PinManager {
      * device, wipe-and-restore, etc.), and so {@link #setPin} has a
      * device-level copy to keep in sync when the user changes their PIN.
      */
-    public static void promoteDevicePinToCurrentUser(Context ctx) {
+    public static boolean promoteDevicePinToCurrentUser(Context ctx) {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-        if (user == null) return;
-        if (!hasDevicePinSet(ctx)) return; // also runs the legacy-file migration above
+        if (user == null) return false;
+        if (!hasDevicePinSet(ctx)) return false; // also runs the legacy-file migration above
         SharedPreferences sp = SecurePrefs.getDeviceGate(ctx);
         String stored = sp.getString(KEY_DEVICE_PIN_HASH, null);
-        if (stored == null) return;
+        if (stored == null) return false;
         // S08-L3: this used to also read the device gate's plaintext KEY_DEVICE_PIN_LEN
         // (or DEFAULT_PIN_LEN when absent) and copy it into the promoted account's
         // KEY_LEN_PREFIX entry — reintroducing, for any account that went through
@@ -372,6 +390,15 @@ public class PinManager {
                 .putString(KEY_PIN_PREFIX + user.getUid(), stored)
                 .remove(KEY_LEN_PREFIX + user.getUid())
                 .apply();
+        // An account that arrives via this path (creation / wipe-and-restore) never
+        // goes through setPin(), so it used to end up with a primary PIN but no
+        // slot B at all — reintroducing, for exactly those accounts, the
+        // one-derivation-vs-two timing tell that ensureSecondarySlotInitialized()
+        // exists to close, and leaving hasDuressPin() reading a key that was never
+        // written. Initialise the decoy here too so every account with a primary
+        // PIN has a slot B of identical shape, however it got that PIN.
+        com.duoshield.app.security.DuressManager.ensureSecondarySlotInitialized(ctx);
+        return true;
     }
 
     /**
