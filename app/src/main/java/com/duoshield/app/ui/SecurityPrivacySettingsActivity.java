@@ -135,7 +135,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         // ── Auto sign-out ─────────────────────────────────────────────────────
         if (btnAutoSignOut != null) btnAutoSignOut.setOnClickListener(v -> showAutoSignOutPicker());
 
-        // ── Lock timeout ──────────────────────────────────────────────────────
+        // ── Lock timeout ──��───────────────────────────────────────────────────
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
     }
 
@@ -190,7 +190,11 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         tvPinStatus.setText("Saving PIN…");
 
         bgExecutor.execute(() -> {
-            boolean clashWithDuress = DuressManager.isDuressPin(this, pin);
+            // Catches an exact match against the existing secondary code and the
+            // secondary code being a leading prefix of this new primary PIN. See
+            // DuressManager.isDuressPinOrPrefixOfIt for the residual direction this
+            // does not cover and why it can't be closed here.
+            boolean clashWithDuress = DuressManager.isDuressPinOrPrefixOfIt(this, pin);
             // setPin()'s result was previously discarded, so a failed write (no
             // signed-in user, or a Keystore/EncryptedSharedPreferences error) still
             // reported "PIN set" and flipped the UI into its pin-is-set state while

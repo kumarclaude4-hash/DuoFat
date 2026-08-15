@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Confirm key, disabled state — shown until MIN_PIN_LEN digits are entered.
+     Flat muted-lavender oval (matches ls_dot_empty used elsewhere on this screen)
+     so it visibly reads as "not yet tappable" next to the gradient backspace key. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/ls_dot_empty"/>
+</shape>

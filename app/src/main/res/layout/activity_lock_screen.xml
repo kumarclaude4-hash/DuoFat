@@ -3,7 +3,7 @@
   Lock Screen — Lavender light design, compact layout for all screen sizes.
   IDs kept for LockScreenActivity.java:
     tvError, btnUnlock (GONE), pinDotsView
-    key0–key9, keyBackspace, flLockIcon, ivLockShield, fingerprintScanView
+    key0–key9, keyBackspace, keyConfirm, flLockIcon, ivLockShield, fingerprintScanView
 -->
 <ScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -244,17 +244,38 @@
 
             </LinearLayout>
 
-            <!-- Row 4: [empty], 0, [backspace] -->
+            <!-- Row 4: [confirm], 0, [backspace] -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center">
 
-                <!-- Placeholder matching key size so 0 stays centered -->
-                <View
+                <!-- Confirm key — replaces the old empty placeholder. Disabled (muted)
+                     until MIN_PIN_LEN digits are entered; verification only ever runs
+                     from an explicit tap here (or on reaching MAX_PIN_LEN), never from
+                     a typing pause. See LockScreenActivity.updateConfirmKeyState(). -->
+                <FrameLayout
+                    android:id="@+id/keyConfirm"
                     android:layout_width="64dp"
-                    android:layout_height="64dp"/>
+                    android:layout_height="64dp"
+                    android:background="@drawable/bg_numpad_confirm_disabled"
+                    android:elevation="5dp"
+                    android:outlineProvider="background"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:enabled="false"
+                    android:contentDescription="Confirm PIN">
+                    <ImageView
+                        android:id="@+id/ivKeyConfirm"
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_check"
+                        app:tint="@color/ls_key_text"
+                        android:alpha="0.55"
+                        android:contentDescription="@null"/>
+                </FrameLayout>
 
                 <LinearLayout android:id="@+id/key0"
                     style="@style/NumpadKey"

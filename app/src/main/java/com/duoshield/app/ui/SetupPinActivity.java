@@ -75,10 +75,13 @@ public class SetupPinActivity extends AppCompatActivity {
                 // A restore can leave a still-armed secondary code from before the
                 // wipe (duress logout deliberately keeps the hash so a restore of the
                 // same account stays gated). Setting a primary PIN equal to that code
-                // would make every normal unlock trigger the wipe branch, with no way
-                // to ever unlock the account. Reject it here — the same two-way check
-                // SecurityPrivacySettingsActivity.doSavePin() already performs.
-                boolean clashWithSecondary = DuressManager.isDuressPin(this, pin);
+                // — or one that starts with it — would make an ordinary unlock trigger
+                // the wipe branch, with no way to ever unlock the account. Reject both
+                // here — the same check SecurityPrivacySettingsActivity.doSavePin()
+                // performs. See DuressManager.isDuressPinOrPrefixOfIt for the residual
+                // direction this does not cover (this pin being a short prefix of a
+                // longer secondary code) and why.
+                boolean clashWithSecondary = DuressManager.isDuressPinOrPrefixOfIt(this, pin);
                 boolean stored = !clashWithSecondary && PinManager.setPin(this, pin);
 
                 runOnUiThread(() -> {
