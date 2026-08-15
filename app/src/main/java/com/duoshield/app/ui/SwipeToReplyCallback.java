@@ -13,11 +13,14 @@ public abstract class SwipeToReplyCallback
         extends ItemTouchHelper.SimpleCallback {
 
     private final Drawable icon;
+    private final int iconMarginPx;
     private boolean triggered = false;
 
     protected SwipeToReplyCallback(Context ctx) {
         super(0, ItemTouchHelper.RIGHT);
         icon = ContextCompat.getDrawable(ctx, R.drawable.ic_reply);
+        iconMarginPx = Math.round(
+                16f * ctx.getResources().getDisplayMetrics().density);
     }
 
     // Cap how far the row is allowed to visually travel, as a fraction of its
@@ -98,11 +101,25 @@ public abstract class SwipeToReplyCallback
                        itemView.getRight(), itemView.getBottom());
 
             int iconSize = icon.getIntrinsicWidth();
-            int margin   = (itemView.getHeight() - iconSize) / 2;
-            int top      = itemView.getTop()  + margin;
-            int bottom   = top + iconSize;
-            int left     = itemView.getLeft() + margin;
-            int right    = left + iconSize;
+
+            // Centre on the *bubble*, not the row. Message grouping gives each
+            // row asymmetric vertical padding (wider at cluster edges, tight
+            // between clustered bubbles), so the row box and the visible bubble
+            // no longer share a centre — centring on itemView height alone made
+            // the icon drift off the bubble inside a cluster. Measure against
+            // the padded content box so it tracks the bubble in both cases.
+            int contentTop    = itemView.getTop()    + itemView.getPaddingTop();
+            int contentBottom = itemView.getBottom() - itemView.getPaddingBottom();
+            int top    = contentTop + ((contentBottom - contentTop) - iconSize) / 2;
+            int bottom = top + iconSize;
+
+            // Fixed horizontal inset. This was previously derived from the row
+            // height, which coupled the icon's x-position to bubble length: a
+            // tall multi-line bubble pushed the icon rightwards into the bubble
+            // it was meant to sit beside, while short clustered rows pinned it
+            // hard against the edge.
+            int left  = itemView.getLeft() + iconMarginPx;
+            int right = left + iconSize;
 
             float alpha = Math.min(1f, drawDX / (itemView.getWidth() * 0.2f));
             icon.setAlpha((int)(alpha * 255));

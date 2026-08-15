@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <style name="Theme.DuoShield" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.DuoShield" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Colours: Warm Darkness -->
         <item name="colorPrimary">@color/ds_accent</item>
         <item name="colorPrimaryVariant">@color/ds_accent_dim</item>
@@ -9,6 +9,18 @@
         <item name="colorSecondary">@color/ds_accent</item>
         <item name="colorSecondaryVariant">@color/ds_accent_dim</item>
         <item name="colorOnSecondary">@color/ds_text_on_accent</item>
+
+        <!-- M3 container roles. The colorPrimaryVariant/colorSecondaryVariant
+             items above are M2-only attributes: Material3 components ignore
+             them and read the *Container roles instead. Left undefined, M3
+             derives its own container tones from its baseline palette (a
+             desaturated purple), which visibly drifts off the lavender-on-dark
+             palette. Pinned to ds_accent_dim — the same value the M2 variants
+             use — so both generations of widget resolve to one accent. -->
+        <item name="colorPrimaryContainer">@color/ds_accent_dim</item>
+        <item name="colorOnPrimaryContainer">@color/ds_text_on_accent</item>
+        <item name="colorSecondaryContainer">@color/ds_accent_dim</item>
+        <item name="colorOnSecondaryContainer">@color/ds_text_on_accent</item>
         <item name="colorSurface">@color/ds_surface</item>
         <item name="colorOnSurface">@color/ds_text_primary</item>
         <item name="colorError">@color/ds_danger</item>
@@ -71,15 +83,15 @@
     </style>
 
     <!-- ── Shapes ── -->
-    <style name="ShapeSmall" parent="ShapeAppearance.MaterialComponents.SmallComponent">
+    <style name="ShapeSmall" parent="ShapeAppearance.Material3.SmallComponent">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/ds_corner_radius_button</item>
     </style>
-    <style name="ShapeMedium" parent="ShapeAppearance.MaterialComponents.MediumComponent">
+    <style name="ShapeMedium" parent="ShapeAppearance.Material3.MediumComponent">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/ds_corner_radius_input</item>
     </style>
-    <style name="ShapeLarge" parent="ShapeAppearance.MaterialComponents.LargeComponent">
+    <style name="ShapeLarge" parent="ShapeAppearance.Material3.LargeComponent">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/ds_corner_radius_card</item>
     </style>
@@ -97,7 +109,7 @@
     </style>
 
     <!-- ── TextInput ── -->
-    <style name="Widget.DuoShield.TextInput" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+    <style name="Widget.DuoShield.TextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <item name="boxBackgroundColor">@color/ds_input_bg</item>
         <item name="boxStrokeColor">@color/ds_input_border_focus</item>
         <item name="boxStrokeWidth">@dimen/ds_input_border_width</item>
@@ -110,7 +122,7 @@
     </style>
 
     <!-- ── Dialogs ── -->
-    <style name="Theme.DuoShield.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+    <style name="Theme.DuoShield.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
         <item name="colorSurface">@color/ds_surface_2</item>
         <item name="colorOnSurface">@color/ds_text_primary</item>
         <item name="colorPrimary">@color/ds_accent</item>
@@ -118,7 +130,11 @@
     </style>
 
     <!-- ── Bottom Sheet ── -->
-    <style name="Theme.DuoShield.BottomSheet" parent="Theme.MaterialComponents.BottomSheetDialog">
+    <!-- Parent moved from Theme.MaterialComponents.BottomSheetDialog to the
+         ThemeOverlay.* family: M3 ships this as an overlay, not a full theme.
+         The style *name* is deliberately unchanged so the bottomSheetDialogTheme
+         reference in Theme.DuoShield still resolves. -->
+    <style name="Theme.DuoShield.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Widget.DuoShield.BottomSheet</item>
         <item name="android:statusBarColor">@color/transparent</item>
     </style>
@@ -128,13 +144,19 @@
     </style>
 
     <!-- ── Switch ── -->
-    <style name="Widget.DuoShield.Switch" parent="Widget.MaterialComponents.CompoundButton.Switch">
+    <!-- Kept on the CompoundButton.Switch lineage rather than
+         Widget.Material3.CompoundButton.MaterialSwitch: this style is bound to
+         the framework `switchStyle` attribute, and the toggles that consume it
+         are SwitchMaterial/SwitchCompat widgets. The MaterialSwitch style
+         targets the newer MaterialSwitch class and sets thumb/track drawables
+         those widgets don't honour, so it would degrade them silently. -->
+    <style name="Widget.DuoShield.Switch" parent="Widget.Material3.CompoundButton.Switch">
         <item name="colorPrimary">@color/ds_accent</item>
         <item name="colorControlNormal">@color/ds_text_tertiary</item>
     </style>
 
     <!-- ── Toolbar ── -->
-    <style name="Widget.DuoShield.Toolbar" parent="Widget.MaterialComponents.Toolbar">
+    <style name="Widget.DuoShield.Toolbar" parent="Widget.Material3.Toolbar">
         <item name="android:background">@color/ds_toolbar</item>
         <item name="titleTextColor">@color/ds_text_primary</item>
         <item name="subtitleTextColor">@color/ds_text_secondary</item>
@@ -143,7 +165,12 @@
     </style>
 
     <!-- ── FAB ── -->
-    <style name="Widget.DuoShield.FAB" parent="Widget.MaterialComponents.FloatingActionButton">
+    <!-- NB: there is no bare `Widget.Material3.FloatingActionButton` — M3 splits
+         the FAB into colour-role variants (Primary/Secondary/Tertiary/Surface).
+         .Primary is the closest analogue to the old M2 default; backgroundTint
+         and tint are overridden below regardless, so the role only supplies the
+         state-layer/elevation baseline. -->
+    <style name="Widget.DuoShield.FAB" parent="Widget.Material3.FloatingActionButton.Primary">
         <item name="backgroundTint">@color/ds_accent</item>
         <item name="tint">@color/ds_text_on_accent</item>
         <item name="rippleColor">@color/ds_accent_ripple</item>
