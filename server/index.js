@@ -2299,7 +2299,7 @@ function setBaselineSecurityHeaders(req, res) {
   }
 }
 
-// ── Health + status + mintToken HTTP server ───────────────────────────────────
+// ── Health + status + mintToken HTTP server ──────────────────────────────────��
 const server = http.createServer((req, res) => {
 
   // Baseline security headers on every response (merged with, and overridable by,
@@ -3001,31 +3001,23 @@ const server = http.createServer((req, res) => {
         }
 
         const lockRef = db.collection("accountLock").doc(userId);
+        // Branch logic (no-lock / relocked / not-due / due) lives in
+        // pure.decideRotationAcknowledgement, tested in
+        // server/lib/pure.test.js — this transaction only owns the two real
+        // side effects: the read and, conditionally, the write.
         const result = await db.runTransaction(async (txn) => {
           const snap = await txn.get(lockRef);
-          if (!snap.exists) {
-            return { acknowledged: false, reason: "no-lock" };
+          const decision = pure.decideRotationAcknowledgement(
+            snap.exists,
+            snap.exists ? snap.data() : null
+          );
+          if (decision.shouldClearFlag) {
+            txn.update(lockRef, {
+              rotationRequired: false,
+              rotationAcknowledgedAt: FieldValue.serverTimestamp(),
+            });
           }
-          const data = snap.data();
-          // A real, currently-active lock must never be lifted by this endpoint —
-          // this call only ever clears the *rotation* flag, never `locked` itself.
-          // If the account was locked again since the unfreeze that set
-          // rotationRequired, a client still mid-flow from the earlier unfreeze
-          // must not be able to clear anything here.
-          if (data.locked === true) {
-            return { acknowledged: false, reason: "locked", relocked: true };
-          }
-          if (data.rotationRequired !== true) {
-            // Already cleared by an earlier call, or never set — idempotent no-op
-            // so a retry after a successful-but-unconfirmed first attempt succeeds
-            // rather than erroring.
-            return { acknowledged: false, reason: "not-due" };
-          }
-          txn.update(lockRef, {
-            rotationRequired: false,
-            rotationAcknowledgedAt: FieldValue.serverTimestamp(),
-          });
-          return { acknowledged: true };
+          return decision;
         });
 
         if (result.relocked) {
@@ -3040,7 +3032,14 @@ const server = http.createServer((req, res) => {
           + `reason=${result.reason || "n/a"}`
         );
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(result));
+        // Reproduce the endpoint's original wire shape exactly: `reason` is
+        // present only on the non-success branches, `relocked` and
+        // `shouldClearFlag` are internal-only and were never serialized.
+        res.end(JSON.stringify(
+          result.reason !== undefined
+            ? { acknowledged: result.acknowledged, reason: result.reason }
+            : { acknowledged: result.acknowledged }
+        ));
       } catch (e) {
         console.error("acknowledgeRotation error:", e.message);
         res.writeHead(500, { "Content-Type": "text/plain" });
@@ -3276,7 +3275,7 @@ const server = http.createServer((req, res) => {
     // raw req.on("data")/req.on("end") pattern skips the size guard entirely.
     collectBody(req, res, async () => {
       try {
-        // ── Auth ��───────────────────────────────────────────────────────────
+        // ── Auth ��─────────────────────────────────���─────────────────────────
         const authHeader = req.headers["authorization"] || "";
         const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
         if (!idToken) {

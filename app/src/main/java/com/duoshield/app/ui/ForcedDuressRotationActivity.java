@@ -11,9 +11,11 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.duoshield.app.BaseActivity;
 import com.duoshield.app.BuildConfig;
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.R;
+import com.duoshield.app.SignInActivity;
 import com.duoshield.app.security.DuressManager;
 import com.duoshield.app.security.PendingLockStore;
 import com.duoshield.app.util.PinManager;
@@ -49,8 +51,22 @@ import java.util.concurrent.Executors;
  * If that call fails, both local codes stay set (nothing unsafe about retrying) and
  * the user is shown a retry panel rather than being sent back to either PIN screen —
  * see {@link #panelAckRetry}. No skip, no back-button escape.
+ *
+ * <p><b>Exception — account re-locked mid-flow.</b> The server's ack transaction
+ * checks {@code accountLock.locked === true} ahead of every other branch (see
+ * {@code server/lib/pure.js#decideRotationAcknowledgement}) and refuses with HTTP
+ * 403 if the account was locked again after the unfreeze that started this chain.
+ * Retrying can never succeed in that case, so rather than stranding the user on
+ * {@link #panelAckRetry} forever, {@link #exitRotationDenied()} signs out through
+ * {@link BaseActivity}'s own explicit-sign-out path and returns to
+ * {@link SignInActivity} — the same generic outcome as any other sign-out, so this
+ * screen still reveals nothing about lock state either way.
  */
 public class ForcedDuressRotationActivity extends AppCompatActivity {
+
+    // Matches BaseActivity's private PREFS_NAME literal — not exposed publicly,
+    // so duplicated here rather than reached across the package.
+    private static final String PREFS_NAME = "duoshield_prefs";
 
     private LinearLayout panelEntry, panelExplain, panelAckRetry;
     private EditText etNewCode, etConfirmCode;
@@ -214,6 +230,16 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
             final Exception finalFailure = failure;
             runOnUiThread(() -> {
                 findViewById(R.id.btnRetryAck).setEnabled(true);
+                if (finalFailure instanceof RotationDeniedException) {
+                    // Retrying can never succeed — the server's own gate already
+                    // said the account is locked right now. Exit instead of
+                    // looping the retry button forever; see exitRotationDenied().
+                    android.util.Log.w("ForcedDuressRotation",
+                            "acknowledgeRotation: account re-locked mid-flow — exiting to sign-in",
+                            finalFailure);
+                    exitRotationDenied();
+                    return;
+                }
                 if (finalFailure != null) {
                     android.util.Log.w("ForcedDuressRotation", "acknowledgeRotation failed", finalFailure);
                     showError("Couldn't confirm with the server. Check your connection and try again.");
@@ -297,13 +323,78 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         android.util.Log.d("ForcedDuressRotation", "acknowledgeRotation server response: HTTP " + code);
         conn.disconnect();
         if (code < 200 || code >= 300) {
+            // 403 from THIS endpoint is unambiguous: the token-UID-mismatch branch
+            // (also a 403) can never fire here because userId is always
+            // user.getUid() from the very token being sent, so a 403 can only be
+            // the transaction's `relocked` branch — see decideRotationAcknowledgement
+            // in server/lib/pure.js. Every other non-2xx (401/429/500, or an
+            // IOException from the network layer before a response code even
+            // exists) stays a plain IOException so the retry panel's existing
+            // "check your connection" copy is unchanged for those.
+            if (code == 403) {
+                throw new RotationDeniedException(
+                        "Rotation acknowledgement refused (HTTP 403): " + response);
+            }
             throw new java.io.IOException("Rotation acknowledgement failed (HTTP " + code + "): " + response);
+        }
+    }
+
+    /**
+     * Thrown only for the HTTP 403 the server returns when {@code accountLock.locked}
+     * is {@code true} at ack time — i.e. the account was locked again after the
+     * unfreeze that started this rotation chain. Distinguished from every other
+     * failure (network blip, 401, 429, 500) so the UI can recognise "retrying can
+     * never succeed" and stop offering a retry, instead of looping the user forever
+     * on {@link #panelAckRetry}.
+     */
+    private static final class RotationDeniedException extends java.io.IOException {
+        RotationDeniedException(String message) {
+            super(message);
         }
     }
 
     private void showError(String message) {
         tvError.setText(message);
         tvError.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * The account was re-locked between the unfreeze that put this device on the
+     * rotation chain and this ack attempt (server-confirmed via HTTP 403 — see
+     * {@link RotationDeniedException}). Retrying here can never succeed: the
+     * server's own gate checks {@code locked === true} ahead of every other
+     * branch, so no ack will clear until another unfreeze happens, and this
+     * device has no way to observe that on its own.
+     *
+     * <p>Rather than stranding the user in a retry loop that can never succeed,
+     * sign out through the exact path {@link BaseActivity} already uses for its
+     * own auto-sign-out — set {@link BaseActivity#KEY_EXPLICIT_SIGNOUT} first, so
+     * any later session check reads this as an intentional sign-out rather than a
+     * transient null user — and land on {@link SignInActivity}. This shows no new
+     * copy and reveals nothing: it is indistinguishable from any other sign-out,
+     * which is the point. The lock state itself must not leak through this
+     * screen; it is only ever discoverable through the operator's own unfreeze
+     * action, exactly as before.
+     *
+     * <p>Deliberately does NOT clear {@code PendingLockStore}'s rotation flags.
+     * Both PINs are already durably saved from this session; if the account is
+     * unfrozen again later, the server sets {@code rotationRequired} fresh
+     * regardless, so a stale local flag costs nothing, and
+     * {@code MainActivity.route()} never consults it without a signed-in session.
+     */
+    private void exitRotationDenied() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(BaseActivity.KEY_EXPLICIT_SIGNOUT, true)
+                .apply();
+        try {
+            FirebaseAuth.getInstance().signOut();
+        } catch (Exception ignored) {
+            // Best-effort — the account is being abandoned either way.
+        }
+        Intent intent = new Intent(this, SignInActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        startActivity(intent);
+        finish();
     }
 
     @Override

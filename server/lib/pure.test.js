@@ -619,3 +619,65 @@ test("timingSafeEqualHex rejects malformed hex instead of comparing a prefix", (
   // Odd-length input can never be a whole-byte digest.
   assert.equal(pure.timingSafeEqualHex("abc", "abd"), false);
 });
+
+// ── decideRotationAcknowledgement (S06-M6) ────────────────────────────────────
+
+test("decideRotationAcknowledgement: no lock doc — nothing to acknowledge, no write", () => {
+  const d = pure.decideRotationAcknowledgement(false, null);
+  assert.deepEqual(d, { acknowledged: false, reason: "no-lock", relocked: false, shouldClearFlag: false });
+});
+
+test("decideRotationAcknowledgement: currently locked — refused and NOT cleared, regardless of rotationRequired", () => {
+  // This is the one branch the endpoint turns into an HTTP 403, never a 200 —
+  // a real, currently-active lock must never look like a successful (or even
+  // a benign no-op) acknowledgement.
+  for (const rotationRequired of [true, false, undefined]) {
+    const d = pure.decideRotationAcknowledgement(true, { locked: true, rotationRequired });
+    assert.deepEqual(
+      d,
+      { acknowledged: false, reason: "locked", relocked: true, shouldClearFlag: false },
+      `locked===true must win over rotationRequired=${rotationRequired}`
+    );
+  }
+});
+
+test("decideRotationAcknowledgement: not locked, rotationRequired !== true — idempotent no-op, not an error", () => {
+  // Covers both "never set" and "already cleared by an earlier call" so a
+  // retry after a successful-but-unconfirmed first attempt succeeds.
+  for (const rotationRequired of [false, undefined, null]) {
+    const d = pure.decideRotationAcknowledgement(true, { locked: false, rotationRequired });
+    assert.deepEqual(d, { acknowledged: false, reason: "not-due", relocked: false, shouldClearFlag: false });
+  }
+});
+
+test("decideRotationAcknowledgement: not locked, rotationRequired === true — the only branch that clears the flag", () => {
+  const d = pure.decideRotationAcknowledgement(true, { locked: false, rotationRequired: true });
+  assert.deepEqual(d, { acknowledged: true, reason: undefined, relocked: false, shouldClearFlag: true });
+});
+
+test("decideRotationAcknowledgement: missing locked field behaves as not-locked (only === true counts)", () => {
+  const d = pure.decideRotationAcknowledgement(true, { rotationRequired: true });
+  assert.equal(d.relocked, false);
+  assert.equal(d.shouldClearFlag, true);
+});
+
+test("decideRotationAcknowledgement: lockExists=true with null/undefined data does not throw and is not-due", () => {
+  // Defensive: a real DocumentSnapshot with .exists===true always has a
+  // .data() object, but the function must not assume that to stay safe if a
+  // caller ever passes a malformed shape.
+  assert.doesNotThrow(() => pure.decideRotationAcknowledgement(true, null));
+  assert.doesNotThrow(() => pure.decideRotationAcknowledgement(true, undefined));
+  assert.deepEqual(
+    pure.decideRotationAcknowledgement(true, null),
+    { acknowledged: false, reason: "not-due", relocked: false, shouldClearFlag: false }
+  );
+});
+
+test("decideRotationAcknowledgement: success response reproduces the endpoint's original wire shape (no `reason` key)", () => {
+  // The endpoint spreads `reason` into the JSON body only when it is not
+  // undefined, so this must stay `undefined` (not null, not omitted from the
+  // object) on the success branch — see server/index.js's response builder.
+  const d = pure.decideRotationAcknowledgement(true, { locked: false, rotationRequired: true });
+  assert.equal("reason" in d, true);
+  assert.equal(d.reason, undefined);
+});

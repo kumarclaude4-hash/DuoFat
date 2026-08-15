@@ -557,6 +557,54 @@ function mapYouTubeError(upstreamStatus) {
 // server/index.js so the unused signing path can no longer imply the server
 // needs `B2_KEY_ID` / `B2_APPLICATION_KEY`.
 
+// ── /acknowledgeRotation transaction decision (pure) ─────────────────────────
+// S06-M6: the four-branch decision inside /acknowledgeRotation's Firestore
+// transaction had no regression coverage — the same gap S06-L1 closed for
+// /duress-lock's nonce-expiry check, and for the same reason: this endpoint's
+// gate exists precisely because a real, currently-active lock must never look
+// like a successful (or even a benign no-op) acknowledgement, so a silent
+// regression here is a fail-OPEN, not a fail-closed, bug. Extracted as a pure
+// function so the branches are directly testable without a Firestore
+// emulator; index.js calls this from inside the real transaction and only
+// owns the actual txn.update() side effect, so the tested logic IS the code
+// path that runs, not a copy that could drift.
+//
+// `lockExists` / `lockData` mirror a Firestore DocumentSnapshot's `.exists`
+// and `.data()` (pass `snap.exists` and, only when it's true, `snap.data()`).
+//
+// Returns `{ acknowledged, reason, relocked, shouldClearFlag }`:
+//   - `shouldClearFlag` is the ONLY signal telling the caller to txn.update()
+//     `rotationRequired: false` — every other branch must leave the document
+//     untouched.
+//   - `relocked` is the one case the caller must turn into an HTTP 403, never
+//     a 200: it means `locked === true` right now, so this device's ack must
+//     be refused even though it may hold two perfectly valid new codes.
+//   - `reason` is omitted (left `undefined`) only on the success branch, so
+//     callers that spread it into a JSON response reproduce the endpoint's
+//     original `{ acknowledged: true }` (no `reason` key) wire shape.
+function decideRotationAcknowledgement(lockExists, lockData) {
+  if (!lockExists) {
+    // Nothing to acknowledge — there was never a lock doc for this uid.
+    return { acknowledged: false, reason: "no-lock", relocked: false, shouldClearFlag: false };
+  }
+  const data = lockData || {};
+  // A real, currently-active lock must never be lifted by this endpoint — this
+  // call only ever clears the *rotation* flag, never `locked` itself. If the
+  // account was locked again since the unfreeze that set rotationRequired, a
+  // client still mid-flow from the earlier unfreeze must not be able to clear
+  // anything here.
+  if (data.locked === true) {
+    return { acknowledged: false, reason: "locked", relocked: true, shouldClearFlag: false };
+  }
+  if (data.rotationRequired !== true) {
+    // Already cleared by an earlier call, or never set — idempotent no-op so
+    // a retry after a successful-but-unconfirmed first attempt succeeds
+    // rather than erroring.
+    return { acknowledged: false, reason: "not-due", relocked: false, shouldClearFlag: false };
+  }
+  return { acknowledged: true, reason: undefined, relocked: false, shouldClearFlag: true };
+}
+
 module.exports = {
   notificationBody,
   safeTokenEqual,
@@ -585,4 +633,5 @@ module.exports = {
   transformYouTubeSearchResponse,
   redactApiKey,
   mapYouTubeError,
+  decideRotationAcknowledgement,
 };
