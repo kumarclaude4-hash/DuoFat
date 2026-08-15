@@ -9,6 +9,7 @@ import com.duoshield.app.SignInActivity;
 import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.backup.BackupScheduler;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
+import com.duoshield.app.util.PinManager;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -248,6 +249,52 @@ public class DuressManager {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Like {@link #isDuressPin}, but also treats {@code candidatePlaintext} as
+     * colliding with the stored secondary code if any leading prefix of it (down to
+     * {@code PinManager.MIN_PIN_LEN} digits) matches slot B — i.e. catches "the
+     * secondary code is the first N digits of this candidate", not just an exact
+     * match.
+     *
+     * <p>Use this wherever a new/changed <em>primary</em> PIN is being validated
+     * against an existing secondary code (see {@code SetupPinActivity} and
+     * {@code SecurityPrivacySettingsActivity.doSavePin}). An exact-match-only check
+     * left a real gap: {@code LockScreenActivity} verifies on either reaching
+     * {@code MAX_PIN_LEN} or an explicit confirm tap, not on a fixed length, so if
+     * the secondary code happens to be a leading prefix of the primary PIN, a
+     * deliberate confirm partway through typing the primary PIN — or, previously,
+     * an accidental debounce timeout — reads as the secondary code instead.
+     *
+     * <p><strong>Does not catch the reverse direction</strong> — {@code
+     * candidatePlaintext} being a short prefix of a <em>longer</em> stored
+     * secondary code — because the secondary code's own remaining digits are
+     * unknown and unrecoverable from its hash; closing that direction would mean
+     * brute-forcing up to ~110 PBKDF2 derivations or asking the user to re-enter
+     * their secondary code outside the lock screen, which this class deliberately
+     * never does (see the no-trace design notes throughout this file). That
+     * direction is closed instead in {@code ManageUnlockCodesActivity}, which
+     * re-authenticates with the real primary PIN's plaintext before a secondary
+     * code is ever saved and can therefore check both prefix directions directly,
+     * with no hashing at all.
+     *
+     * <p>Deliberately does <em>not</em> preserve {@link #isDuressPin}'s
+     * constant-work guarantee: it derives once per length tried (1–3 derivations
+     * depending on {@code candidatePlaintext.length()}). That guarantee exists to
+     * stop a remote/timing observer on the lock-screen unlock loop from learning
+     * whether a secondary code exists at all. This method only ever runs from an
+     * already-authenticated Settings/setup screen, checking the account owner's
+     * own freshly-typed PIN — there is no equivalent third-party observer here for
+     * a length-dependent run time to leak information to.
+     */
+    public static boolean isDuressPinOrPrefixOfIt(Context context, String candidatePlaintext) {
+        if (candidatePlaintext == null) return false;
+        if (isDuressPin(context, candidatePlaintext)) return true;
+        for (int len = PinManager.MIN_PIN_LEN; len < candidatePlaintext.length(); len++) {
+            if (isDuressPin(context, candidatePlaintext.substring(0, len))) return true;
+        }
+        return false;
     }
 
     /** Returns true if slot B holds a real secondary code (not a decoy). */

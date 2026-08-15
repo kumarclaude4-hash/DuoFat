@@ -1,6 +1,7 @@
 package com.duoshield.app.ui;
 
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -135,19 +136,74 @@ public class ManageUnlockCodesActivity extends BaseActivity {
             return;
         }
 
-        bgExecutor.execute(() -> {
-            boolean matchesPrimary = PinManager.verifyPin(this, code);
-            runOnUiThread(() -> {
-                if (matchesPrimary) {
-                    Toast.makeText(this,
-                        "This code is already in use. Choose a different one.",
-                        Toast.LENGTH_LONG).show();
-                } else {
-                    pendingCode = code;
-                    showExplainPanel();
-                }
-            });
-        });
+        promptCurrentPinAndValidate(code);
+    }
+
+    /**
+     * Re-authenticates with the existing primary PIN, then uses its plaintext —
+     * held only for the duration of this method, never persisted or logged — to
+     * reject any overlap with {@code candidateCode} before the secondary code is
+     * ever saved.
+     *
+     * <p>This replaces a previous check that only asked "does {@code
+     * candidateCode} hash to the same value as the stored primary PIN" — a single
+     * PBKDF2 comparison that caught an exact match but nothing else. A prefix
+     * overlap between the two codes was still possible and dangerous:
+     * {@code LockScreenActivity} verifies on an explicit confirm tap or on
+     * reaching {@code MAX_PIN_LEN}, not at a fixed length, so if one code is a
+     * leading prefix of the other, a deliberate confirm partway through typing
+     * the longer one reads as the shorter one instead. With the real primary
+     * PIN's plaintext in hand here — rather than just its hash — both prefix
+     * directions can be checked with a single string comparison and zero
+     * additional hashing, instead of the brute-force search over unknown digits
+     * that checking a hash for a prefix relationship would otherwise require.
+     */
+    private void promptCurrentPinAndValidate(String candidateCode) {
+        EditText etCurrent = new EditText(this);
+        etCurrent.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        etCurrent.setHint("Current PIN");
+        etCurrent.setMaxLines(1);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int pad = (int) (24 * getResources().getDisplayMetrics().density);
+        container.setPadding(pad * 2, pad, pad * 2, 0);
+        container.addView(etCurrent);
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Confirm your current PIN to continue")
+                .setView(container)
+                .setPositiveButton("Confirm", (d, w) -> {
+                    String currentPin = etCurrent.getText().toString().trim();
+                    bgExecutor.execute(() -> {
+                        boolean authentic = PinManager.verifyPin(this, currentPin);
+                        // Plaintext-to-plaintext only — no hashing needed for the
+                        // overlap check itself, and both values fall out of scope
+                        // as soon as this lambda returns.
+                        boolean overlaps = authentic && (
+                                currentPin.equals(candidateCode)
+                                        || currentPin.startsWith(candidateCode)
+                                        || candidateCode.startsWith(currentPin));
+                        runOnUiThread(() -> {
+                            if (!authentic) {
+                                Toast.makeText(this, "Incorrect PIN.", Toast.LENGTH_SHORT).show();
+                            } else if (overlaps) {
+                                // Deliberately says nothing about *why*, same reasoning
+                                // as SecurityPrivacySettingsActivity.doSavePin(): naming
+                                // "your PIN" would confirm to anyone at this screen that
+                                // the two codes are compared against each other at all.
+                                Toast.makeText(this,
+                                    "This code is already in use. Choose a different one.",
+                                    Toast.LENGTH_LONG).show();
+                            } else {
+                                pendingCode = candidateCode;
+                                showExplainPanel();
+                            }
+                        });
+                    });
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void onConfirmExplain() {
