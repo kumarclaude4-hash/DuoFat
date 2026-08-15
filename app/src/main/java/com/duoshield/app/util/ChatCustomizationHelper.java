@@ -135,9 +135,19 @@ public final class ChatCustomizationHelper {
      */
     public static GradientDrawable buildBubble(boolean isMine, SharedPreferences prefs,
                                                float density) {
+        return buildBubble(isMine, prefs, density, true);
+    }
+
+    /**
+     * Variant that lets the caller drop the bubble "tail" for grouped continuation
+     * messages (WhatsApp/Telegram style): only the first bubble of a same-sender
+     * cluster keeps its tail; the rest are fully rounded on that corner.
+     */
+    public static GradientDrawable buildBubble(boolean isMine, SharedPreferences prefs,
+                                               float density, boolean showTail) {
         int    color = isMine ? getMineColor(prefs) : getTheirsColor(prefs);
         String style = getBubbleStyle(prefs);
-        return buildBubbleDrawable(color, style, isMine, density);
+        return buildBubbleDrawable(color, style, isMine, density, showTail);
     }
 
     /**
@@ -146,6 +156,12 @@ public final class ChatCustomizationHelper {
      */
     public static GradientDrawable buildBubbleDrawable(int color, String style,
                                                        boolean isMine, float dp) {
+        return buildBubbleDrawable(color, style, isMine, dp, true);
+    }
+
+    public static GradientDrawable buildBubbleDrawable(int color, String style,
+                                                       boolean isMine, float dp,
+                                                       boolean showTail) {
         // Corner radii array: [TL-x,TL-y, TR-x,TR-y, BR-x,BR-y, BL-x,BL-y]
         float[] radii;
         switch (style) {
@@ -158,16 +174,18 @@ public final class ChatCustomizationHelper {
                 float big = 10 * dp, sm = 4 * dp;
                 // Mine: tail at top-right → TL big, TR small
                 // Theirs: tail at top-left → TL small, TR big
+                float tail = showTail ? sm : big;
                 radii = isMine
-                        ? new float[]{big,big, sm,sm,  big,big, big,big}
-                        : new float[]{sm,sm,   big,big, big,big, big,big};
+                        ? new float[]{big,big, tail,tail, big,big, big,big}
+                        : new float[]{tail,tail, big,big, big,big, big,big};
                 break;
             }
             default: { // STYLE_ROUNDED
                 float big = 20 * dp, sm = 5 * dp;
+                float tail = showTail ? sm : big;
                 radii = isMine
-                        ? new float[]{big,big, sm,sm,  big,big, big,big}
-                        : new float[]{sm,sm,   big,big, big,big, big,big};
+                        ? new float[]{big,big, tail,tail, big,big, big,big}
+                        : new float[]{tail,tail, big,big, big,big, big,big};
             }
         }
 

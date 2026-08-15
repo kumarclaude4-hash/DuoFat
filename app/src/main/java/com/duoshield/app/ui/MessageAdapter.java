@@ -456,10 +456,59 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         }
     }
 
+    /** Max gap between two same-sender messages before they stop grouping into one cluster. */
+    private static final long CLUSTER_GAP_MS = 5 * 60 * 1000L;
+
+    private boolean sameSender(Message a, Message b) {
+        return a != null && b != null && a.getSender() != null
+                && a.getSender().equals(b.getSender());
+    }
+
+    /** Adapter index of msg within displayItems, or -1 if not found. */
+    private int indexOf(Message msg) {
+        Integer pos = (msg.getId() != null) ? positionById.get(msg.getId()) : null;
+        if (pos != null && pos >= 0 && pos < displayItems.size()
+                && displayItems.get(pos) == msg) {
+            return pos;
+        }
+        return displayItems.indexOf(msg);
+    }
+
+    /** True when msg starts a new same-sender cluster (gets a tail + sender label). */
+    private boolean isFirstInCluster(Message msg) {
+        int pos = indexOf(msg);
+        if (pos <= 0) return true;
+        Object prev = displayItems.get(pos - 1);
+        if (!(prev instanceof Message)) return true;       // date header or start
+        Message pm = (Message) prev;
+        if (!sameSender(pm, msg)) return true;
+        return (msg.getTimestamp() - pm.getTimestamp()) > CLUSTER_GAP_MS;
+    }
+
+    /** True when msg ends a same-sender cluster (keeps a wider gap beneath it). */
+    private boolean isLastInCluster(Message msg) {
+        int pos = indexOf(msg);
+        if (pos < 0 || pos >= displayItems.size() - 1) return true;
+        Object next = displayItems.get(pos + 1);
+        if (!(next instanceof Message)) return true;
+        Message nm = (Message) next;
+        if (!sameSender(nm, msg)) return true;
+        return (nm.getTimestamp() - msg.getTimestamp()) > CLUSTER_GAP_MS;
+    }
+
     private void bindMessage(MsgViewHolder h, Message msg) {
         boolean mine = myUid != null && myUid.equals(msg.getSender());
         String  type = msg.getMediaType();
         Context ctx  = h.itemView.getContext();
+
+        // ── Message grouping (WhatsApp/Telegram-style clusters) ──────
+        boolean firstInCluster = isFirstInCluster(msg);
+        boolean lastInCluster  = isLastInCluster(msg);
+        // Tight spacing between grouped messages, wider gap at cluster edges.
+        int hPad = dp(ctx, 10);
+        int topPad    = firstInCluster ? dp(ctx, 6) : dp(ctx, 1);
+        int bottomPad = lastInCluster  ? dp(ctx, 6) : dp(ctx, 1);
+        h.itemView.setPadding(hPad, topPad, hPad, bottomPad);
 
         // Reset all content views
         h.textView.setVisibility(View.GONE);
@@ -499,16 +548,33 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         h.bubble.setMaxWidth(
                 (int) (ctx.getResources().getDisplayMetrics().widthPixels * 0.80f));
 
+        // ── Responsive media size ─────────────────────────────────────
+        // The XML defaults media to a fixed 230dp, which looks cramped on
+        // large phones and oversized on compact ones. Scale it to ~66 % of
+        // screen width (clamped) like WhatsApp/Telegram, at a 4:3 height.
+        int screenW    = ctx.getResources().getDisplayMetrics().widthPixels;
+        int mediaW     = Math.max(dp(ctx, 200),
+                          Math.min((int) (screenW * 0.66f), dp(ctx, 300)));
+        int mediaH     = (int) (mediaW * 0.74f);
+        applyMediaSize(h.imageView, mediaW, mediaH);
+        applyMediaSize(h.videoContainer, mediaW, mediaH);
+        if (h.mediaGridContainer != null) {
+            ViewGroup.LayoutParams glp = h.mediaGridContainer.getLayoutParams();
+            if (glp != null) { glp.width = mediaW; h.mediaGridContainer.setLayoutParams(glp); }
+        }
+        if (h.mediaCaptionText != null) h.mediaCaptionText.setMaxWidth(mediaW);
+
         // ── Bubble background (customisable style + colour) ──────────
         android.content.SharedPreferences bubblePrefs =
                 ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE);
         h.bubble.setBackground(
                 com.duoshield.app.util.ChatCustomizationHelper.buildBubble(
                         mine, bubblePrefs,
-                        ctx.getResources().getDisplayMetrics().density));
+                        ctx.getResources().getDisplayMetrics().density,
+                        firstInCluster));
 
-        // ── Partner sender label ────────────────────────────────────
-        if (!mine) {
+        // ── Partner sender label (only atop each incoming cluster) ───
+        if (!mine && firstInCluster) {
             h.senderLabel.setVisibility(View.VISIBLE);
             h.senderLabel.setText(partnerName != null && !partnerName.isEmpty()
                     ? partnerName : "");
@@ -1240,6 +1306,16 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     /** Convert dp to pixels. */
     private static int dp(Context ctx, int dp) {
         return Math.round(dp * ctx.getResources().getDisplayMetrics().density);
+    }
+
+    /** Resize a media view (image / video container) in place, guarding null layout params. */
+    private static void applyMediaSize(View v, int w, int h) {
+        if (v == null) return;
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return;
+        lp.width = w;
+        lp.height = h;
+        v.setLayoutParams(lp);
     }
 
     /** Format milliseconds → "m:ss" */

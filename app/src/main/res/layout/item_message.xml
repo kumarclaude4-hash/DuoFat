@@ -20,13 +20,22 @@
         android:paddingBottom="3dp"
         android:visibility="gone">
 
+        <ImageView
+            android:layout_width="13dp"
+            android:layout_height="13dp"
+            android:src="@drawable/ic_pin"
+            app:tint="@color/ds_pin"
+            android:layout_marginEnd="5dp"
+            android:contentDescription="Pinned"/>
+
         <TextView
             android:id="@+id/pinIndicator"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="📌 Pinned"
+            android:text="Pinned"
             android:textSize="12sp"
-            android:textColor="@color/accent"/>
+            android:textColor="@color/ds_pin"
+            android:fontFamily="sans-serif-medium"/>
     </LinearLayout>
 
     <!-- Sender label -->
@@ -79,7 +88,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Forwarded"
-                    android:textSize="11.5sp"
+                    android:textSize="12sp"
                     android:textColor="@color/ds_text_tertiary"
                     android:fontFamily="sans-serif"
                     android:textStyle="italic"/>
@@ -115,7 +124,7 @@
                         android:id="@+id/replyAuthorText"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:textSize="12.5sp"
+                        android:textSize="13sp"
                         android:textStyle="bold"
                         android:textColor="@color/ds_accent"
                         android:fontFamily="sans-serif-medium"
@@ -127,7 +136,7 @@
                         android:id="@+id/replyPreviewText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textSize="12.5sp"
+                        android:textSize="13sp"
                         android:textColor="@color/ds_text_secondary"
                         android:maxLines="1"
                         android:ellipsize="end"
@@ -140,7 +149,7 @@
                 android:id="@+id/messageText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="15.5sp"
+                android:textSize="16sp"
                 android:textColor="@color/ds_text_primary"
                 android:lineSpacingExtra="2dp"
                 android:lineSpacingMultiplier="1.2"
@@ -173,7 +182,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:scaleType="centerCrop"
-                    android:background="#FF0D1825"
+                    android:background="@color/ds_media_bg"
                     android:contentDescription="Video"/>
 
                 <!-- WhatsApp-style play button: compact 44dp filled circle -->
@@ -190,7 +199,7 @@
                         android:layout_gravity="center"
                         android:layout_marginStart="2dp"
                         android:src="@drawable/ic_play_video"
-                        app:tint="#FFFFFFFF"
+                        app:tint="@color/ds_text_on_accent"
                         android:contentDescription="Play video"/>
                 </FrameLayout>
             </FrameLayout>
@@ -274,8 +283,8 @@
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
                             android:gravity="center"
-                            android:background="#BB000000"
-                            android:textColor="#FFFFFF"
+                            android:background="@color/ds_scrim"
+                            android:textColor="@color/ds_text_on_accent"
                             android:textSize="22sp"
                             android:textStyle="bold"
                             android:fontFamily="sans-serif-medium"
@@ -289,7 +298,7 @@
                 android:id="@+id/mediaCaptionText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="14.5sp"
+                android:textSize="14sp"
                 android:textColor="@color/ds_text_primary"
                 android:lineSpacingExtra="1.5dp"
                 android:paddingTop="7dp"
@@ -312,7 +321,7 @@
                     android:layout_width="38dp"
                     android:layout_height="38dp"
                     android:src="@drawable/ic_person"
-                    app:tint="#AAFFFFFF"
+                    app:tint="@color/ds_text_secondary"
                     android:layout_marginEnd="10dp"
                     android:contentDescription="Contact"/>
 
@@ -327,26 +336,33 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:textStyle="bold"
-                        android:textColor="#FFFFFFFF"
-                        android:textSize="14.5sp"/>
+                        android:textColor="@color/ds_text_primary"
+                        android:textSize="14sp"/>
 
                     <TextView
                         android:id="@+id/cardUid"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:textSize="12sp"
-                        android:textColor="#AAFFFFFF"/>
+                        android:textColor="@color/ds_text_secondary"/>
 
-                    <Button
+                    <com.google.android.material.button.MaterialButton
                         android:id="@+id/cardCopyBtn"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="28dp"
+                        android:layout_height="wrap_content"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingStart="0dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="0dp"
                         android:text="Copy ID"
                         android:textSize="12sp"
-                        android:textColor="@color/accent"
-                        style="@style/Widget.AppCompat.Button.Borderless"
-                        android:paddingStart="0dp"
-                        android:paddingEnd="0dp"/>
+                        android:letterSpacing="0"
+                        android:textColor="@color/ds_accent"/>
                 </LinearLayout>
             </LinearLayout>
 
@@ -394,8 +410,8 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="0:00"
-                    android:textSize="10.5sp"
-                    android:textColor="#80FFFFFF"
+                    android:textSize="11sp"
+                    android:textColor="@color/ds_text_tertiary"
                     android:fontFamily="monospace"
                     android:minWidth="28dp"
                     android:gravity="end"/>
@@ -453,7 +469,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:background="#14FFFFFF"
+                android:background="@color/ds_link_preview_bg"
                 android:layout_marginTop="7dp"
                 android:visibility="gone">
 
@@ -498,8 +514,8 @@
                             android:id="@+id/linkPreviewTitle"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:textSize="12.5sp"
-                            android:textColor="#EEFFFFFF"
+                            android:textSize="13sp"
+                            android:textColor="@color/ds_text_primary"
                             android:textStyle="bold"
                             android:maxLines="2"
                             android:ellipsize="end"
@@ -531,7 +547,7 @@
                     android:id="@+id/messageTimestamp"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:textSize="10.5sp"
+                    android:textSize="11sp"
                     android:textColor="@color/ds_text_timestamp"
                     android:layout_marginEnd="5dp"/>
 
@@ -559,8 +575,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end"
-                android:textSize="9.5sp"
-                android:textColor="#5500C9E0"
+                android:textSize="11sp"
+                android:textColor="@color/ds_text_seen"
                 android:fontFamily="sans-serif"
                 android:letterSpacing="0.02"
                 android:layout_marginTop="1dp"

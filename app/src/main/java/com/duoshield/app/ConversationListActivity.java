@@ -182,17 +182,30 @@ public class ConversationListActivity extends BaseActivity {
                     startActivity(new Intent(this, com.duoshield.app.call.CallHistoryActivity.class)));
         }
 
-        // Search toggle
+        // Search toggle — search replaces the header instead of stacking beneath it,
+        // so the top bar stays a single 64dp row like WhatsApp/Telegram.
+        View headerBar = findViewById(R.id.headerBar);
         ImageView btnSearchToggle = findViewById(R.id.btn_search_toggle);
         ImageView btnCloseSearch  = findViewById(R.id.btn_close_search);
         btnSearchToggle.setOnClickListener(v -> {
+            if (headerBar != null) headerBar.setVisibility(View.GONE);
             searchBar.setVisibility(View.VISIBLE);
             etSearch.requestFocus();
+            android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager)
+                            getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(etSearch,
+                    android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
         });
         btnCloseSearch.setOnClickListener(v -> {
             searchBar.setVisibility(View.GONE);
+            if (headerBar != null) headerBar.setVisibility(View.VISIBLE);
             etSearch.setText("");
             filterConversations("");
+            android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager)
+                            getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(etSearch.getWindowToken(), 0);
         });
 
         etSearch.addTextChangedListener(new TextWatcher() {
