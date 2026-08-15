@@ -19,6 +19,7 @@ import com.duoshield.app.notifications.NotificationHelper;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
+import com.duoshield.app.util.PinManager;
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.ui.SetupPinActivity;
@@ -126,12 +127,25 @@ public class MainActivity extends AppCompatActivity {
         // (clears it on success). Legacy accounts predating this flow never
         // have the flag set, so they are unaffected.
         if (myUid != null && prefs.getBoolean("pending_pin_setup_" + myUid, false)) {
-            Log.i("MainActivity", "route: → SetupPinActivity (interrupted mid-setup) uid=" + myUid);
-            Intent setupIntent = new Intent(this, SetupPinActivity.class);
-            setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
-            startActivity(setupIntent);
-            finish();
-            return;
+            // Self-heal a stale marker: if this account already has a PIN hash, setup
+            // genuinely completed and the flag is simply left over — clear it and
+            // continue instead of sending the user to set a PIN they already set.
+            // Older builds could strand the flag this way because PinManager.setPin()
+            // was void and SetupPinActivity cleared the marker unconditionally, so a
+            // PIN stored by any other path (Settings, a device-PIN promotion during
+            // restore) left the flag on with a real PIN present. Without this, the
+            // flag routed the user back here on every single launch.
+            if (PinManager.hasPinSet(this)) {
+                Log.i("MainActivity", "route: clearing stale pending_pin_setup_ (PIN already set) uid=" + myUid);
+                prefs.edit().remove("pending_pin_setup_" + myUid).apply();
+            } else {
+                Log.i("MainActivity", "route: → SetupPinActivity (interrupted mid-setup) uid=" + myUid);
+                Intent setupIntent = new Intent(this, SetupPinActivity.class);
+                setupIntent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, true);
+                startActivity(setupIntent);
+                finish();
+                return;
+            }
         }
 
         // 3. Refresh FCM token.
