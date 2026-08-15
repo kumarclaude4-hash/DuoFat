@@ -22,6 +22,7 @@ import com.duoshield.app.crypto.BackupCryptoHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.db.AppDatabase;
+import com.duoshield.app.security.PendingLockStore;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.PinManager;
@@ -285,6 +286,15 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             return;
         }
 
+        // S06-M6: an unfreeze (admin API, locked:false) leaves rotationRequired:true on
+        // this same doc, owing a fresh primary PIN + fresh secondary/duress code before
+        // the account is usable again — a duress wipe destroys the local session, so this
+        // read (the account's sole other client-side consultation of accountLock) is the
+        // only place that can ever discover the flag. Recorded now, consumed at the
+        // routing tail below and, if the app is killed mid-chain, resumed from
+        // MainActivity.route().
+        boolean rotationRequired = lockDoc.exists() && Boolean.TRUE.equals(lockDoc.getBoolean("rotationRequired"));
+
         String oldUid = null; // the previous anonymous UID, if any
         if (idDoc.exists()) {
             // Existing identity record.
@@ -488,6 +498,26 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         boolean           paired  = prefs.getBoolean(KEY_IS_PAIRED, false)
                                  && prefs.getString(KEY_CONV_ID, null) != null;
         boolean           unpaired = !paired;
+
+        // S06-M6: a rotationRequired flag (read above, off the same accountLock doc)
+        // takes priority over everything else at this routing tail — the account was
+        // unfrozen after a duress wipe and owes a fresh primary PIN plus a fresh
+        // secondary/duress code before it is usable again. This must run before the
+        // Item-4 no-PIN fallback below: a promoted device PIN would otherwise satisfy
+        // PinManager.hasPinSet() and let the account skip straight past the mandatory
+        // rotation into the app.
+        if (rotationRequired) {
+            PendingLockStore.setRotationDue(this, unpaired);
+            runOnUiThread(() -> {
+                FcmTokenHelper.register(this);
+                Intent intent = new Intent(this, ForcedPrimaryPinRotationActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(intent);
+                finish();
+            });
+            restoreSessionEstablished = false;
+            return;
+        }
 
         // BUG-D-RESTORE-PIN fix: PinManager.looksLikePreExistingDevice() can exempt
         // this device from DevicePinGateActivity even when no device PIN was ever
