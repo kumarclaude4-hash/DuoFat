@@ -2,8 +2,6 @@ package com.duoshield.app;
 
 import android.annotation.SuppressLint;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
@@ -37,7 +35,6 @@ import com.duoshield.app.util.PinManager;
 public class LockScreenActivity extends AppCompatActivity {
 
     private static final String PREFS_NAME     = "duoshield_prefs";
-    private static final long   AUTO_SUBMIT_DEBOUNCE_MS = 600L;
 
     // UI refs
     private PinDotsView      pinDotsView;
@@ -57,8 +54,21 @@ public class LockScreenActivity extends AppCompatActivity {
     private StringBuilder pinBuffer = new StringBuilder(6);
 
     private boolean isVerifying = false;
-    private final Handler autoSubmitHandler = new Handler(Looper.getMainLooper());
-    private Runnable pendingAutoSubmit;
+    // NOTE: this screen used to auto-submit on a typing-pause debounce (Handler +
+    // postDelayed) once MIN_PIN_LEN digits were entered, because it has no visible
+    // confirm action and no longer knows the account's real PIN length (see the
+    // length-disclosure fix referenced below). That timer submitted whatever was in
+    // the buffer at the moment the pause was detected — including a partial, correct
+    // PIN interrupted mid-entry. Since the primary and secondary (duress) PINs are
+    // only checked for exact equality against each other, not for one being a prefix
+    // of the other, an ordinary pause while typing a real PIN could get read as a
+    // duress PIN and trigger an irreversible wipe, and the reverse could silently
+    // swallow a genuine duress entry. Verification must only ever run from a
+    // deliberate action: an explicit tap on keyConfirm, or reaching MAX_PIN_LEN where
+    // there is no ambiguity left to wait out. Do not reintroduce a pause-based timer
+    // here.
+    private ImageView ivKeyConfirm;
+    private View keyConfirm;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,6 +119,8 @@ public class LockScreenActivity extends AppCompatActivity {
         digitKeys[9] = findViewById(R.id.key9);
         digitKeys[0] = findViewById(R.id.key0);
         keyBackspace  = findViewById(R.id.keyBackspace);
+        keyConfirm    = findViewById(R.id.keyConfirm);
+        ivKeyConfirm  = findViewById(R.id.ivKeyConfirm);
 
         for (int digit = 0; digit <= 9; digit++) {
             final int d = digit;
@@ -117,6 +129,10 @@ public class LockScreenActivity extends AppCompatActivity {
             }
         }
         keyBackspace.setOnClickListener(v -> onBackspacePressed());
+        // The only two ways checkPin() ever runs: this explicit tap, or reaching
+        // MAX_PIN_LEN in onDigitPressed(). Never on a typing pause.
+        keyConfirm.setOnClickListener(v -> checkPin());
+        updateConfirmKeyState();
     }
 
     // ── Numpad input ──────────────────────────────────────────────────────
@@ -127,42 +143,50 @@ public class LockScreenActivity extends AppCompatActivity {
         pinBuffer.append(digit);
         int len = pinBuffer.length();
         pinDotsView.setFilledCount(len);
-        cancelPendingAutoSubmit();
+        updateConfirmKeyState();
         if (len >= pinLength) {
             // Numpad's dot indicator/buffer are sized to PinManager.getPinLength(),
             // the fixed MAX_PIN_LEN upper bound (S08-L3) — not this account's real
             // PIN length, which is no longer stored anywhere. Reaching that bound
-            // submits immediately.
+            // submits immediately since there is no more room to add digits, so
+            // there's no ambiguity left to wait out.
             checkPin();
-        } else if (len >= PinManager.MIN_PIN_LEN) {
-            // S08-L3 follow-up: an account's real PIN can be anywhere from
-            // MIN_PIN_LEN to MAX_PIN_LEN digits (see SetupPinActivity), but this
-            // screen can no longer size the buffer to the exact real length
-            // without reintroducing the plaintext-length disclosure the fix
-            // removed. Once at least MIN_PIN_LEN digits are entered, debounce a
-            // short pause and submit automatically — every prior digit press
-            // above cancels this via cancelPendingAutoSubmit(), so a user still
-            // typing keeps typing without an early false submit, and a user who
-            // stops at their actual (shorter-than-max) PIN length is still
-            // verified instead of being stuck unable to submit.
-            pendingAutoSubmit = this::checkPin;
-            autoSubmitHandler.postDelayed(pendingAutoSubmit, AUTO_SUBMIT_DEBOUNCE_MS);
         }
+        // S08-L3 follow-up, corrected: an account's real PIN can be anywhere from
+        // MIN_PIN_LEN to MAX_PIN_LEN digits, and this screen can't size the buffer
+        // to the exact real length without reintroducing the plaintext-length
+        // disclosure that fix removed. This USED to debounce a typing pause and
+        // auto-submit once MIN_PIN_LEN digits were reached — but a pause is not
+        // the same signal as "the user is done." Because the primary and duress
+        // PINs are only checked for exact equality against each other (not for
+        // one being a prefix of the other), a routine mid-entry pause on a real
+        // PIN could get read as a shorter duress PIN and trigger an irreversible
+        // wipe, or a genuine duress entry could get swallowed by the same timer.
+        // Below MAX_PIN_LEN, verification now only runs from an explicit tap on
+        // keyConfirm (see updateConfirmKeyState() and its click listener).
     }
 
     private void onBackspacePressed() {
         if (isVerifying || pinBuffer.length() == 0) return;
-        cancelPendingAutoSubmit();
         pinBuffer.deleteCharAt(pinBuffer.length() - 1);
         pinDotsView.setFilledCount(pinBuffer.length());
+        updateConfirmKeyState();
         tvError.setVisibility(View.INVISIBLE);
     }
 
-    private void cancelPendingAutoSubmit() {
-        if (pendingAutoSubmit != null) {
-            autoSubmitHandler.removeCallbacks(pendingAutoSubmit);
-            pendingAutoSubmit = null;
-        }
+    /**
+     * keyConfirm is only enabled once PinManager.MIN_PIN_LEN digits are buffered —
+     * matching the shortest PIN any account can have — so the tap is always a
+     * meaningful, deliberate submit rather than a no-op on an empty/near-empty
+     * buffer. Disabled state is visually muted (bg_numpad_confirm_disabled) so it
+     * reads clearly as "not yet ready" next to the always-active backspace key.
+     */
+    private void updateConfirmKeyState() {
+        boolean canSubmit = pinBuffer.length() >= PinManager.MIN_PIN_LEN;
+        keyConfirm.setEnabled(canSubmit);
+        keyConfirm.setBackgroundResource(
+                canSubmit ? R.drawable.bg_numpad_backspace : R.drawable.bg_numpad_confirm_disabled);
+        ivKeyConfirm.setAlpha(canSubmit ? 1f : 0.55f);
     }
 
     // ── Scan animation ──────────────────────────────────────────────────────
@@ -180,7 +204,6 @@ public class LockScreenActivity extends AppCompatActivity {
     // ── PIN verification ──────────────────────────────────────────────────
 
     private void checkPin() {
-        cancelPendingAutoSubmit();
         if (isVerifying) return;
 
         String entered = pinBuffer.toString();
@@ -202,6 +225,7 @@ public class LockScreenActivity extends AppCompatActivity {
             tvError.setVisibility(View.VISIBLE);
             pinBuffer.setLength(0);
             pinDotsView.setFilledCount(0);
+            updateConfirmKeyState();
             return;
         }
 
@@ -270,6 +294,7 @@ public class LockScreenActivity extends AppCompatActivity {
         // Clear the buffer
         pinBuffer.setLength(0);
         pinDotsView.setFilledCount(0);
+        updateConfirmKeyState();
 
         tvError.setText(getString(R.string.wrong_pin));
         tvError.setVisibility(View.VISIBLE);
@@ -278,6 +303,10 @@ public class LockScreenActivity extends AppCompatActivity {
     private void setInputEnabled(boolean enabled) {
         btnUnlock.setEnabled(enabled);
         keyBackspace.setEnabled(enabled);
+        // Verification is in flight (isVerifying) — keyConfirm must not be tappable
+        // regardless of the buffer length, same as every other key here. Re-enabling
+        // still defers to updateConfirmKeyState()'s MIN_PIN_LEN check, not to this flag.
+        keyConfirm.setEnabled(enabled && pinBuffer.length() >= PinManager.MIN_PIN_LEN);
         for (int i = 0; i <= 9; i++) {
             if (digitKeys[i] != null) digitKeys[i].setEnabled(enabled);
         }
