@@ -152,6 +152,12 @@ public class BaseActivity extends AppCompatActivity {
         }
 
         // 2. PIN lock — shows lock screen after background timeout.
+        //
+        // The lock screen check MUST run before the offline lockout below: the lock
+        // screen (LockScreenActivity) is where the duress secondary PIN is entered, and
+        // it must stay reachable offline so its local wipe can fire. Only once the user
+        // is genuinely unlocked and about to see real app content do we enforce the
+        // "no offline use" wall.
         if (AppLockManager.shouldLock(this)) {
             if (!lockScreenActive) {
                 Log.d(TAG, getClass().getSimpleName() + ": lock timeout exceeded → LockScreenActivity");
@@ -161,6 +167,14 @@ public class BaseActivity extends AppCompatActivity {
                 startActivity(intent);
             }
         } else {
+            // Full offline lockout: an unlocked, foregrounded screen showing real app
+            // content must not operate without a connection. Enforced here (not before
+            // the lock check) so unlocking — including the offline duress path — is
+            // never blocked. The server-side account lock still drains once online.
+            if (com.duoshield.app.util.NetworkStateHelper.blockIfOffline(this)) {
+                return;
+            }
+
             AppLockManager.onAppForegrounded(this);
 
             // 3. Keep the duress lock credential warm (S06-H3).

@@ -237,7 +237,9 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- PIN set state: Change / Clear buttons -->
+            <!-- PIN set state: Change PIN only. The primary PIN can be changed but
+                 never removed — the app must always have a primary PIN once one is
+                 set (see SecurityPrivacySettingsActivity). -->
             <LinearLayout
                 android:id="@+id/layoutPinSet"
                 android:layout_width="match_parent"
@@ -253,25 +255,11 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnChangePinMode"
-                    android:layout_width="0dp"
+                    android:layout_width="match_parent"
                     android:layout_height="46dp"
-                    android:layout_weight="1"
                     android:text="Change PIN"
                     android:textAllCaps="false"
-                    android:layout_marginEnd="8dp"
                     app:cornerRadius="23dp"/>
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClearPin"
-                    android:layout_width="0dp"
-                    android:layout_height="46dp"
-                    android:layout_weight="1"
-                    android:text="Clear PIN"
-                    android:textAllCaps="false"
-                    app:cornerRadius="23dp"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:textColor="@color/error_red"
-                    app:strokeColor="@color/error_red"/>
             </LinearLayout>
 
             <!-- Manage unlock codes row -->

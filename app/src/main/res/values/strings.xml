@@ -66,6 +66,13 @@
     <string name="self_destruct_desc">Auto-delete messages after a set time</string>
     <string name="set_pin">Set PIN</string>
     <string name="clear_pin">Clear PIN</string>
+
+    <!-- Offline lockout (NoInternetActivity) -->
+    <string name="offline_title">No internet connection</string>
+    <string name="offline_body">DuoShield needs an active connection to keep you secure. Reconnect to continue.</string>
+    <string name="offline_retry">Try again</string>
+    <string name="offline_still_offline">Still offline. Check your connection.</string>
+    <string name="offline_status_checking">Waiting for a connection…</string>
     <string name="hint_new_pin">New PIN (4–6 digits)</string>
     <string name="hint_confirm_pin">Confirm PIN</string>
     <string name="pin_status_set">PIN is set</string>
