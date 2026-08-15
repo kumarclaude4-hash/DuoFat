@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ds_background"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:paddingStart="32dp"
+    android:paddingEnd="32dp">
+
+    <ImageView
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:src="@drawable/ic_wifi_off"
+        android:contentDescription="@string/offline_title"
+        android:layout_marginBottom="28dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/offline_title"
+        android:textColor="@color/ds_text_primary"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="12dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/offline_body"
+        android:textColor="@color/ds_text_secondary"
+        android:textSize="15sp"
+        android:lineSpacingMultiplier="1.4"
+        android:gravity="center"
+        android:layout_marginBottom="36dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnRetry"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="@string/offline_retry"
+        android:textAllCaps="false"
+        android:textSize="16sp"
+        app:backgroundTint="@color/ds_accent"
+        android:textColor="@color/ds_text_on_accent"
+        app:cornerRadius="26dp" />
+
+    <TextView
+        android:id="@+id/tvOfflineStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/offline_status_checking"
+        android:textColor="@color/ds_text_tertiary"
+        android:textSize="13sp"
+        android:gravity="center"
+        android:layout_marginTop="20dp"
+        android:visibility="invisible" />
+
+</LinearLayout>

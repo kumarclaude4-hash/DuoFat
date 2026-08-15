@@ -69,7 +69,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         Button btnSetPin        = findViewById(R.id.btnSetPin);
         Button btnCancelPinForm = findViewById(R.id.btnCancelPinForm);
-        Button btnClearPin      = findViewById(R.id.btnClearPin);
         Button btnChangePinMode = findViewById(R.id.btnChangePinMode);
 
         // ── Restore saved state ───────────────────────────────────────────────
@@ -95,7 +94,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
 
         // ── App PIN ───────────────────────────────────────────────────────────
         if (btnSetPin != null) btnSetPin.setOnClickListener(v -> saveAppPin());
-        if (btnClearPin      != null) btnClearPin.setOnClickListener(v -> confirmClearPin());
         if (btnChangePinMode != null) btnChangePinMode.setOnClickListener(v -> enterChangePinMode());
         if (btnCancelPinForm != null) btnCancelPinForm.setOnClickListener(v -> refreshPinStatus());
 
@@ -224,32 +222,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
                 }
             });
         });
-    }
-
-    private void confirmClearPin() {
-        if (!PinManager.hasPinSet(this)) {
-            Toast.makeText(this, R.string.settings_pin_no_pin, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        // Identical prompt whether or not a second code is configured. The old
-        // "you have more than one unlock code configured — enter the other one"
-        // confirmation was the single loudest disclosure left in the app: it told
-        // anyone holding the primary PIN that a second code existed, which is an
-        // invitation to demand it. Reaching this screen already requires being
-        // past the lock screen, so gating the clear on the second code bought
-        // nothing that wasn't already lost at that point.
-        promptCurrentPin("Enter your current PIN to clear it", this::doClearPin);
-    }
-
-    private void doClearPin() {
-        PinManager.clearPin(this);
-        prefs.edit()
-             .putBoolean("shake_to_lock_enabled", false)
-             .apply();
-        if (switchShakeLock != null) switchShakeLock.setChecked(false);
-        DuressManager.clearDuressPin(this);
-        applyPinUiState(false);
-        Toast.makeText(this, R.string.settings_pin_cleared, Toast.LENGTH_SHORT).show();
     }
 
     private void promptCurrentPin(String title, Runnable onVerified) {

@@ -74,6 +74,16 @@
             android:name=".ui.DevicePinGateActivity"
             android:exported="false" />
 
+        <!-- Full offline lockout gate. singleTop + excludeFromRecents mirror the
+             lock screen: a second blockIfOffline() start routes into the existing
+             instance instead of stacking a duplicate. -->
+        <activity
+            android:name=".ui.NoInternetActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DuoShield" />
+
         <!-- ── Main routing trampoline ────────────────────── -->
         <activity
             android:name=".MainActivity"
