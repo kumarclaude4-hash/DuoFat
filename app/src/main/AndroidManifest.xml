@@ -139,6 +139,17 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- ── Forced post-unfreeze PIN rotation (S06-M6) ────── -->
+        <activity
+            android:name=".ui.ForcedPrimaryPinRotationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ui.ForcedDuressRotationActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <activity
             android:name=".ui.RestoreFromSeedActivity"
             android:exported="false"

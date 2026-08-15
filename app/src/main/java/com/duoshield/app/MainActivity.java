@@ -16,12 +16,15 @@ import androidx.core.content.ContextCompat;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.notifications.NotificationHelper;
 
+import com.duoshield.app.security.PendingLockStore;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.duoshield.app.util.PinManager;
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.ui.AddContactActivity;
+import com.duoshield.app.ui.ForcedDuressRotationActivity;
+import com.duoshield.app.ui.ForcedPrimaryPinRotationActivity;
 import com.duoshield.app.ui.SetupPinActivity;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -117,6 +120,26 @@ public class MainActivity extends AppCompatActivity {
         String myUid = FirebaseAuth.getInstance().getUid();
         if (myUid != null) {
             prefs.edit().putString("my_uid", myUid).apply();
+        }
+
+        // S06-M6: if the app was killed mid-rotation (RestoreFromSeedActivity
+        // discovered accountLock/{uid}.rotationRequired and sent the user into the
+        // 2-screen forced-rotation chain, but the server ack — /acknowledgeRotation
+        // — never completed), resume at the correct screen instead of falling
+        // through to the ordinary routing below. This must run before the
+        // pending_pin_setup_ check: a rotation in progress always takes priority
+        // over an unrelated interrupted PIN setup, and the two flags cannot both be
+        // meaningfully set for the same account at once in practice, but ordering
+        // this first keeps the priority explicit rather than incidental.
+        if (PendingLockStore.isRotationDue(this)) {
+            Class<?> dest = PendingLockStore.isRotationPrimaryDone(this)
+                    ? ForcedDuressRotationActivity.class
+                    : ForcedPrimaryPinRotationActivity.class;
+            Log.i("MainActivity", "route: → " + dest.getSimpleName() + " (interrupted mid-rotation) uid=" + myUid);
+            Intent rotationIntent = new Intent(this, dest);
+            startActivity(rotationIntent);
+            finish();
+            return;
         }
 
         // If the app was killed anywhere between account creation and PIN setup

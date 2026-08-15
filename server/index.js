@@ -436,7 +436,7 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-// ── Per-UID authenticated-endpoint rate limiter ───────────────────────────────
+// ── Per-UID authenticated-endpoint rate limiter ───────────────���───────────────
 // Prevents an authenticated user from flooding the server-mediated endpoints
 // below. Each endpoint has its own per-minute bucket.
 //
@@ -470,6 +470,13 @@ const AUTH_RATE_LIMITS = {
   // seconds. Cache hits are served before this gate is consulted, so repeated
   // identical searches do not count against it.
   youtubeSearch:      6,
+  // S06-M6: one-shot completion call for the forced post-unfreeze rotation —
+  // clears accountLock/{uid}.rotationRequired once both new-PIN screens finish.
+  // Same reasoning as requestLockNonce: never legitimately needed more than a
+  // couple of times per rotation (an initial call plus a retry or two if the
+  // network drops), so a low limit costs nothing to a real user while bounding
+  // how fast a compromised token can hammer the accountLock transaction.
+  acknowledgeRotation: 3,
 };
 const authRateLimits = new Map(); // uid → { counts: {ep: n}, windowStart }
 
@@ -2927,6 +2934,122 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ── POST /acknowledgeRotation (S06-M6) ──────────────────────────────────────
+  //
+  // Body (JSON): { userId }
+  // Auth: Firebase ID token in Authorization: Bearer <token> header.
+  //
+  // Clears accountLock/{userId}.rotationRequired once the client has completed
+  // both forced-rotation screens (new primary PIN, then a fresh secondary/duress
+  // code re-arming slot B) — see SESSION-06-DURESS.md §8 and
+  // ForcedPrimaryPinRotationActivity / ForcedDuressRotationActivity on the client.
+  //
+  // Must go through the Admin SDK: firestore.rules denies client updates to
+  // accountLock outright (`allow update: if false`), so the flag can only ever be
+  // cleared server-side, the same reason /migrateUid exists for chat/group writes
+  // the client's own rules don't permit it to make itself.
+  //
+  // Security model:
+  //   • Verifies the Firebase ID token (auth.uid must equal userId).
+  //   • Idempotent: already-cleared or never-set is a 200 no-op, not an error —
+  //     a retry after a successful-but-unconfirmed first call must not fail.
+  //   • Refuses (403) if the account is locked again at ack time. A stale client
+  //     call must never be able to lift a lock that became real again since the
+  //     unfreeze that originally triggered this rotation.
+  //   • Rate-limited: a few calls per userId per 60 s (see AUTH_RATE_LIMITS).
+  //
+  if (req.method === "POST" && req.url === "/acknowledgeRotation") {
+    collectBody(req, res, async (body) => {
+      try {
+        const authHeader = req.headers["authorization"] || "";
+        const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+        if (!idToken) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Missing Authorization header");
+          return;
+        }
+
+        let decodedToken;
+        try {
+          decodedToken = await admin.auth().verifyIdToken(idToken);
+        } catch (authErr) {
+          res.writeHead(401, { "Content-Type": "text/plain" });
+          res.end("Invalid or expired token");
+          return;
+        }
+
+        if (!checkAuthRateLimit(decodedToken.uid, "acknowledgeRotation")) {
+          res.writeHead(429, { "Content-Type": "text/plain" });
+          res.end("Rate limit exceeded — slow down and retry");
+          return;
+        }
+
+        const { userId } = JSON.parse(body);
+        if (!userId || typeof userId !== "string") {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing or invalid userId");
+          return;
+        }
+
+        // Caller's auth UID must equal the userId they claim to own — a stale or
+        // stolen token for a different account must not be able to clear this
+        // account's rotation flag.
+        if (decodedToken.uid !== userId) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Token UID does not match userId");
+          return;
+        }
+
+        const lockRef = db.collection("accountLock").doc(userId);
+        const result = await db.runTransaction(async (txn) => {
+          const snap = await txn.get(lockRef);
+          if (!snap.exists) {
+            return { acknowledged: false, reason: "no-lock" };
+          }
+          const data = snap.data();
+          // A real, currently-active lock must never be lifted by this endpoint —
+          // this call only ever clears the *rotation* flag, never `locked` itself.
+          // If the account was locked again since the unfreeze that set
+          // rotationRequired, a client still mid-flow from the earlier unfreeze
+          // must not be able to clear anything here.
+          if (data.locked === true) {
+            return { acknowledged: false, reason: "locked", relocked: true };
+          }
+          if (data.rotationRequired !== true) {
+            // Already cleared by an earlier call, or never set — idempotent no-op
+            // so a retry after a successful-but-unconfirmed first attempt succeeds
+            // rather than erroring.
+            return { acknowledged: false, reason: "not-due" };
+          }
+          txn.update(lockRef, {
+            rotationRequired: false,
+            rotationAcknowledgedAt: FieldValue.serverTimestamp(),
+          });
+          return { acknowledged: true };
+        });
+
+        if (result.relocked) {
+          console.warn(`acknowledgeRotation: refused, account re-locked userId=${uidTag(userId)}`);
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Access request not approved");
+          return;
+        }
+
+        console.log(
+          `acknowledgeRotation: userId=${uidTag(userId)} acknowledged=${result.acknowledged} `
+          + `reason=${result.reason || "n/a"}`
+        );
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        console.error("acknowledgeRotation error:", e.message);
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Internal server error");
+      }
+    });
+    return;
+  }
+
   // ── POST /createChat ──────────────────────────────────────────────────────────
   //
   // Body (JSON): { myUid, partnerUid, myDisplayName, partnerDisplayName }
@@ -4718,7 +4841,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/auditlog ───────────────────────────────────────────────
+  // ── GET /admin/api/auditlog ──────────────────────��────────────────────────
   //
   // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns the 100 most-recent admin actions
   // (waitlist approvals + account unfreezes) so the operator has a tamper-

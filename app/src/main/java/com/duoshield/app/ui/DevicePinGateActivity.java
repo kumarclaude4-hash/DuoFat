@@ -197,6 +197,25 @@ public class DevicePinGateActivity extends AppCompatActivity {
         String entered = pinBuffer.toString();
         if (entered.isEmpty()) return;
 
+        // S06-L5 parity fix: this screen re-verifies whatever PIN currently occupies
+        // the device-gate slot, which after a duress wipe is the just-promoted
+        // secondary/duress code (DuressManager.performLogout()'s promote-and-rotate —
+        // see the class javadoc on PinManager's lockout section). Mashing the keypad
+        // here has the same accidental-brute-force exposure LockScreenActivity's
+        // lockout was built to close, but this screen had no lockout at all. Mirror
+        // LockScreenActivity.checkPin() exactly: same PinManager methods, same
+        // attempt count, same backoff curve, same storage/counter mechanism — no
+        // separate policy.
+        long remainingMs = PinManager.getLockoutRemainingMs(this);
+        if (remainingMs > 0) {
+            long secs = (remainingMs + 999) / 1000;
+            tvError.setText("Too many attempts. Try again in " + secs + "s.");
+            tvError.setVisibility(View.VISIBLE);
+            pinBuffer.setLength(0);
+            pinDotsView.setFilledCount(0);
+            return;
+        }
+
         isVerifying = true;
         setInputEnabled(false);
         tvError.setText("Verifying…");
@@ -211,8 +230,10 @@ public class DevicePinGateActivity extends AppCompatActivity {
                 tvError.setVisibility(View.INVISIBLE);
                 hideScanAnim();
                 if (correct) {
+                    PinManager.clearFailedAttempts(this);
                     proceedToWelcome();
                 } else {
+                    PinManager.recordFailedAttempt(this);
                     handleWrongPin();
                 }
             });

@@ -88,6 +88,34 @@ public final class PendingLockStore {
      */
     private static final String KEY_ROTATION_DUE  = "session_rotation_due";
 
+    /**
+     * Screen 1 of the forced rotation (new primary PIN) has completed; screen 2
+     * (fresh secondary/duress code) is what's outstanding. Lets a relaunch mid-flow
+     * resume at the correct screen instead of restarting from the primary-PIN step.
+     * Cleared together with {@link #KEY_ROTATION_DUE} only once the server ack
+     * ({@code /acknowledgeRotation}) succeeds.
+     */
+    private static final String KEY_ROTATION_PRIMARY_DONE = "session_rotation_primary_done";
+
+    /**
+     * Screen 2 has armed a genuinely fresh secondary/duress code and is now only
+     * waiting on the server ack. This is deliberately a separate flag from checking
+     * {@code DuressManager.hasDuressPin()} directly: slot B can already be armed on
+     * arrival at screen 2 in the wipe scenario (duress logout deliberately keeps the
+     * old code armed so a restore of the same account stays gated), so "armed"
+     * alone cannot distinguish "screen 2 hasn't run yet" from "screen 2 already
+     * replaced it and is only waiting on the network call."
+     */
+    private static final String KEY_ROTATION_DURESS_DONE = "session_rotation_duress_done";
+
+    /**
+     * Whether the account this rotation applies to is unpaired (no conversation yet),
+     * so the end of the 2-screen chain — or a relaunch mid-flow via
+     * {@code MainActivity.route()} — lands on the correct final destination
+     * ({@code AddContactActivity} vs {@code ConversationListActivity}).
+     */
+    private static final String KEY_ROTATION_UNPAIRED = "session_rotation_unpaired";
+
     private static SharedPreferences sp(Context ctx) {
         return SecurePrefs.getSessionState(ctx);
     }
@@ -203,15 +231,62 @@ public final class PendingLockStore {
 
     // ── Forced rotation after unfreeze (S06-M6) ───────────────────────────────
 
-    public static void setRotationDue(Context ctx, boolean due) {
+    /** Sets the rotation intent for the given account shape. Resets screen-1/2 progress. */
+    public static void setRotationDue(Context ctx, boolean unpaired) {
         try {
-            if (due) sp(ctx).edit().putBoolean(KEY_ROTATION_DUE, true).commit();
-            else     sp(ctx).edit().remove(KEY_ROTATION_DUE).commit();
+            sp(ctx).edit()
+                   .putBoolean(KEY_ROTATION_DUE, true)
+                   .putBoolean(KEY_ROTATION_UNPAIRED, unpaired)
+                   .remove(KEY_ROTATION_PRIMARY_DONE)
+                   .remove(KEY_ROTATION_DURESS_DONE)
+                   .commit();
+        } catch (Exception ignored) {}
+    }
+
+    /** Clears the rotation intent entirely. Call only once the server ack succeeds. */
+    public static void clearRotationDue(Context ctx) {
+        try {
+            sp(ctx).edit()
+                   .remove(KEY_ROTATION_DUE)
+                   .remove(KEY_ROTATION_PRIMARY_DONE)
+                   .remove(KEY_ROTATION_DURESS_DONE)
+                   .remove(KEY_ROTATION_UNPAIRED)
+                   .commit();
         } catch (Exception ignored) {}
     }
 
     public static boolean isRotationDue(Context ctx) {
         try { return sp(ctx).getBoolean(KEY_ROTATION_DUE, false); }
+        catch (Exception e) { return false; }
+    }
+
+    public static void setRotationPrimaryDone(Context ctx, boolean done) {
+        try {
+            if (done) sp(ctx).edit().putBoolean(KEY_ROTATION_PRIMARY_DONE, true).commit();
+            else      sp(ctx).edit().remove(KEY_ROTATION_PRIMARY_DONE).commit();
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean isRotationPrimaryDone(Context ctx) {
+        try { return sp(ctx).getBoolean(KEY_ROTATION_PRIMARY_DONE, false); }
+        catch (Exception e) { return false; }
+    }
+
+    public static void setRotationDuressDone(Context ctx, boolean done) {
+        try {
+            if (done) sp(ctx).edit().putBoolean(KEY_ROTATION_DURESS_DONE, true).commit();
+            else      sp(ctx).edit().remove(KEY_ROTATION_DURESS_DONE).commit();
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean isRotationDuressDone(Context ctx) {
+        try { return sp(ctx).getBoolean(KEY_ROTATION_DURESS_DONE, false); }
+        catch (Exception e) { return false; }
+    }
+
+    /** Account shape recorded when the rotation was set — drives the final destination. */
+    public static boolean isRotationUnpaired(Context ctx) {
+        try { return sp(ctx).getBoolean(KEY_ROTATION_UNPAIRED, false); }
         catch (Exception e) { return false; }
     }
 }

@@ -22,6 +22,7 @@ import com.duoshield.app.crypto.BackupCryptoHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.db.AppDatabase;
+import com.duoshield.app.security.PendingLockStore;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.PinManager;
@@ -285,6 +286,15 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
             return;
         }
 
+        // S06-M6: an unfreeze (admin API, locked:false) leaves rotationRequired:true on
+        // this same doc, owing a fresh primary PIN + fresh secondary/duress code before
+        // the account is usable again — a duress wipe destroys the local session, so this
+        // read (the account's sole other client-side consultation of accountLock) is the
+        // only place that can ever discover the flag. Recorded now, consumed at the
+        // routing tail below and, if the app is killed mid-chain, resumed from
+        // MainActivity.route().
+        boolean rotationRequired = lockDoc.exists() && Boolean.TRUE.equals(lockDoc.getBoolean("rotationRequired"));
+
         String oldUid = null; // the previous anonymous UID, if any
         if (idDoc.exists()) {
             // Existing identity record.
@@ -332,9 +342,17 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         // to overwrite them with — leaving this identity looking "paired" with someone
         // else's partner. Clearing unconditionally means Step I's Firestore lookup is
         // the sole source of truth for pairing state after every restore.
+        // Mirrors SeedPhraseDisplayActivity's "pending_pin_setup_" marker: if the
+        // app is killed between now and the PIN routing below actually finishing
+        // (device PIN promoted, or SetupPinActivity completed), MainActivity.route()
+        // will send the next launch back to SetupPinActivity instead of letting a
+        // PIN-less account reach ConversationListActivity/AddContactActivity. Cleared
+        // in the same two places SeedPhraseDisplayActivity's flag is cleared: once a
+        // device PIN is promoted below, or once SetupPinActivity itself finishes.
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_USER_ID, derivedUserId)
                 .putString(KEY_MY_UID,  currentUid)
+                .putBoolean("pending_pin_setup_" + currentUid, true)
                 .remove("explicit_signout")
                 .remove(KEY_IS_PAIRED)
                 .remove(KEY_CONV_ID)
@@ -479,7 +497,58 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         SharedPreferences prefs   = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         boolean           paired  = prefs.getBoolean(KEY_IS_PAIRED, false)
                                  && prefs.getString(KEY_CONV_ID, null) != null;
-        Class<?>          dest    = paired ? ConversationListActivity.class : AddContactActivity.class;
+        boolean           unpaired = !paired;
+
+        // S06-M6: a rotationRequired flag (read above, off the same accountLock doc)
+        // takes priority over everything else at this routing tail — the account was
+        // unfrozen after a duress wipe and owes a fresh primary PIN plus a fresh
+        // secondary/duress code before it is usable again. This must run before the
+        // Item-4 no-PIN fallback below: a promoted device PIN would otherwise satisfy
+        // PinManager.hasPinSet() and let the account skip straight past the mandatory
+        // rotation into the app.
+        if (rotationRequired) {
+            PendingLockStore.setRotationDue(this, unpaired);
+            runOnUiThread(() -> {
+                FcmTokenHelper.register(this);
+                Intent intent = new Intent(this, ForcedPrimaryPinRotationActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(intent);
+                finish();
+            });
+            restoreSessionEstablished = false;
+            return;
+        }
+
+        // BUG-D-RESTORE-PIN fix: PinManager.looksLikePreExistingDevice() can exempt
+        // this device from DevicePinGateActivity even when no device PIN was ever
+        // actually set (e.g. stale my_uid/account-PIN-hash left over from a prior
+        // account on the same device). The promotion above only covers the case
+        // where a device PIN genuinely exists — without this fallback, a restore in
+        // that gap landed permanently PIN-less in ConversationListActivity/
+        // AddContactActivity with no forced setup screen anywhere (BaseActivity's
+        // background-lock silently no-ops for PIN-less accounts). Mirror
+        // SeedPhraseDisplayActivity's own else-branch: if there's still no PIN after
+        // the promotion attempt, force SetupPinActivity before anything else.
+        if (!PinManager.hasPinSet(this)) {
+            runOnUiThread(() -> {
+                FcmTokenHelper.register(this);
+                Intent intent = new Intent(this, SetupPinActivity.class);
+                intent.putExtra(SetupPinActivity.EXTRA_ACCOUNT_CREATED, false);
+                intent.putExtra(SetupPinActivity.EXTRA_UNPAIRED, unpaired);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(intent);
+                finish();
+            });
+            restoreSessionEstablished = false;
+            return;
+        }
+
+        // PIN already present (promoted above, or already existed) — the
+        // pending_pin_setup_ marker set earlier in this method is only meaningful
+        // while no PIN exists yet, so clear it now that setup is genuinely done.
+        prefs.edit().remove("pending_pin_setup_" + currentUid).apply();
+
+        Class<?> dest = paired ? ConversationListActivity.class : AddContactActivity.class;
 
         runOnUiThread(() -> {
             FcmTokenHelper.register(this);

@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.duoshield.app.ConversationListActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.security.DuressManager;
+import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.util.ButtonPressAnimator;
 import com.duoshield.app.util.PinManager;
 import com.google.android.material.button.MaterialButton;
@@ -22,19 +23,32 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Mandatory PIN setup for brand-new accounts. Shown once, right after
- * {@link SeedPhraseDisplayActivity} finishes key setup and before the app
- * hands off into {@link ConversationListActivity}.
+ * Mandatory PIN setup for accounts that don't have a PIN yet. Shown either
+ * right after {@link SeedPhraseDisplayActivity} finishes key setup for a
+ * brand-new account, or from {@link RestoreFromSeedActivity} when a restore
+ * lands on a device that was exempted from the upfront device-PIN gate but
+ * never actually had a device PIN promoted (see the comment at that call
+ * site — {@code PinManager.looksLikePreExistingDevice()} can exempt a device
+ * with no device PIN on file).
  *
- * <p>Every new account must have a PIN — it's no longer something the user
+ * <p>Every account must have a PIN — it's no longer something the user
  * can skip and configure later from Settings. Existing installs that already
  * skipped PIN setup before this screen existed are untouched; this only
- * applies to the new-account creation path.</p>
+ * applies to the new-account-creation and restore paths.</p>
  */
 public class SetupPinActivity extends AppCompatActivity {
 
     /** Forwarded through unchanged to ConversationListActivity. */
     public static final String EXTRA_ACCOUNT_CREATED = SeedPhraseDisplayActivity.EXTRA_ACCOUNT_CREATED;
+
+    /**
+     * Set by {@link RestoreFromSeedActivity} when the restored account has no
+     * conversation/partner yet, so completion should land on
+     * {@link AddContactActivity} instead of {@link ConversationListActivity}.
+     * Absent (or false) for the new-account-creation path, which always has
+     * ConversationListActivity as its destination.
+     */
+    public static final String EXTRA_UNPAIRED = "setup_pin_unpaired";
 
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
@@ -119,7 +133,9 @@ public class SetupPinActivity extends AppCompatActivity {
                         prefs.edit().remove("pending_pin_setup_" + user.getUid()).apply();
                     }
 
-                    Intent intent = new Intent(this, ConversationListActivity.class);
+                    boolean unpaired = getIntent().getBooleanExtra(EXTRA_UNPAIRED, false);
+                    Class<?> dest = unpaired ? AddContactActivity.class : ConversationListActivity.class;
+                    Intent intent = new Intent(this, dest);
                     intent.putExtra(EXTRA_ACCOUNT_CREATED, getIntent().getBooleanExtra(EXTRA_ACCOUNT_CREATED, false));
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                     startActivity(intent);
