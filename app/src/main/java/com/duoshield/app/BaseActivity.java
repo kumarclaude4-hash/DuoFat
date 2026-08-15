@@ -54,16 +54,22 @@ public class BaseActivity extends AppCompatActivity {
      * {@link com.duoshield.app.ui.SecurityPrivacySettingsActivity#applyScreenshotFlag}
      * unconditionally called {@code clearFlags(FLAG_SECURE)} — screenshots, screen
      * recording, and the recents-list thumbnail were <em>always</em> allowed app-wide,
-     * regardless of what the "Allow screenshots" toggle said, and regardless of its
-     * secure-by-default value ({@code false} — see the {@code getBoolean} default in
-     * SecurityPrivacySettingsActivity). This is the single point BaseActivity-derived
-     * activities now route through, matching what GroupChatActivity's and
-     * ChatMediaActivity's onResume() comments already claimed was happening globally.
+     * regardless of what the "Allow screenshots" toggle said. This is the single point
+     * BaseActivity-derived activities now route through, matching what GroupChatActivity's
+     * and ChatMediaActivity's onResume() comments already claimed was happening globally.
      *
-     * <p>Default is screenshots ALLOWED (FLAG_SECURE cleared) when the preference has
-     * never been set, matching WhatsApp/Telegram behavior. Users can opt back into
-     * screenshot blocking via the "Allow screenshots" toggle in
-     * SecurityPrivacySettingsActivity, whose default must stay in sync with this one.
+     * <p><b>RELEASE BLOCKER — S08-H2 regression, tracked in BUG_TRACKER.md.</b> The
+     * {@code getBoolean} default below is {@code true}, i.e. screenshots ALLOWED
+     * (FLAG_SECURE cleared) on a fresh install. That was flipped from {@code false} in
+     * {@code 9196a75} for the UI testing phase and is <em>deliberately</em> still in place,
+     * but it reverses the secure-by-default posture the S08-H2 fix established: with no
+     * user action at all, screenshots, screen recording, and the recents-list thumbnail are
+     * permitted in a secure-messaging app. <b>Flip this back to {@code false} — together
+     * with the matching {@code getBoolean} default in SecurityPrivacySettingsActivity,
+     * which must stay in sync with this one — before any production build.</b> Gating it
+     * behind {@code BuildConfig.DEBUG} was considered and rejected for now: it would make
+     * the debug APK the UI work is checked on behave differently from the release APK,
+     * which is the opposite of what a testing phase needs.
      */
     static void applyScreenshotSecurity(android.app.Activity activity) {
         boolean screenshotsAllowed = activity

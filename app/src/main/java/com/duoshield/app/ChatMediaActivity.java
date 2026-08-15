@@ -176,6 +176,19 @@ public class ChatMediaActivity extends BaseActivity {
     private TextView     replyPreviewBarText;
     private ImageView    cancelReplyBtn;
     private View         btnScrollToBottom;
+    /** Wrapper holding the FAB + its unread badge; animated as one unit. */
+    private View         scrollToBottomContainer;
+    private TextView     tvUnreadBadge;
+    private TextView     stickyDatePill;
+    /**
+     * Count of messages that arrived while the user was scrolled away from the bottom.
+     * Distinct from the conversation's unread count in the chat list: this only tracks
+     * "arrived behind your current viewport in this session", and resets to 0 the moment
+     * the user returns to the bottom or taps the FAB.
+     */
+    private int          unreadWhileScrolledUp = 0;
+    /** Last label rendered into the sticky pill; avoids re-setting identical text per frame. */
+    private String       stickyDateLabelShown  = null;
 
     // Pinned banner
     private LinearLayout pinnedBanner;
@@ -538,33 +551,59 @@ public class ChatMediaActivity extends BaseActivity {
             }
         });
 
-        // ── Scroll-to-bottom FAB ──────────────────────────────────────────────
-        btnScrollToBottom = findViewById(R.id.btnScrollToBottom);
-        if (btnScrollToBottom != null) {
-            btnScrollToBottom.setOnClickListener(v -> {
-                int last = adapter.getItemCount() - 1;
-                if (last >= 0) recyclerView.smoothScrollToPosition(last);
-            });
-        }
+        // ── Scroll-to-bottom FAB (+ unread badge) and sticky date pill ────────
+        // The FAB and its badge live in one container so a single scale/alpha animation
+        // moves both together; the badge is positioned to overlap the FAB's top-end corner.
+        btnScrollToBottom     = findViewById(R.id.btnScrollToBottom);
+        scrollToBottomContainer = findViewById(R.id.scrollToBottomContainer);
+        tvUnreadBadge         = findViewById(R.id.tvUnreadBadge);
+        stickyDatePill        = findViewById(R.id.stickyDatePill);
+        View.OnClickListener jumpToLatest = v -> {
+            int last = adapter.getItemCount() - 1;
+            if (last >= 0) recyclerView.smoothScrollToPosition(last);
+            // Tapping the FAB is the user acknowledging the backlog, so the count resets
+            // here rather than waiting for the smooth scroll to actually reach the bottom.
+            setUnreadWhileScrolledUp(0);
+        };
+        if (btnScrollToBottom != null) btnScrollToBottom.setOnClickListener(jumpToLatest);
         recyclerView.addOnScrollListener(new androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@androidx.annotation.NonNull androidx.recyclerview.widget.RecyclerView rv, int dx, int dy) {
-                if (btnScrollToBottom == null) return;
                 LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
                 if (lm == null) return;
                 int last = adapter.getItemCount() - 1;
                 if (last < 0) return;
-                int lastVisible = lm.findLastVisibleItemPosition();
-                boolean farFromBottom = (last - lastVisible) > 3;
-                if (farFromBottom && btnScrollToBottom.getVisibility() != View.VISIBLE) {
-                    btnScrollToBottom.setVisibility(View.VISIBLE);
-                    btnScrollToBottom.animate().scaleX(1f).scaleY(1f).alpha(1f)
-                        .setDuration(180).start();
-                } else if (!farFromBottom && btnScrollToBottom.getVisibility() == View.VISIBLE) {
-                    btnScrollToBottom.animate().scaleX(0f).scaleY(0f).alpha(0f)
-                        .setDuration(150)
-                        .withEndAction(() -> btnScrollToBottom.setVisibility(View.GONE))
-                        .start();
+
+                // ── FAB visibility ──
+                if (scrollToBottomContainer != null) {
+                    int lastVisible = lm.findLastVisibleItemPosition();
+                    boolean farFromBottom = (last - lastVisible) > 3;
+                    if (farFromBottom && scrollToBottomContainer.getVisibility() != View.VISIBLE) {
+                        scrollToBottomContainer.setVisibility(View.VISIBLE);
+                        scrollToBottomContainer.animate().scaleX(1f).scaleY(1f).alpha(1f)
+                            .setDuration(180).start();
+                    } else if (!farFromBottom && scrollToBottomContainer.getVisibility() == View.VISIBLE) {
+                        scrollToBottomContainer.animate().scaleX(0f).scaleY(0f).alpha(0f)
+                            .setDuration(150)
+                            .withEndAction(() -> scrollToBottomContainer.setVisibility(View.GONE))
+                            .start();
+                        // Back at the bottom means everything below has been seen.
+                        setUnreadWhileScrolledUp(0);
+                    }
+                }
+
+                // ── Sticky date pill ──
+                updateStickyDatePill(lm);
+            }
+        });
+        // The pill is a scroll affordance, not a permanent chrome element: it fades in while
+        // the finger is moving through history and fades back out once the list settles, so
+        // it never sits on top of a bubble the user is trying to read.
+        recyclerView.addOnScrollListener(new androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(@androidx.annotation.NonNull androidx.recyclerview.widget.RecyclerView rv, int newState) {
+                if (newState == androidx.recyclerview.widget.RecyclerView.SCROLL_STATE_IDLE) {
+                    hideStickyDatePill();
                 }
             }
         });
@@ -1395,7 +1434,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // FIRESTORE LISTENERS
-    // ══════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════��═════
 
     private void listenForConvUpdates() {
         convListener = db.collection("chats").document(conversationId)
@@ -1875,18 +1914,32 @@ public class ChatMediaActivity extends BaseActivity {
             // Async-decrypt any Signal Protocol messages queued in this snapshot
             if (signalMsgQueued) retryPendingDecryption();
 
+            // Whether the user was already parked at the bottom BEFORE this batch landed.
+            // Measured here, not after the scroll below, because the scroll itself would
+            // otherwise make every batch look like "user was at the bottom".
+            boolean wasAtBottomBeforeBatch = true;
             if (newMessageAdded) {
                 int last = adapter.getItemCount() - 1;
                 if (last >= 0) {
                     LinearLayoutManager lm = (LinearLayoutManager) recyclerView.getLayoutManager();
                     int lastVisible = lm != null ? lm.findLastVisibleItemPosition() : last;
-                    // Smooth scroll only when user is near the bottom (within 3 items)
-                    if (last - lastVisible <= 3) {
+                    wasAtBottomBeforeBatch = (last - lastVisible) <= 3;
+                    // Follow the conversation only when the user is already near the bottom.
+                    // The previous else-branch called scrollToPosition(last) unconditionally,
+                    // which yanked a user reading back through history down to the newest
+                    // message the instant one arrived — and made the unread badge pointless,
+                    // since nothing could ever accumulate behind the viewport. Someone
+                    // scrolled up now keeps their place and gets the badge + FAB instead.
+                    if (wasAtBottomBeforeBatch) {
                         recyclerView.smoothScrollToPosition(last);
-                    } else {
-                        recyclerView.scrollToPosition(last);
                     }
                 }
+            }
+
+            // Badge counts partner messages only: our own sends are never "unread", and the
+            // auto-scroll above already carries the user to them.
+            if (!newIncoming.isEmpty() && !wasAtBottomBeforeBatch) {
+                addUnreadIfScrolledUp(newIncoming.size());
             }
 
             // Chat is in the foreground → user can see these messages → mark as "read"
@@ -2161,6 +2214,92 @@ public class ChatMediaActivity extends BaseActivity {
     // ══════════════════════════════════════════════════════════════
 
     // Typing indicator is now handled by typingThrottle.setTyping(true) in TextWatcher
+
+    // ══════════════════════════════════════════════════════════════
+    // SCROLL AFFORDANCES — unread badge + sticky date pill
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * Sets the "arrived while you were scrolled up" count and syncs the badge.
+     *
+     * <p>Counts above 99 render as "99+" so the badge never grows wide enough to spill past
+     * the FAB it is anchored to. Passing 0 hides the badge entirely rather than drawing an
+     * empty circle.
+     */
+    private void setUnreadWhileScrolledUp(int count) {
+        unreadWhileScrolledUp = Math.max(0, count);
+        if (tvUnreadBadge == null) return;
+        if (unreadWhileScrolledUp == 0) {
+            tvUnreadBadge.setVisibility(View.GONE);
+            if (btnScrollToBottom != null) {
+                btnScrollToBottom.setContentDescription(
+                        getString(R.string.scroll_to_latest));
+            }
+            return;
+        }
+        tvUnreadBadge.setText(unreadWhileScrolledUp > 99
+                ? "99+" : String.valueOf(unreadWhileScrolledUp));
+        tvUnreadBadge.setVisibility(View.VISIBLE);
+        // Announce the backlog for screen readers via the button the badge belongs to —
+        // the badge itself is decorative once the FAB carries the count in its description.
+        if (btnScrollToBottom != null) {
+            btnScrollToBottom.setContentDescription(getResources().getQuantityString(
+                    R.plurals.scroll_to_latest_with_unread,
+                    unreadWhileScrolledUp, unreadWhileScrolledUp));
+        }
+    }
+
+    /**
+     * Adds {@code delta} newly-arrived messages to the unread badge.
+     *
+     * <p>Callers are responsible for only invoking this when the user was scrolled away from
+     * the bottom when the batch landed — the check cannot live in here, because by the time
+     * the snapshot handler finishes, any auto-follow scroll has already run and the viewport
+     * would report "at the bottom" for every batch.
+     */
+    private void addUnreadIfScrolledUp(int delta) {
+        if (delta <= 0) return;
+        setUnreadWhileScrolledUp(unreadWhileScrolledUp + delta);
+    }
+
+    /**
+     * Shows/updates the floating date pill for whichever day owns the top of the viewport.
+     *
+     * <p>Hidden when the list's own inline date header for that day is the top visible row —
+     * otherwise the label would appear twice, stacked. The label text comes from
+     * {@link MessageAdapter#getDateLabelFor(int)}, which reads the header already placed in
+     * the list rather than re-deriving a "now"-relative label per frame.
+     */
+    private void updateStickyDatePill(LinearLayoutManager lm) {
+        if (stickyDatePill == null || adapter == null || lm == null) return;
+        int first = lm.findFirstVisibleItemPosition();
+        if (first < 0) { hideStickyDatePill(); return; }
+        if (adapter.isDateHeaderAt(first)) { hideStickyDatePill(); return; }
+
+        String label = adapter.getDateLabelFor(first);
+        if (label == null) { hideStickyDatePill(); return; }
+        if (!label.equals(stickyDateLabelShown)) {
+            stickyDatePill.setText(label);
+            stickyDateLabelShown = label;
+        }
+        if (stickyDatePill.getVisibility() != View.VISIBLE) {
+            stickyDatePill.setVisibility(View.VISIBLE);
+            stickyDatePill.animate().cancel();
+            stickyDatePill.animate().alpha(1f).setDuration(120).start();
+        }
+    }
+
+    /** Fades the sticky date pill out once scrolling settles. */
+    private void hideStickyDatePill() {
+        if (stickyDatePill == null || stickyDatePill.getVisibility() != View.VISIBLE) return;
+        stickyDatePill.animate().cancel();
+        stickyDatePill.animate().alpha(0f).setDuration(200)
+                .withEndAction(() -> {
+                    stickyDatePill.setVisibility(View.GONE);
+                    stickyDateLabelShown = null;
+                })
+                .start();
+    }
 
     // ══════════════════════════════════════════════════════════════
     // REPLY

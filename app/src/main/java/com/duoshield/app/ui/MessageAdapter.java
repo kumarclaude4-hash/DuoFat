@@ -373,6 +373,40 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         return null;
     }
 
+    /**
+     * True when the item at {@code position} is an inline date header row (TYPE_DATE), as
+     * opposed to a message bubble. Exposed for the sticky date pill: the pill has to hide
+     * itself the moment the real inline header for the same day scrolls into view, otherwise
+     * the user sees the same label twice, stacked.
+     */
+    public boolean isDateHeaderAt(int position) {
+        return position >= 0 && position < displayItems.size()
+                && displayItems.get(position) instanceof String;
+    }
+
+    /**
+     * The date-header label governing {@code position} — i.e. the nearest TYPE_DATE row at
+     * or above it. Returns {@code null} when nothing above the position carries a header
+     * (only possible before the first rebuildDisplay()).
+     *
+     * <p>Deliberately walks the already-materialised {@code displayItems} labels rather than
+     * re-deriving text from the message timestamp via {@code DateHeaderHelper.getLabel()}.
+     * getLabel() is "now"-relative ("Today"/"Yesterday"), so calling it here on every scroll
+     * frame could render a pill that disagrees with the inline header a few rows up if the
+     * clock crossed midnight since the list was built — the same class of bug §3.7 fixed in
+     * rebuildDisplay(). Reading the placed label keeps the pill and the list consistent by
+     * construction.
+     */
+    public String getDateLabelFor(int position) {
+        if (position < 0) return null;
+        int from = Math.min(position, displayItems.size() - 1);
+        for (int i = from; i >= 0; i--) {
+            Object item = displayItems.get(i);
+            if (item instanceof String) return (String) item;
+        }
+        return null;
+    }
+
     private void rebuildDisplay() {
         // §3.7 fix: the old approach called DateHeaderHelper.getLabel() (a "now"-relative
         // function) to both DECIDE whether to insert a header and to FORMAT its text.
@@ -921,7 +955,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         });
     }
 
-    // ── Link preview ──────────────────────────────────────────────────
+    // ── Link preview ───��──────────────────────────────────────────────
 
     private void bindLinkPreview(MsgViewHolder h, Message msg, Context ctx) {
         String text = msg.getText();
