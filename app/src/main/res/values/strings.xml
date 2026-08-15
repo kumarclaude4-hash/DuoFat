@@ -231,4 +231,12 @@
     <string name="settings_not_signed_in">Not signed in.</string>
     <string name="settings_backup_none">No messages to back up</string>
     <string name="settings_id_copied">Account ID copied</string>
+
+    <!-- Scroll-to-bottom FAB. The count is the number of messages that arrived while the
+         user was scrolled up, so the button announces the backlog it will jump past. -->
+    <string name="scroll_to_latest">Scroll to latest message</string>
+    <plurals name="scroll_to_latest_with_unread">
+        <item quantity="one">Scroll to latest message, %1$d new message</item>
+        <item quantity="other">Scroll to latest message, %1$d new messages</item>
+    </plurals>
 </resources>

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -265,24 +266,80 @@
             android:paddingTop="10dp"
             android:paddingBottom="8dp"/>
 
-        <ImageView
-            android:id="@+id/btnScrollToBottom"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+        <!-- Sticky date pill: mirrors the inline date header for whatever day is
+             currently at the top of the viewport. Hidden unless the list is scrolling. -->
+        <TextView
+            android:id="@+id/stickyDatePill"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="10dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:background="@drawable/bg_date_header"
+            android:textColor="@color/ds_text_secondary"
+            android:textSize="12sp"
+            android:letterSpacing="0.05"
+            android:fontFamily="sans-serif-medium"
+            android:elevation="4dp"
+            android:alpha="0"
+            android:visibility="gone"
+            android:importantForAccessibility="no"
+            tools:text="Yesterday"/>
+
+        <!-- Scroll-to-bottom FAB + unread badge. The badge sits in the same
+             FrameLayout so it can overlap the FAB's top-end corner. -->
+        <FrameLayout
+            android:id="@+id/scrollToBottomContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_gravity="bottom|end"
             android:layout_marginBottom="12dp"
             android:layout_marginEnd="14dp"
-            android:src="@drawable/ic_arrow_down"
-            android:padding="10dp"
-            android:background="@drawable/bg_fab"
-            android:elevation="8dp"
+            android:clipChildren="false"
+            android:clipToPadding="false"
             android:scaleX="0"
             android:scaleY="0"
             android:alpha="0"
-            android:visibility="gone"
-            android:clickable="true"
-            android:focusable="true"
-            android:contentDescription="Scroll to latest message"/>
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/btnScrollToBottom"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginTop="8dp"
+                android:src="@drawable/ic_arrow_down"
+                android:padding="10dp"
+                android:background="@drawable/bg_fab"
+                android:elevation="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="@string/scroll_to_latest"/>
+
+            <TextView
+                android:id="@+id/tvUnreadBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="18dp"
+                android:layout_gravity="top|end"
+                android:minWidth="18dp"
+                android:paddingStart="5dp"
+                android:paddingEnd="5dp"
+                android:gravity="center"
+                android:background="@drawable/bg_unread_badge"
+                android:textColor="@color/ds_text_on_accent"
+                android:textSize="11sp"
+                android:fontFamily="sans-serif-medium"
+                android:includeFontPadding="false"
+                android:elevation="9dp"
+                android:visibility="gone"
+                android:clickable="false"
+                android:focusable="false"
+                android:duplicateParentState="false"
+                android:importantForAccessibility="no"
+                tools:text="12"/>
+        </FrameLayout>
     </FrameLayout>
 
     <!-- ── Typing indicator ── -->

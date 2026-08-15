@@ -73,6 +73,10 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         Button btnChangePinMode = findViewById(R.id.btnChangePinMode);
 
         // ── Restore saved state ───────────────────────────────────────────────
+        // RELEASE BLOCKER (S08-H2 regression, see BUG_TRACKER.md): this default is `true`
+        // (screenshots allowed on a fresh install) only for the UI testing phase. It must
+        // be flipped back to `false` before any production build, in lockstep with the
+        // matching default in BaseActivity.applyScreenshotSecurity().
         if (switchAppScreenshot != null)
             switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", true));
         if (switchShakeLock != null)
