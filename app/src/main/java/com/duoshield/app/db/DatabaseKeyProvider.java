@@ -5,6 +5,8 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 import android.util.Log;
 
+import com.duoshield.app.security.PinKeyGate;
+import com.duoshield.app.security.SessionKeyHolder;
 import com.duoshield.app.util.SecurePrefs;
 
 import java.io.File;
@@ -69,9 +71,42 @@ public final class DatabaseKeyProvider {
         public KeyUnavailableException(String message) { super(message); }
     }
 
+    /**
+     * Thrown when the database key is PIN-wrapped ({@link PinKeyGate}) and the
+     * session is locked, so no key is available without the user's PIN.
+     *
+     * <p>A subclass of {@link KeyUnavailableException} so every existing caller
+     * that already treats that as "recoverable, do not delete anything" keeps
+     * doing the right thing without modification — which matters given 52
+     * {@code AppDatabase.getInstance()} call sites. Callers that can prompt for
+     * a PIN should catch this specifically and do so; callers that cannot (e.g.
+     * {@code SelfDestructWorker}) should defer and retry.
+     */
+    public static class DatabaseLockedException extends KeyUnavailableException {
+        public DatabaseLockedException(String message) { super(message); }
+    }
+
     public static byte[] getOrCreate(Context ctx) {
         Context appCtx = ctx.getApplicationContext();
         SharedPreferences prefs = SecurePrefs.get(appCtx);
+
+        // S08-M3: once the PIN gate is enrolled, the unwrapped key exists only in
+        // SessionKeyHolder, put there by the unlock screen. Check it before any
+        // at-rest lookup — this is the path that makes PIN-binding work for the
+        // background callers that have no PIN to offer.
+        byte[] session = SessionKeyHolder.getKey();
+        if (session != null) return session;
+
+        if (PinKeyGate.isEnrolled(appCtx)) {
+            // Enrolled but locked. There is deliberately no fallback to a
+            // directly-stored key here: a fallback would be exactly the unlocked
+            // door the PIN gate exists to close, and would make the whole item
+            // decorative.
+            throw new DatabaseLockedException(
+                    "The database key is PIN-wrapped and this session is locked."
+                            + " Prompt for the PIN (PinKeyGate.unlockSession) before"
+                            + " opening the database.");
+        }
 
         byte[] existing = readKey(prefs);
         if (existing != null) return existing;
@@ -106,6 +141,53 @@ public final class DatabaseKeyProvider {
         }
 
         return createAndPersist(prefs);
+    }
+
+    /**
+     * Folds an existing directly-stored database key into the PIN gate (S08-M3).
+     *
+     * <p>Call this immediately after a successful PIN entry on an install that
+     * predates the gate, and after {@code setPin()} on a fresh install. It wraps
+     * the current key under the PIN, verifies the wrap round-trips, and only then
+     * removes the unwrapped copy — so an interruption at any point leaves the
+     * user with a key they can still open their database with.
+     *
+     * <p>Ordering is the entire safety argument here. Removing the plaintext key
+     * before verifying the wrap would, on any device where the wrap silently
+     * fails, destroy every message the user has. {@link PinKeyGate#enroll}
+     * performs its own full unwrap round-trip and throws rather than returning
+     * on failure, so reaching the removal below means the wrap is proven good.
+     *
+     * @return true if the key is now PIN-wrapped (including when it already was).
+     */
+    public static boolean enrollInPinGate(Context ctx, String pin) {
+        Context appCtx = ctx.getApplicationContext();
+        if (PinKeyGate.isEnrolled(appCtx)) return true;
+
+        SharedPreferences prefs = SecurePrefs.get(appCtx);
+        byte[] existing = readKey(prefs);
+        if (existing == null) {
+            // Nothing to migrate. Not an error: a brand-new install enrolls when
+            // its first key is minted, and a session may legitimately already be
+            // running from SessionKeyHolder.
+            byte[] session = SessionKeyHolder.getKey();
+            if (session == null) return false;
+            existing = session;
+        }
+        try {
+            PinKeyGate.enroll(appCtx, pin, existing);
+            // Verified inside enroll(); safe to drop the unwrapped copy now.
+            prefs.edit().remove(KEY_DB_CIPHER).commit();
+            SessionKeyHolder.unlock(existing);
+            Log.i(TAG, "Database key migrated into the PIN gate; unwrapped copy removed.");
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Could not migrate the database key into the PIN gate —"
+                    + " leaving the existing key in place so the user keeps access.", e);
+            return false;
+        } finally {
+            Arrays.fill(existing, (byte) 0);
+        }
     }
 
     /**

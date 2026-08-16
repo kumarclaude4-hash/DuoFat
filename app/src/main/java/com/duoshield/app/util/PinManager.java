@@ -64,6 +64,47 @@ public class PinManager {
     private static final int DEFAULT_PIN_LEN = MAX_PIN_LEN;
 
     /**
+     * S06-I3 — alphanumeric passphrase mode.
+     *
+     * <p>A 4–6 digit numeric PIN spans at most 10^6 ≈ 1M candidates. PBKDF2 at
+     * {@link #ITERATIONS} iterations makes each guess expensive on-device, but an
+     * attacker who has extracted the salt and hash can test that keyspace offline
+     * on GPUs, where the whole 6-digit space is exhaustible. The PBKDF2 work factor
+     * raises the constant; only more entropy raises the exponent. This lets a user
+     * who wants that headroom choose a passphrase instead, without forcing a
+     * behaviour change on the numeric-PIN users the numpad UI is built around.
+     *
+     * <p>{@link #MAX_PIN_LEN} deliberately stays at 6: it sizes the numpad's dot
+     * indicator and input buffer ({@code getPinLength}), so widening it would
+     * change the numeric lock screen for everyone. Passphrases are entered on a
+     * text field instead and are bounded by {@link #MAX_PASSPHRASE_LEN}.
+     *
+     * <p>Both credential kinds are verified by the same salted-PBKDF2 path, so the
+     * stored record does not reveal which kind it is — see {@link #isPassphraseMode}
+     * for why the mode flag is stored separately from the hash and is only ever
+     * used to pick the input UI.
+     */
+    public static final int MIN_PASSPHRASE_LEN = 8;
+    /**
+     * Upper bound on passphrase length. Present only to keep a pathological input
+     * from turning 310k PBKDF2 iterations into a denial of service on the unlock
+     * screen; it is far above any realistic passphrase.
+     */
+    public static final int MAX_PASSPHRASE_LEN = 128;
+
+    /**
+     * Marks the account/device credential as an alphanumeric passphrase rather than
+     * a numeric PIN.
+     *
+     * <p>Stored separately from the hash record and read only to decide which input
+     * UI to show. It is not a secret in the S08-L3 sense — it narrows the keyspace
+     * to "not a 4–6 digit number", which widens rather than narrows the attacker's
+     * work — but it is still never written for numeric PINs, so the common case
+     * leaks nothing new.
+     */
+    private static final String KEY_PASSPHRASE_MODE_PREFIX = "app_cred_is_passphrase_";
+
+    /**
      * Device-scoped PIN — independent of any Firebase UID. Gates
      * {@link com.duoshield.app.SignInActivity} (Welcome / Create / Restore)
      * on fresh installs, before any account exists. See
@@ -168,6 +209,13 @@ public class PinManager {
     // submitted, never which PIN is accepted.
     private static final String KEY_FAIL_COUNT_PREFIX    = "pin_fail_count_";
     private static final String KEY_FAIL_UNTIL_PREFIX     = "pin_fail_until_";
+    /**
+     * S06-I3: high-water mark of the fail count, and the boot-relative deadline.
+     * See {@link #recordFailedAttempt} for why both exist.
+     */
+    private static final String KEY_FAIL_HIGH_PREFIX      = "pin_fail_high_";
+    private static final String KEY_FAIL_UNTIL_ELAPSED_PREFIX = "pin_fail_until_elapsed_";
+    private static final String KEY_FAIL_BOOT_ID_PREFIX   = "pin_fail_boot_id_";
     private static final int    LOCKOUT_THRESHOLD         = 5;
     private static final long   LOCKOUT_BASE_MS           = 2_000L;
     private static final long   LOCKOUT_MAX_MS            = 5 * 60_000L;
@@ -182,40 +230,139 @@ public class PinManager {
         return user != null ? KEY_FAIL_UNTIL_PREFIX + user.getUid() : KEY_FAIL_UNTIL_PREFIX + "device";
     }
 
-    /** Milliseconds the caller must still wait before the next attempt is allowed, or 0. */
+    private static String scopedKey(String prefix) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        return user != null ? prefix + user.getUid() : prefix + "device";
+    }
+
+    /**
+     * Milliseconds the caller must still wait before the next attempt is allowed, or 0.
+     *
+     * <p>S06-I3: takes the <em>longer</em> of the wall-clock and boot-relative
+     * remainders. The wall-clock deadline alone was defeated by changing the system
+     * clock — Settings → Date &amp; time, no root needed — which made the stored
+     * "until" timestamp appear to be in the past and cleared the lockout instantly,
+     * so the exponential backoff protecting the duress-code keyspace could be
+     * skipped at will. {@code elapsedRealtime()} cannot be set by the user and keeps
+     * counting across sleep, so it holds the delay even when the clock moves. It
+     * resets on reboot, which is why the wall-clock value is still consulted rather
+     * than replaced: rebooting cannot shorten the wait either. Taking the max means
+     * an attacker must defeat both to gain anything, and a legitimate user waiting
+     * out a real lockout is unaffected by either.
+     */
     public static long getLockoutRemainingMs(Context ctx) {
         try {
-            long until = SecurePrefs.get(ctx).getLong(failUntilKey(ctx), 0L);
-            return Math.max(0L, until - System.currentTimeMillis());
+            SharedPreferences sp = SecurePrefs.get(ctx);
+            long wallRemaining = Math.max(0L,
+                    sp.getLong(failUntilKey(ctx), 0L) - System.currentTimeMillis());
+
+            long elapsedRemaining = 0L;
+            long untilElapsed = sp.getLong(scopedKey(KEY_FAIL_UNTIL_ELAPSED_PREFIX), 0L);
+            if (untilElapsed > 0L
+                    && sp.getLong(scopedKey(KEY_FAIL_BOOT_ID_PREFIX), -1L) == bootId()) {
+                // Same boot session, so elapsedRealtime() is comparable to the stored value.
+                elapsedRemaining = Math.max(0L, untilElapsed - SystemClock.elapsedRealtime());
+            }
+            return Math.max(wallRemaining, elapsedRemaining);
         } catch (Exception e) { return 0L; }
+    }
+
+    /**
+     * Identifies the current boot session, so a stored {@code elapsedRealtime()}
+     * deadline is only trusted when it was written during this same boot. Derived
+     * from the approximate boot instant (now minus uptime), quantised to 10s to
+     * absorb the small jitter between successive computations.
+     */
+    private static long bootId() {
+        return (System.currentTimeMillis() - SystemClock.elapsedRealtime()) / 10_000L;
     }
 
     /**
      * Records a wrong PIN attempt and — once {@link #LOCKOUT_THRESHOLD} is reached —
      * sets an exponentially growing lockout window, capped at {@link #LOCKOUT_MAX_MS}.
      * Persisted, so a force-stop or reboot mid-lockout does not reset the counter.
+     *
+     * <p>S06-I3: the backoff is now computed from a monotonic high-water mark rather
+     * than the live counter. The counter alone could be rolled back — restore an
+     * older copy of the prefs file, or let any path that resets it run — returning
+     * the attacker to a 2s delay after having already burned hundreds of attempts.
+     * The high-water mark only ever increases, so the cost of guessing never
+     * decreases. {@code commit()} rather than {@code apply()} because the process
+     * may be force-stopped immediately after a wrong entry, and an asynchronous
+     * write is exactly what an attacker force-stopping the app is trying to lose.
      */
     public static void recordFailedAttempt(Context ctx) {
         try {
             SharedPreferences sp = SecurePrefs.get(ctx);
             int count = sp.getInt(failCountKey(ctx), 0) + 1;
-            SharedPreferences.Editor ed = sp.edit().putInt(failCountKey(ctx), count);
-            if (count >= LOCKOUT_THRESHOLD) {
-                int overBy = count - LOCKOUT_THRESHOLD;
+            int high  = Math.max(sp.getInt(scopedKey(KEY_FAIL_HIGH_PREFIX), 0), count);
+
+            SharedPreferences.Editor ed = sp.edit()
+                    .putInt(failCountKey(ctx), count)
+                    .putInt(scopedKey(KEY_FAIL_HIGH_PREFIX), high);
+
+            if (high >= LOCKOUT_THRESHOLD) {
+                int overBy = high - LOCKOUT_THRESHOLD;
                 long backoff = Math.min(LOCKOUT_MAX_MS, LOCKOUT_BASE_MS << Math.min(overBy, 10));
-                ed.putLong(failUntilKey(ctx), System.currentTimeMillis() + backoff);
+                ed.putLong(failUntilKey(ctx), System.currentTimeMillis() + backoff)
+                  .putLong(scopedKey(KEY_FAIL_UNTIL_ELAPSED_PREFIX),
+                          SystemClock.elapsedRealtime() + backoff)
+                  .putLong(scopedKey(KEY_FAIL_BOOT_ID_PREFIX), bootId());
             }
-            ed.apply();
+            ed.commit();
         } catch (Exception ignored) {}
     }
 
-    /** Clears the attempt counter and any active lockout — call on a correct PIN. */
+    /**
+     * Clears the attempt counter and any active lockout — call on a correct PIN.
+     *
+     * <p>S06-I3: deliberately does <em>not</em> clear the high-water mark. Clearing
+     * it would hand an attacker a free reset of the backoff schedule via any single
+     * correct entry (including a duress code, which is itself "correct"), which is
+     * the rollback this item exists to prevent. The mark decays instead — see
+     * {@link #decayFailHighWaterMark} — so an ordinary user who mistypes a few times
+     * over months is not permanently penalised.
+     */
     public static void clearFailedAttempts(Context ctx) {
         try {
             SecurePrefs.get(ctx).edit()
                     .remove(failCountKey(ctx))
                     .remove(failUntilKey(ctx))
-                    .apply();
+                    .remove(scopedKey(KEY_FAIL_UNTIL_ELAPSED_PREFIX))
+                    .remove(scopedKey(KEY_FAIL_BOOT_ID_PREFIX))
+                    .commit();
+            decayFailHighWaterMark(ctx);
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Decays the high-water mark by one step on a successful unlock, never below
+     * {@link #LOCKOUT_THRESHOLD}{@code  - 1} once it has been exceeded.
+     *
+     * <p>This is the release valve that keeps the monotonic mark from turning a
+     * handful of honest mistypes into a permanent multi-minute delay: each correct
+     * entry walks the penalty back down one exponential step. It cannot be used to
+     * escape a lockout, because reaching this code path already required entering
+     * the correct PIN, and one step down from a 5-minute cap is still minutes.
+     */
+    private static void decayFailHighWaterMark(Context ctx) {
+        try {
+            SharedPreferences sp = SecurePrefs.get(ctx);
+            int high = sp.getInt(scopedKey(KEY_FAIL_HIGH_PREFIX), 0);
+            if (high <= 0) return;
+
+            // Below the threshold the mark imposes no delay at all, so there is
+            // nothing to walk back — drop it entirely and keep the store tidy.
+            // (Guarding this explicitly also avoids Math.max() raising a small
+            // mark up to LOCKOUT_THRESHOLD - 1, which would invent a penalty the
+            // user never earned.)
+            if (high < LOCKOUT_THRESHOLD) {
+                sp.edit().remove(scopedKey(KEY_FAIL_HIGH_PREFIX)).commit();
+                return;
+            }
+            // At or above the threshold: step down by one, never below the last
+            // rung that still carries no delay.
+            sp.edit().putInt(scopedKey(KEY_FAIL_HIGH_PREFIX), high - 1).commit();
         } catch (Exception ignored) {}
     }
 

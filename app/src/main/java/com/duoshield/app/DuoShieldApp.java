@@ -18,6 +18,8 @@ import androidx.work.WorkManager;
 import java.util.concurrent.TimeUnit;
 
 import com.duoshield.app.db.AppDatabase;
+import com.duoshield.app.security.PinKeyGate;
+import com.duoshield.app.security.SessionKeyHolder;
 import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.appcheck.FirebaseAppCheck;
@@ -149,9 +151,24 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
         // separate OS-level threads for sequential work that has no parallelism benefit.
         new Thread(() -> {
             // Step 1: open Room/SQLCipher so the first chat screen is instant.
+            //
+            // S08-M3: this is now conditional. Once the PIN gate is enrolled, the
+            // database key exists only after the user has entered their PIN, so
+            // opening the database at process start is no longer possible — and
+            // attempting it unconditionally would throw DatabaseLockedException on
+            // every single cold start, turning a performance warm-up into a
+            // guaranteed logged exception. Warm up only when a session key is
+            // already available (the process survived an unlock) or this install
+            // has no gate enrolled. When locked, the first screen that needs the
+            // database prompts for the PIN, and the warm-up simply does not apply.
             try {
-                AppDatabase.getInstance(getApplicationContext());
-                Log.i(TAG, "Room/SQLCipher warm-up complete.");
+                if (SessionKeyHolder.isUnlocked()
+                        || !PinKeyGate.isEnrolled(getApplicationContext())) {
+                    AppDatabase.getInstance(getApplicationContext());
+                    Log.i(TAG, "Room/SQLCipher warm-up complete.");
+                } else {
+                    Log.i(TAG, "Skipping Room warm-up — PIN gate enrolled, session locked.");
+                }
             } catch (Exception e) {
                 Log.w(TAG, "Room warm-up failed (non-fatal): " + e.getMessage());
             }
