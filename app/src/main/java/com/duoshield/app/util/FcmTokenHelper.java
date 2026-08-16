@@ -21,6 +21,16 @@ import java.util.Map;
  * is retried up to 3 times with 3 s → 6 s → 12 s exponential back-off rather than
  * silently dropped.  The push server requires {@code users/{uid}.fcmToken} to exist
  * before it can deliver notifications.
+ *
+ * <h3>Per-device registry (S08-H5 item 4c)</h3>
+ * In addition to the legacy single {@code users/{uid}.fcmToken} field (kept for
+ * backward compatibility with the existing push server delivery path), this
+ * helper now also writes a per-device document at
+ * {@code users/{uid}/devices/{deviceId}} keyed by {@link DeviceIdProvider}. This
+ * is what lets a login on a NEW device leave every PRIOR device's token intact,
+ * so the server's restore-race logic has real targets to warn. The single-field
+ * write and the per-device write are issued together; the per-device one is the
+ * source of truth for multi-device fan-out.
  */
 public class FcmTokenHelper {
 
@@ -57,6 +67,8 @@ public class FcmTokenHelper {
 
         if (myUid != null && !myUid.isEmpty()) {
             final String uid = myUid;
+            // Legacy single-token field: kept so the existing push delivery path
+            // keeps working during rollout. Overwrites on each device, as before.
             Map<String, Object> data = new HashMap<>();
             data.put("fcmToken",  token);
             data.put("platform",  "android");
@@ -66,6 +78,24 @@ public class FcmTokenHelper {
                 .set(data, SetOptions.merge())
                 .addOnSuccessListener(v -> Log.d(TAG, "FCM token uploaded successfully"))
                 .addOnFailureListener(e -> Log.w(TAG, "FCM token upload failed: " + e.getMessage()));
+
+            // Per-device registry (item 4c): one doc per install, so a new-device
+            // login never erases another device's token. This is the fan-out
+            // source of truth the server's restore-race notify reads from.
+            String deviceId = DeviceIdProvider.get(appCtx);
+            Map<String, Object> dev = new HashMap<>();
+            dev.put("fcmToken",  token);
+            dev.put("platform",  "android");
+            dev.put("updatedAt", FieldValue.serverTimestamp());
+            // No client-set createdAt: with merge it would be clobbered on every
+            // refresh. First-seen tracking is the server's job (it records the
+            // device on the first /mintToken it observes for this deviceId).
+            FirebaseFirestore.getInstance()
+                .collection("users").document(uid)
+                .collection("devices").document(deviceId)
+                .set(dev, SetOptions.merge())
+                .addOnSuccessListener(v -> Log.d(TAG, "Per-device token registered: " + deviceId))
+                .addOnFailureListener(e -> Log.w(TAG, "Per-device token upload failed: " + e.getMessage()));
         } else if (attempt < MAX_RETRY) {
             long delayMs = 3000L * (1L << attempt); // 3 s, 6 s, 12 s
             Log.d(TAG, "register: uid not ready, retry " + (attempt + 1) + " in " + delayMs + "ms");
@@ -85,6 +115,17 @@ public class FcmTokenHelper {
         FirebaseFirestore.getInstance()
             .collection("users").document(myUid)
             .set(data, SetOptions.merge());
+
+        // Retire THIS device's registry entry so a signed-out device is not left
+        // as a stale push target. Only this install's deviceId is removed; other
+        // devices keep their own entries. The device may re-create it on next
+        // register() (the rule allows owner delete + re-create).
+        String deviceId = DeviceIdProvider.get(ctx);
+        FirebaseFirestore.getInstance()
+            .collection("users").document(myUid)
+            .collection("devices").document(deviceId)
+            .delete();
+
         prefs.edit().remove("fcm_token").apply();
     }
 }

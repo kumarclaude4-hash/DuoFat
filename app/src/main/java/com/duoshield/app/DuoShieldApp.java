@@ -66,9 +66,12 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
         //      (roll out in monitoring/metrics mode first, per the audit's own
         //      recommendation, before switching to Enforce — flipping this
         //      blind risks locking out real traffic).
-        //   2. firestore.rules' appCheckVerified() helper (see that file) is
-        //      written but deliberately not yet added to any `allow` clause,
-        //      for the same monitoring-first reason.
+        //   2. firestore.rules' appCheckVerified() helper is now attached to the
+        //      seed-derived recovery/backup + duress `allow` clauses (S08-H5
+        //      item 4a). Those rules are committed but only take effect once the
+        //      console step above is switched from monitoring to Enforce — until
+        //      then request.app is populated but never required, so this APK and
+        //      the rules can ship independently of the enforcement toggle.
         // Sideloaded/rooted-device installs can still pass Play Integrity
         // verdicts on some devices and are accepted as a residual gap per the
         // audit (App Check raises attacker cost, it is not a control of record
