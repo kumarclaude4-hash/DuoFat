@@ -1,6 +1,9 @@
 package com.duoshield.app.crypto;
 
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 
 import static org.junit.Assert.*;
 
@@ -10,9 +13,14 @@ import static org.junit.Assert.*;
  * ciphertext only decrypts under the exact context it was created for,
  * rather than that binding living solely in Firestore security rules.
  *
- * No Android context required — GroupCipherHelper's only Android dependency
- * is android.util.Base64, exercised the same way the existing
- * BackupRoundTripTest exercises BackupCryptoHelper's use of it.
+ * <p>Runs under Robolectric. GroupCipherHelper's only Android dependency is
+ * android.util.Base64, but that is load-bearing here rather than incidental: the
+ * module sets {@code testOptions.unitTests.returnDefaultValues true}, under which
+ * the android.jar stub's {@code Base64.decode()} returns null instead of throwing.
+ * A null key array makes {@code SecretKeySpec} reject it with "Missing argument"
+ * before any AEAD assertion runs, so every AAD case below fails for a reason that
+ * has nothing to do with the crypto under test. Robolectric supplies the real AOSP
+ * Base64, which is what makes these assertions meaningful.
  *
  * Covers:
  *  1. encrypt/decrypt round-trip with no AAD (legacy overloads unchanged).
@@ -24,6 +32,8 @@ import static org.junit.Assert.*;
  *     was encrypted with none (and vice versa).
  *  7. buildAad is deterministic and sensitive to every field.
  */
+@RunWith(RobolectricTestRunner.class)
+@Config(manifest = Config.NONE, sdk = 33)
 public class GroupCipherHelperAadTest {
 
     private static String testGroupKey() {
