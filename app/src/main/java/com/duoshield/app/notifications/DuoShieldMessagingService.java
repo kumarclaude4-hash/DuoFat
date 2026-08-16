@@ -41,10 +41,23 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
             myUid = prefs.getString("my_uid", null);
         }
         if (myUid != null && !myUid.isEmpty()) {
+            // Legacy single-token field (existing delivery path).
             FirebaseFirestore.getInstance()
                     .collection("users")
                     .document(myUid)
                     .set(Collections.singletonMap("fcmToken", token), SetOptions.merge());
+
+            // Per-device registry (S08-H5 item 4c): keep every device reachable
+            // so the server's restore-race warning has a target on token refresh.
+            String deviceId = com.duoshield.app.util.DeviceIdProvider.get(this);
+            Map<String, Object> dev = new HashMap<>();
+            dev.put("fcmToken",  token);
+            dev.put("platform",  "android");
+            dev.put("updatedAt", FieldValue.serverTimestamp());
+            FirebaseFirestore.getInstance()
+                    .collection("users").document(myUid)
+                    .collection("devices").document(deviceId)
+                    .set(dev, SetOptions.merge());
         } else if (attempt < 3) {
             long delayMs = 2000L * (1L << attempt);
             new Handler(Looper.getMainLooper()).postDelayed(
