@@ -43,9 +43,13 @@ import java.security.KeyStore;
  * exactly the bug the separate file prevents. {@code PendingLockStore} clears
  * its own keys once the server has confirmed the lock, and nothing else should.
  *
- * Initialisation strategy (three tiers, applied identically to whichever
- * file is being opened):
+ * Initialisation strategy (applied identically to whichever file is being
+ * opened), in descending order of protection:
  *  1. Standard MasterKey with AES256_GCM — hardware-backed when TEE is available.
+ *  1b. Explicit KeyGenParameterSpec <em>requesting StrongBox</em> (API 28+). Tried
+ *     before any software tier so that StrongBox is actually preferred rather than
+ *     never requested at all; devices without StrongBox fail this fast and fall
+ *     through.
  *  2. Explicit KeyGenParameterSpec — no StrongBox, no user-auth required — works on
  *     budget devices (Helio G36, Android Go) where the default MasterKey.Builder fails
  *     due to a known security-crypto:1.1.0-alpha06 bug on some manufacturers' KeyStore
@@ -54,17 +58,61 @@ import java.security.KeyStore;
  *  3. Delete the corrupted KeyStore alias and retry tier 2 — handles the case where a
  *     previous failed init left a broken key entry in the KeyStore.
  *
- * If ALL three tiers fail, the app falls back to plaintext SharedPreferences AND
- * sets encryptionAvailable=false. Callers may check isAvailable() and degrade gracefully,
- * but they must NOT block the user — plaintext prefs are still protected by Android's
- * per-app file isolation (MODE_PRIVATE), which is the same level of protection WhatsApp
- * and Telegram use on devices without a hardware TEE.
+ * <h3>Fail closed when every tier fails (S08-H5)</h3>
+ * This class used to fall back to plaintext {@code MODE_PRIVATE} prefs and set
+ * {@code encryptionAvailable=false}, with callers instructed not to block the
+ * user. That was wrong: it wrote the SQLCipher passphrase, the Signal identity
+ * key and the PIN hash to an XML file in the clear, so any root shell or adb
+ * backup on such a device yielded the database key verbatim — while the only
+ * indication was a boolean most callers ignored. The old javadoc claimed this
+ * matched "the same level of protection WhatsApp and Telegram use"; that
+ * comparison did not hold, because neither stores a database passphrase in
+ * plaintext prefs.
+ *
+ * <p>There is now no plaintext tier. When every tier fails, {@link #getTier}
+ * reports {@link SecurityTier#NONE} and the store handed out is an in-memory
+ * {@link EphemeralSharedPreferences} that never touches disk, so no at-rest
+ * artifact exists to steal. Because such a store cannot survive process death,
+ * {@link DeviceSecurityGate} blocks onboarding and restore on those devices
+ * rather than letting the user create data that is guaranteed to be lost.
+ *
+ * <p>Existing installs that already wrote plaintext are rescued rather than
+ * bricked — see {@link LegacyPlaintextMigrator}, which runs on every open and
+ * folds any legacy plaintext entries into the encrypted store.
  *
  * Both files share the same AndroidKeyStore master-key alias when hardware/software
  * key tiers succeed — that is safe: the alias only protects each file's own generated
  * data key, and knowing one file's ciphertext reveals nothing about the other's.
  */
 public class SecurePrefs {
+
+    /**
+     * How well the resolved store is protected. Replaces the old
+     * {@code encryptionAvailable} boolean, which could not distinguish
+     * "hardware-backed" from "software-backed but still encrypted" from
+     * "not persisted at all" — a distinction that decides whether onboarding
+     * may proceed.
+     */
+    public enum SecurityTier {
+        /** Keystore-backed key, StrongBox or TEE. Persisted and encrypted. */
+        HARDWARE,
+        /**
+         * Keystore-backed key without hardware constraints (tier 2/3). Still
+         * AES-256-GCM encrypted at rest and still Keystore-protected; the
+         * distinction from {@link #HARDWARE} is that key material may be
+         * extractable given a compromised OS image.
+         */
+        SOFTWARE,
+        /**
+         * No Keystore path worked. The store is in-memory only and is lost on
+         * process death. Nothing is persisted, so there is no at-rest artifact —
+         * but nothing durable can be stored either.
+         */
+        NONE;
+
+        /** True when values written to this store survive a process restart. */
+        public boolean isDurable() { return this != NONE; }
+    }
 
     private static final String TAG                = "SecurePrefs";
     private static final String FILE_NAME          = "duoshield_secure_prefs";
@@ -79,11 +127,18 @@ public class SecurePrefs {
     private static final String SESSION_STATE_FILE = "session_state_prefs";
 
     private static volatile SharedPreferences cached;
-    private static volatile boolean           encryptionAvailable = false;
+    private static volatile SecurityTier      tier                = SecurityTier.NONE;
     private static volatile boolean           initialized         = false;
 
+    /**
+     * True when legacy plaintext secrets are still on disk after a migration
+     * attempt. See {@link LegacyPlaintextMigrator} for why they are sometimes
+     * deliberately retained instead of deleted.
+     */
+    private static volatile boolean           legacyPlaintextRemains = false;
+
     private static volatile SharedPreferences deviceGateCached;
-    private static volatile boolean           deviceGateEncryptionAvailable = false;
+    private static volatile SecurityTier      deviceGateTier = SecurityTier.NONE;
 
     private static volatile SharedPreferences sessionStateCached;
 
@@ -102,9 +157,10 @@ public class SecurePrefs {
         synchronized (SecurePrefs.class) {
             if (cached != null) return cached;
             Built built = buildTiered(context, FILE_NAME);
-            cached              = built.prefs;
-            encryptionAvailable = built.encryptionAvailable;
-            initialized         = true;
+            cached                 = built.prefs;
+            tier                   = built.tier;
+            legacyPlaintextRemains = built.legacyPlaintextRemains;
+            initialized            = true;
             return cached;
         }
     }
@@ -119,8 +175,8 @@ public class SecurePrefs {
         synchronized (SecurePrefs.class) {
             if (deviceGateCached != null) return deviceGateCached;
             Built built = buildTiered(context, DEVICE_GATE_FILE);
-            deviceGateCached              = built.prefs;
-            deviceGateEncryptionAvailable = built.encryptionAvailable;
+            deviceGateCached = built.prefs;
+            deviceGateTier   = built.tier;
             return deviceGateCached;
         }
     }
@@ -143,17 +199,22 @@ public class SecurePrefs {
     /** Result of {@link #buildTiered}: the resolved store plus which tier produced it. */
     private static final class Built {
         final SharedPreferences prefs;
-        final boolean           encryptionAvailable;
-        Built(SharedPreferences prefs, boolean encryptionAvailable) {
-            this.prefs               = prefs;
-            this.encryptionAvailable = encryptionAvailable;
+        final SecurityTier      tier;
+        final boolean           legacyPlaintextRemains;
+        Built(SharedPreferences prefs, SecurityTier tier, boolean legacyPlaintextRemains) {
+            this.prefs                  = prefs;
+            this.tier                   = tier;
+            this.legacyPlaintextRemains = legacyPlaintextRemains;
         }
     }
 
     /**
-     * Runs the three-tier EncryptedSharedPreferences initialisation strategy
-     * (see class javadoc) against an arbitrary file name, falling back to
-     * plaintext MODE_PRIVATE prefs if every tier fails.
+     * Runs the tiered EncryptedSharedPreferences initialisation strategy (see
+     * class javadoc) against an arbitrary file name.
+     *
+     * <p>When every tier fails this returns an in-memory store and
+     * {@link SecurityTier#NONE} — it never returns a plaintext on-disk store.
+     * See the class javadoc for why the plaintext fallback was removed.
      */
     private static Built buildTiered(Context context, String fileName) {
         Context appCtx = context.getApplicationContext();
@@ -168,12 +229,31 @@ public class SecurePrefs {
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
             Log.d(TAG, "ESP ready (tier 1 — hardware key) for " + fileName + ".");
-            return new Built(sp, true);
+            return finish(appCtx, fileName, sp, SecurityTier.HARDWARE);
         } catch (Exception e1) {
             Log.w(TAG, "ESP tier 1 failed for " + fileName + " ("
                     + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
                     + " API=" + android.os.Build.VERSION.SDK_INT + "): "
                     + e1.getClass().getSimpleName() + ": " + e1.getMessage());
+        }
+
+        // ── Tier 1b: explicit spec REQUESTING StrongBox (API 28+) ────────────
+        // Attempted before any software tier so StrongBox is genuinely preferred.
+        // Previously requireStrongBox was only ever passed as false, so the
+        // strongest available backing was never actually asked for.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                SharedPreferences sp = buildWithExplicitSpec(appCtx, fileName, true);
+                Log.i(TAG, "ESP ready (tier 1b — StrongBox) for " + fileName + ".");
+                return finish(appCtx, fileName, sp, SecurityTier.HARDWARE);
+            } catch (Exception eSb) {
+                // Expected on the majority of devices: no StrongBox present.
+                Log.d(TAG, "ESP tier 1b (StrongBox) unavailable for " + fileName + ": "
+                        + eSb.getClass().getSimpleName());
+                // A failed attempt can leave a half-created alias behind, which would
+                // then poison tier 2. Clear it before falling through.
+                deleteMasterKeyAlias("post-StrongBox-failure");
+            }
         }
 
         // ── Tier 2: explicit spec — no StrongBox, no user-auth required ──────
@@ -183,7 +263,7 @@ public class SecurePrefs {
         try {
             SharedPreferences sp = buildWithExplicitSpec(appCtx, fileName, false);
             Log.i(TAG, "ESP ready (tier 2 — explicit software spec) for " + fileName + ".");
-            return new Built(sp, true);
+            return finish(appCtx, fileName, sp, SecurityTier.SOFTWARE);
         } catch (Exception e2) {
             Log.w(TAG, "ESP tier 2 failed for " + fileName + ": "
                     + e2.getClass().getSimpleName() + ": " + e2.getMessage());
@@ -191,29 +271,60 @@ public class SecurePrefs {
 
         // ── Tier 3: delete corrupted alias + retry ────────────────────────────
         try {
-            KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
-            ks.load(null);
-            if (ks.containsAlias(MasterKey.DEFAULT_MASTER_KEY_ALIAS)) {
-                ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS);
-                Log.w(TAG, "Deleted corrupted KeyStore alias — retrying (" + fileName + ").");
-            }
+            deleteMasterKeyAlias("corrupted-alias-recovery");
             SharedPreferences sp = buildWithExplicitSpec(appCtx, fileName, false);
             Log.i(TAG, "ESP ready (tier 3 — alias cleared + software spec) for " + fileName + ".");
-            return new Built(sp, true);
+            return finish(appCtx, fileName, sp, SecurityTier.SOFTWARE);
         } catch (Exception e3) {
             Log.e(TAG, "ESP tier 3 (alias-clear + retry) failed for " + fileName + ": "
                     + e3.getClass().getSimpleName() + ": " + e3.getMessage()
-                    + " — falling back to plaintext MODE_PRIVATE prefs."
+                    + " — FAILING CLOSED to an in-memory store; nothing will be"
+                    + " persisted for this file."
                     + " Device: " + android.os.Build.MANUFACTURER
                     + " " + android.os.Build.MODEL
                     + " API=" + android.os.Build.VERSION.SDK_INT, e3);
         }
 
-        // ── Fallback: plaintext (MODE_PRIVATE) ───────────────────────────────
-        // Still protected by Android's per-app file isolation. No screen lock
-        // required — same posture as WhatsApp/Telegram on devices without a TEE.
-        SharedPreferences sp = appCtx.getSharedPreferences(fileName, Context.MODE_PRIVATE);
-        return new Built(sp, false);
+        // ── Fail closed: in-memory only, never plaintext on disk ─────────────
+        // Any legacy plaintext is still loaded into memory so an existing install
+        // keeps working this session, but is deliberately left on disk rather than
+        // deleted — see LegacyPlaintextMigrator for why removing it would cause
+        // unrecoverable loss. DeviceSecurityGate blocks onboarding/restore here.
+        SharedPreferences ephemeral = new EphemeralSharedPreferences();
+        return finish(appCtx, fileName, ephemeral, SecurityTier.NONE);
+    }
+
+    /**
+     * Applies the legacy-plaintext migration to a freshly resolved store and
+     * packages the result. Centralised so no tier can accidentally skip it.
+     */
+    private static Built finish(Context appCtx, String fileName,
+                                SharedPreferences store, SecurityTier resolvedTier) {
+        LegacyPlaintextMigrator.Result r;
+        try {
+            r = LegacyPlaintextMigrator.migrate(appCtx, fileName, store, resolvedTier.isDurable());
+        } catch (Exception e) {
+            // Migration must never prevent the app from opening its store.
+            Log.e(TAG, "Legacy plaintext migration threw for " + fileName + ": "
+                    + e.getClass().getSimpleName(), e);
+            r = LegacyPlaintextMigrator.Result.none();
+        }
+        return new Built(store, resolvedTier, r.plaintextRemains);
+    }
+
+    /** Best-effort removal of the shared master-key alias. */
+    private static void deleteMasterKeyAlias(String reason) {
+        try {
+            KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
+            ks.load(null);
+            if (ks.containsAlias(MasterKey.DEFAULT_MASTER_KEY_ALIAS)) {
+                ks.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS);
+                Log.w(TAG, "Deleted KeyStore master-key alias (" + reason + ").");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not delete master-key alias (" + reason + "): "
+                    + e.getClass().getSimpleName());
+        }
     }
 
     /**
