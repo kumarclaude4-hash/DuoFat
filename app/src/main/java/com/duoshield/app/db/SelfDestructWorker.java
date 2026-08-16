@@ -118,16 +118,13 @@ public class SelfDestructWorker extends Worker {
             return Result.success();
 
         } catch (DatabaseKeyProvider.DatabaseLockedException e) {
-            // The session locked between the check above and the database open (the
-            // user can background the app at any moment). Not an error — defer.
+            // The session locked between the check above and the database open —
+            // the user can background the app at any moment, and a duress trigger,
+            // logout, or wipe can land mid-sweep. Not an error: defer rather than
+            // taking the generic error path, so the log reads as the expected
+            // condition it is instead of an unexplained failure. Deletion is
+            // deferred until the next unlocked run, never skipped.
             Log.i(TAG, "Session locked mid-pass — deferring self-destruct until unlocked.");
-            return Result.retry();
-        } catch (DatabaseKeyProvider.DatabaseLockedException e) {
-            // The session locked between the check above and the database open
-            // (duress trigger, logout, or wipe landing mid-sweep). Same deferral
-            // as above rather than the generic error path, so the log reads as the
-            // expected condition it is instead of an unexplained failure.
-            Log.i(TAG, "Session locked mid-sweep — deferring (will retry).");
             return Result.retry();
         } catch (Exception e) {
             Log.e(TAG, "SelfDestructWorker failed — will retry", e);

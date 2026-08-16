@@ -2,6 +2,7 @@ package com.duoshield.app.util;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import java.security.SecureRandom;

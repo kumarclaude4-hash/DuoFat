@@ -170,6 +170,12 @@ android {
             // testDebugUnitTest fails on that alone, before a test's own
             // assertions ever run.
             returnDefaultValues true
+
+            // Required by the Robolectric-backed suites (see the Robolectric
+            // dependency comment below): Robolectric needs the merged resources,
+            // assets and manifest on the unit-test classpath to boot its Android
+            // runtime. Harmless for the plain JUnit suites.
+            includeAndroidResources true
         }
     }
 
@@ -334,6 +340,20 @@ dependencies {
     // YouTubeSearchParserTest.orgJsonIsTheRealImplementationNotTheAndroidStub() fails loudly
     // if that ever stops being true. Test-only: it is not packaged into the APK.
     testImplementation 'org.json:json:20231013'
+
+    // Robolectric — real Android implementations for JVM unit tests.
+    //
+    // `returnDefaultValues true` (see testOptions above) makes every android.jar stub
+    // return null/0 instead of throwing. That is what lets incidental android.util.Log
+    // calls pass through harmlessly, but it also silently breaks any test whose subject
+    // genuinely needs an Android class to *work*: android.util.Base64.decode() returns
+    // null (so SecretKeySpec/GCMParameterSpec reject it downstream) and
+    // ClipData.newPlainText() returns null. Robolectric supplies the real AOSP
+    // implementations of those classes, so the affected suites are annotated
+    // @RunWith(RobolectricTestRunner.class) rather than weakening their assertions.
+    // Only classes that opt in pay Robolectric's startup cost; the rest still run as
+    // plain fast JUnit against the stubs.
+    testImplementation 'org.robolectric:robolectric:4.14.1'
 
     // Instrumented (on-device) tests — Espresso + AndroidX Test.
     // Used for regression coverage that needs the real Android runtime (real
