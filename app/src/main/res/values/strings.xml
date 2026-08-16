@@ -246,4 +246,12 @@
         <item quantity="one">Scroll to latest message, %1$d new message</item>
         <item quantity="other">Scroll to latest message, %1$d new messages</item>
     </plurals>
+
+    <!-- DeviceSecurityGate. Shown only when every Android Keystore tier failed, so no
+         secret can be stored durably on this device. The copy is deliberately explicit
+         that nothing has been lost: the natural reading of a hard block during a restore
+         is "my messages are gone", which is the opposite of what the block achieves. -->
+    <string name="device_unsupported_title">This device cannot store keys securely</string>
+    <string name="device_unsupported_message">DuoShield could not set up encrypted storage on this device. The Android keystore rejected every method we support, so your encryption keys cannot be saved in a way that survives the app fully closing.\n\nCreating or restoring an account here would appear to work, then lose access to those messages on the next cold start. We stop now instead of letting that happen.\n\nNothing has been lost. Any existing backup is untouched and can still be restored on another device. Restarting this device, or updating Android, sometimes resolves the problem.</string>
+    <string name="device_unsupported_dismiss">Close</string>
 </resources>

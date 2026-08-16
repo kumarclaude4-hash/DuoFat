@@ -18,6 +18,7 @@ import com.duoshield.app.auth.AuthTokenHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.ui.RequestAccessActivity;
 import com.duoshield.app.ui.SeedPhraseDisplayActivity;
+import com.duoshield.app.util.DeviceSecurityGate;
 import com.duoshield.app.util.SecurePrefs;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.auth.FirebaseAuth;
@@ -78,6 +79,15 @@ public class DisplayNameActivity extends AppCompatActivity {
     // ── Account creation ──────────────────────────────────────────────────────
 
     private void proceed(String displayName, MaterialButton btnCont, TextView tvError) {
+        // Fail closed before generating anything (S08-H5). On a device where no
+        // Keystore tier works, the identity key and DB passphrase created below could
+        // not be persisted, so this account would stop working at the next cold start.
+        // DeviceSecurityGate resolves the tier and explains the block to the user.
+        if (!DeviceSecurityGate.checkOrExplain(this, null)) {
+            Log.e(TAG, "proceed: blocked by DeviceSecurityGate — no durable secure store.");
+            return;
+        }
+
         btnCont.setEnabled(false);
         btnCont.setText("Creating account…");
         tvError.setVisibility(View.GONE);
@@ -87,11 +97,11 @@ public class DisplayNameActivity extends AppCompatActivity {
         // RecoveryPhraseWalkthroughActivity.
         String waitlistRequestId = getIntent().getStringExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID);
 
-        // Eagerly initialise SecurePrefs for diagnostic logging.
-        // Never blocks account creation — even the plaintext fallback is MODE_PRIVATE
-        // (same protection as WhatsApp/Telegram on devices without hardware TEE).
-        SecurePrefs.get(this);
-        Log.i(TAG, "proceed: securePrefsAvailable=" + SecurePrefs.isAvailable());
+        // Diagnostic logging only. The gate above has already resolved the tier and
+        // returned early on the non-durable case, so this can no longer be the
+        // "plaintext MODE_PRIVATE fallback" the previous comment described — that
+        // tier was removed. A SOFTWARE tier here is expected and permitted.
+        Log.i(TAG, "proceed: secure store tier=" + SecurePrefs.getTier());
 
         new Thread(() -> {
             try {

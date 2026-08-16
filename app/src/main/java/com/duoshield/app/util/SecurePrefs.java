@@ -359,13 +359,51 @@ public class SecurePrefs {
     }
 
     /**
-     * Returns true if EncryptedSharedPreferences initialised successfully for the
-     * account-scoped file returned by {@link #get}.
-     * False means the fallback plaintext store is in use — crypto material is still
-     * scoped to this app (MODE_PRIVATE) but not hardware/software encrypted.
+     * Which tier resolved for the account-scoped file returned by {@link #get}.
+     *
+     * <p>Returns {@link SecurityTier#NONE} before {@link #get} has been called
+     * even once, because no tier has been resolved yet. Callers that need to
+     * distinguish "not yet initialised" from "genuinely unprotected" should
+     * check {@link #isInitialized()} as well — {@link DeviceSecurityGate} does.
+     */
+    public static SecurityTier getTier() {
+        return tier;
+    }
+
+    /** Which tier resolved for the device-gate file returned by {@link #getDeviceGate}. */
+    public static SecurityTier getDeviceGateTier() {
+        return deviceGateTier;
+    }
+
+    /** True once {@link #get} has resolved a tier for the account-scoped file. */
+    public static boolean isInitialized() {
+        return initialized;
+    }
+
+    /**
+     * True when legacy plaintext secrets are still present on disk after the
+     * migration ran. See {@link LegacyPlaintextMigrator} for why they are
+     * sometimes deliberately retained rather than deleted.
+     */
+    public static boolean legacyPlaintextRemains() {
+        return legacyPlaintextRemains;
+    }
+
+    /**
+     * Returns true if the account-scoped store from {@link #get} is encrypted and
+     * persisted — i.e. a Keystore tier resolved.
+     *
+     * <p>Retained as a delegating shim over {@link #getTier} so the existing
+     * call sites keep compiling and keep their original meaning. There is no
+     * longer a plaintext on-disk fallback: false now means the store is
+     * <em>in-memory only</em> ({@link SecurityTier#NONE}), not "plaintext on
+     * disk" as the previous javadoc described.
+     *
+     * <p>Prefer {@link #getTier} in new code when the HARDWARE/SOFTWARE
+     * distinction matters; this boolean deliberately collapses them.
      */
     public static boolean isAvailable() {
-        return initialized && encryptionAvailable;
+        return initialized && tier.isDurable();
     }
 
     /**
@@ -377,12 +415,13 @@ public class SecurePrefs {
      */
     public static void reset() {
         synchronized (SecurePrefs.class) {
-            cached                        = null;
-            encryptionAvailable           = false;
-            initialized                   = false;
-            deviceGateCached              = null;
-            deviceGateEncryptionAvailable = false;
-            sessionStateCached            = null;
+            cached                 = null;
+            tier                   = SecurityTier.NONE;
+            initialized            = false;
+            legacyPlaintextRemains = false;
+            deviceGateCached       = null;
+            deviceGateTier         = SecurityTier.NONE;
+            sessionStateCached     = null;
         }
     }
 

@@ -32,10 +32,11 @@ import java.util.Arrays;
  *       open the database, and wiped it. Now persisted with
  *       {@code commit()} and read back before the key is returned, so the
  *       key is guaranteed on disk before any database file exists.</li>
- *   <li><b>Temporarily unreadable key.</b> {@link SecurePrefs} falls back to
- *       a plaintext store when Keystore init fails, and its tier-3 recovery
- *       path deletes the master-key alias — both make previously stored
- *       ciphertext unreadable. The old code treated "cannot read key" as
+ *   <li><b>Temporarily unreadable key.</b> {@link SecurePrefs}'s tier-3
+ *       recovery path deletes the master-key alias, which makes previously
+ *       stored ciphertext unreadable. (It used to also fall back to a
+ *       plaintext store; that tier no longer exists — see
+ *       {@link SecurePrefs.SecurityTier}.) The old code treated "cannot read key" as
  *       "first run" and minted a fresh key, which guaranteed the database
  *       got destroyed even though the data was still intact and would have
  *       been readable on a later boot when Keystore recovered. Now we only
@@ -82,9 +83,26 @@ public final class DatabaseKeyProvider {
             // has. Refuse, and let the caller decide (retry / surface an error).
             throw new KeyUnavailableException(
                     "Encrypted database exists but its passphrase could not be read"
-                            + " (encryptionAvailable=" + SecurePrefs.isAvailable() + ")."
+                            + " (tier=" + SecurePrefs.getTier() + ")."
                             + " Refusing to mint a replacement key, which would destroy"
                             + " the existing database.");
+        }
+
+        // Genuine first run. Refuse to mint a key we know cannot be persisted:
+        // on SecurityTier.NONE the store is in-memory only, so the key would be
+        // lost at process death, and the very next launch would hit the branch
+        // above — a database that exists with an unreadable passphrase, i.e. a
+        // permanently unopenable database. Failing here instead means no database
+        // is ever created on such a device, so there is nothing to lose.
+        //
+        // DeviceSecurityGate is what keeps users from reaching this point; this
+        // check is the backstop for any entry point that forgets to consult it.
+        if (!SecurePrefs.getTier().isDurable()) {
+            throw new KeyUnavailableException(
+                    "Refusing to create a database key on a device with no working"
+                            + " Keystore tier (tier=" + SecurePrefs.getTier() + ")."
+                            + " The key could not be persisted, so the database would be"
+                            + " unopenable after process death. See DeviceSecurityGate.");
         }
 
         return createAndPersist(prefs);
@@ -158,9 +176,10 @@ public final class DatabaseKeyProvider {
         }
         Arrays.fill(verify, (byte) 0);
 
-        if (!SecurePrefs.isAvailable()) {
-            Log.w(TAG, "DB passphrase stored WITHOUT Keystore protection"
-                    + " (plaintext MODE_PRIVATE fallback).");
+        if (SecurePrefs.getTier() == SecurePrefs.SecurityTier.SOFTWARE) {
+            Log.w(TAG, "DB passphrase stored under a software-backed Keystore key:"
+                    + " encrypted at rest, but the key material may be extractable"
+                    + " given a compromised OS image.");
         }
         return key;
     }
