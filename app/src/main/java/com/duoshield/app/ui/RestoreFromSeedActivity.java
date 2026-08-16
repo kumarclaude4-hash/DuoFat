@@ -24,6 +24,7 @@ import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.security.PendingLockStore;
 import com.duoshield.app.util.B2StorageHelper;
+import com.duoshield.app.util.DeviceSecurityGate;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.PinManager;
 import com.duoshield.app.util.SecurePrefs;
@@ -140,6 +141,19 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
 
     private void attemptRestore() {
         hideError();
+
+        // Fail closed before any key material is fetched or decrypted (S08-H5).
+        // A restore onto a device with no working Keystore tier would recover the
+        // identity key into a store that cannot survive process death: Step F's
+        // commit() would report success, the history would appear restored, and the
+        // account would be inaccessible on the next cold start — with the local
+        // database already written and its passphrase already gone.
+        //
+        // Checked before input validation on purpose, so the user is not asked to
+        // type a 12-word recovery phrase into a device that cannot use it.
+        if (!DeviceSecurityGate.checkOrExplain(this, null)) {
+            return;
+        }
 
         String accountId = etAccountId != null && etAccountId.getText() != null
                 ? etAccountId.getText().toString().trim() : "";

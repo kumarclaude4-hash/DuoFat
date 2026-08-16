@@ -1,0 +1,119 @@
+package com.duoshield.app.util;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+
+/**
+ * Single decision point for "may this device create or restore an account?" (S08-H5).
+ *
+ * <h3>Why this class exists</h3>
+ * {@link SecurePrefs} no longer has a plaintext fallback. When every Keystore tier
+ * fails it hands out an in-memory {@link EphemeralSharedPreferences}, which means
+ * nothing survives process death — not the SQLCipher passphrase, not the Signal
+ * identity key, not the PIN hash. Letting a user onboard or restore on such a
+ * device would produce an account that silently evaporates on the next cold start,
+ * and (worse) a database whose passphrase is gone while the database file remains,
+ * which {@link com.duoshield.app.db.DatabaseKeyProvider} must then refuse to open.
+ *
+ * <p>Centralising the check here rather than repeating it at each entry point is
+ * deliberate: the failure mode of a duplicated policy is one copy drifting, and the
+ * drifted copy is the one that lets a user create unrecoverable data.
+ *
+ * <h3>What this deliberately does NOT block</h3>
+ * <ul>
+ *   <li><b>{@link SecurePrefs.SecurityTier#SOFTWARE}.</b> Still AES-256-GCM
+ *       encrypted and still Keystore-protected; it is durable, so an account
+ *       created on it works correctly. Blocking it would lock out the exact
+ *       budget-device population (Helio G36, Android Go) that tier 2 was added
+ *       to support. It is a weaker tier, not a broken one.</li>
+ *   <li><b>Existing installs.</b> Only entry points that would create <em>new</em>
+ *       durable state consult this gate. An existing install that has already
+ *       written its keys must keep opening — see {@link LegacyPlaintextMigrator}.
+ *       Blocking sign-in on a transient Keystore failure would be a self-inflicted
+ *       denial of service on a user's own message history.</li>
+ * </ul>
+ */
+public final class DeviceSecurityGate {
+
+    private static final String TAG = "DeviceSecurityGate";
+
+    private DeviceSecurityGate() {}
+
+    /**
+     * Why onboarding/restore was refused, so callers can log and explain rather
+     * than showing a generic failure.
+     */
+    public enum Decision {
+        /** A durable, encrypted store resolved. Onboarding/restore may proceed. */
+        ALLOWED,
+        /**
+         * Every Keystore tier failed; the store is in-memory only. Any account
+         * created now would be lost at process death.
+         */
+        BLOCKED_NO_DURABLE_STORE;
+
+        public boolean isAllowed() { return this == ALLOWED; }
+    }
+
+    /**
+     * Evaluates the gate. Forces {@link SecurePrefs#get} to resolve a tier first,
+     * so this is meaningful even when called before anything else has touched the
+     * store — otherwise the tier would still read {@code NONE} simply because no
+     * attempt had been made yet, and the gate would block every device.
+     */
+    @NonNull
+    public static Decision evaluate(@NonNull Context context) {
+        // Resolving the tier is the whole point of this call; the returned store
+        // is intentionally unused.
+        SecurePrefs.get(context);
+
+        SecurePrefs.SecurityTier tier = SecurePrefs.getTier();
+        if (!tier.isDurable()) {
+            Log.e(TAG, "Blocking onboarding/restore: no durable secure store"
+                    + " (tier=" + tier + ", device=" + android.os.Build.MANUFACTURER
+                    + " " + android.os.Build.MODEL
+                    + " API=" + android.os.Build.VERSION.SDK_INT + ").");
+            return Decision.BLOCKED_NO_DURABLE_STORE;
+        }
+        Log.i(TAG, "Onboarding/restore permitted (tier=" + tier + ").");
+        return Decision.ALLOWED;
+    }
+
+    /**
+     * Convenience wrapper for entry points: evaluates the gate and, when blocked,
+     * shows the explanatory dialog and returns false.
+     *
+     * <p>The dialog is deliberately not cancellable and finishes the activity on
+     * dismissal — a gate the user can tap past is not a gate. Callers should
+     * {@code return} immediately when this returns false.
+     *
+     * @param onBlockedDismissed optional extra action to run after the activity is
+     *                           finished, e.g. navigating back to a sign-in screen.
+     * @return true when the caller may proceed.
+     */
+    public static boolean checkOrExplain(@NonNull Activity activity,
+                                         @Nullable Runnable onBlockedDismissed) {
+        if (evaluate(activity).isAllowed()) return true;
+
+        if (activity.isFinishing() || activity.isDestroyed()) return false;
+
+        DialogInterface.OnClickListener close = (d, w) -> {
+            activity.finish();
+            if (onBlockedDismissed != null) onBlockedDismissed.run();
+        };
+
+        new AlertDialog.Builder(activity)
+                .setTitle(com.duoshield.app.R.string.device_unsupported_title)
+                .setMessage(com.duoshield.app.R.string.device_unsupported_message)
+                .setCancelable(false)
+                .setPositiveButton(com.duoshield.app.R.string.device_unsupported_dismiss, close)
+                .show();
+        return false;
+    }
+}
