@@ -41,7 +41,18 @@ jobs:
         working-directory: firestore-tests
         run: npm ci
 
-      - name: Start Firestore emulator and run tests
+      # Suite C (S08-H5 item 4d): pure static parse of firestore.rules, no
+      # emulator required. Run it first and on its own so a missing App Check
+      # gate on a gated path fails the build even if the emulator step is flaky.
+      - name: Static App Check gate guard (Suite C)
+        working-directory: firestore-tests
+        run: npx jest appcheck-static.test.js
+
+      # Suites A + B run under the emulator. `npm test` runs jest, which picks up
+      # every *.test.js — including appcheck-static again (harmless, fast):
+      #   A rules.test.js       — auth/lock logic, appCheckVerified() stubbed true
+      #   B appcheck.test.js    — gated paths DENY with no App Check token present
+      - name: Start Firestore emulator and run tests (Suites A + B + C)
         working-directory: firestore-tests
         env:
           FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080'
