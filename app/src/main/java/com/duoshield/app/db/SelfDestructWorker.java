@@ -8,6 +8,8 @@ import androidx.annotation.NonNull;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
 
+import com.duoshield.app.security.PinKeyGate;
+import com.duoshield.app.security.SessionKeyHolder;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 
@@ -58,6 +60,28 @@ public class SelfDestructWorker extends Worker {
 
         long now = System.currentTimeMillis();
 
+        // S08-M3: the database key is PIN-wrapped, so this worker cannot open the
+        // database unless the user has unlocked the app at least once since the
+        // process started. Check before doing anything else so a locked device
+        // does not burn Firestore reads on work that cannot be completed.
+        //
+        // Result.retry() is the important part. The alternative — Result.success()
+        // — would tell WorkManager this pass is finished, silently skipping the
+        // expiry sweep entirely; expired messages would then sit in Room and
+        // Firestore until some later pass happened to run while unlocked, with
+        // nothing recording that a sweep was missed.
+        //
+        // The accepted trade-off, called out explicitly because it is user-visible:
+        // self-destruct timers fire LATE on a device whose app is never opened.
+        // Deletion is deferred, never skipped — WorkManager redelivers with
+        // backoff, and the very next unlocked pass deletes everything whose
+        // expiresAt has since passed, because the sweep is driven by absolute
+        // timestamps rather than by "what expired since the last run".
+        if (!SessionKeyHolder.isUnlocked()) {
+            Log.i(TAG, "Session locked — deferring the self-destruct sweep (will retry).");
+            return Result.retry();
+        }
+
         try {
             AppDatabase db = AppDatabase.getInstance(getApplicationContext());
 
@@ -93,6 +117,18 @@ public class SelfDestructWorker extends Worker {
 
             return Result.success();
 
+        } catch (DatabaseKeyProvider.DatabaseLockedException e) {
+            // The session locked between the check above and the database open (the
+            // user can background the app at any moment). Not an error — defer.
+            Log.i(TAG, "Session locked mid-pass — deferring self-destruct until unlocked.");
+            return Result.retry();
+        } catch (DatabaseKeyProvider.DatabaseLockedException e) {
+            // The session locked between the check above and the database open
+            // (duress trigger, logout, or wipe landing mid-sweep). Same deferral
+            // as above rather than the generic error path, so the log reads as the
+            // expected condition it is instead of an unexplained failure.
+            Log.i(TAG, "Session locked mid-sweep — deferring (will retry).");
+            return Result.retry();
         } catch (Exception e) {
             Log.e(TAG, "SelfDestructWorker failed — will retry", e);
             return Result.retry();
