@@ -18,6 +18,7 @@ import androidx.activity.result.ActivityResultLauncher;
 
 import com.duoshield.app.crypto.signal.SignalKeyManager;
 import com.duoshield.app.util.SecurePrefs;
+import com.duoshield.app.util.VerificationStore;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.zxing.BarcodeFormat;
@@ -41,6 +42,14 @@ public class KeyFingerprintActivity extends BaseActivity {
     /** F23: true when launched from the safety-number banner VERIFY button. */
     private boolean clearSafetyNumOnMatch;
 
+    /** UX-1: persistent verification badge views. */
+    private LinearLayout verifiedBadge;
+    private ImageView    ivVerifiedBadge;
+    private TextView     tvVerifiedBadge;
+    private TextView     tvVerifyHint;
+    private TextView     tvMyFingerprintView;
+    private TextView     tvPartnerFingerprintView;
+
     // Must be registered as a field so it is ready before onCreate()
     private final ActivityResultLauncher<ScanOptions> scanLauncher =
             registerForActivityResult(new ScanContract(), this::onScanResult);
@@ -60,6 +69,12 @@ public class KeyFingerprintActivity extends BaseActivity {
 
         TextView tvMyFingerprint      = findViewById(R.id.tv_my_fingerprint);
         TextView tvPartnerFingerprint = findViewById(R.id.tv_partner_fingerprint);
+        tvMyFingerprintView      = tvMyFingerprint;
+        tvPartnerFingerprintView = tvPartnerFingerprint;
+        verifiedBadge   = findViewById(R.id.verifiedBadge);
+        ivVerifiedBadge = findViewById(R.id.ivVerifiedBadge);
+        tvVerifiedBadge = findViewById(R.id.tvVerifiedBadge);
+        tvVerifyHint    = findViewById(R.id.tvVerifyHint);
         MaterialButton btnShowQr      = findViewById(R.id.btn_show_qr);
         MaterialButton btnScanPartner = findViewById(R.id.btn_scan_partner);
         MaterialButton btnShare       = findViewById(R.id.btn_share);
@@ -71,7 +86,13 @@ public class KeyFingerprintActivity extends BaseActivity {
                 byte[] pubBytes = kp.getPublicKey().serialize();
                 myFingerprintHex = sha256Hex(pubBytes);
                 if (tvMyFingerprint != null) {
-                    tvMyFingerprint.setText(formatFingerprint(myFingerprintHex));
+                    String shown = formatFingerprint(myFingerprintHex);
+                    tvMyFingerprint.setText(shown);
+                    // UX-8: TalkBack would otherwise spell the monospace hex one character
+                    // at a time. Announce it in 4-char groups, which is how the value is
+                    // meant to be compared aloud with the contact.
+                    tvMyFingerprint.setContentDescription(
+                            getString(R.string.verify_a11y_your_fingerprint, spokenFingerprint(shown)));
                 }
             } else if (tvMyFingerprint != null) {
                 tvMyFingerprint.setText("Identity key not generated yet.");
@@ -179,34 +200,117 @@ public class KeyFingerprintActivity extends BaseActivity {
         String scanned = result.getContents().trim().toLowerCase();
 
         if (partnerFingerprintHex == null) {
-            showVerifyDialog(false,
-                    "No partner key on file yet.\nComplete pairing before verifying fingerprints.");
+            showVerifyDialog(false, getString(R.string.verify_no_key_body));
             return;
         }
 
         if (scanned.equals(partnerFingerprintHex.toLowerCase())) {
-            // F23 fix: only clear the safety_num_changed flag after a successful match,
-            // not unconditionally when the user taps VERIFY in ChatMediaActivity.
-            if (clearSafetyNumOnMatch && partnerUid != null) {
-                getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                        .edit().remove("safety_num_changed_" + partnerUid).apply();
+            // UX-1: record the verification durably. VerificationStore.markVerified() also
+            // clears safety_num_changed_<uid> in the same commit, which subsumes the F23
+            // behaviour below — the flag is still only cleared on an actual match, never on
+            // a VERIFY tap alone.
+            if (partnerUid != null) {
+                VerificationStore.markVerified(this, partnerUid, partnerFingerprintHex);
             }
-            showVerifyDialog(true,
-                    "✅  Fingerprints match!\n\nYou are talking to the right person and this "
-                    + "conversation is secure.");
+            renderVerificationState();
+            showVerifyDialog(true, getString(R.string.verify_passed_body));
         } else {
-            showVerifyDialog(false,
-                    "❌  Fingerprints do NOT match.\n\nDo not continue this conversation. "
-                    + "Your partner's key may have changed or someone may be intercepting your messages.");
+            showVerifyDialog(false, getString(R.string.verify_failed_body));
         }
     }
 
+    /**
+     * UX-5 fix: the title/body no longer carry "✅"/"❌" emoji. The dialog title already
+     * states pass/fail, and emoji in trust-critical copy read awkwardly under TalkBack and
+     * render inconsistently across OEM emoji fonts.
+     */
     private void showVerifyDialog(boolean match, String message) {
         new AlertDialog.Builder(this)
-                .setTitle(match ? "Verification Passed" : "Verification Failed")
+                .setTitle(match ? R.string.verify_passed_title : R.string.verify_failed_title)
                 .setMessage(message)
-                .setPositiveButton("OK", null)
+                .setPositiveButton(R.string.ok, null)
                 .show();
+    }
+
+    // ── UX-1: durable verification badge ──────────────────────────────────────
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Re-read on resume: the key may have changed (and the verification been voided by
+        // DuoShieldSignalStore) while this screen was in the background.
+        renderVerificationState();
+    }
+
+    /**
+     * Renders the persistent verification badge from {@link VerificationStore}.
+     *
+     * <p>Three states, because "not verified" and "verified but the key has since changed"
+     * are very different things and collapsing them would be the more dangerous of the two
+     * readings:
+     * <ul>
+     *   <li><b>Verified</b> — green shield, "Verified on {date}".</li>
+     *   <li><b>Out of date</b> — amber, key changed after verification.</li>
+     *   <li><b>Not verified</b> — muted grey, neutral prompt to scan.</li>
+     * </ul>
+     */
+    private void renderVerificationState() {
+        if (verifiedBadge == null || tvVerifiedBadge == null) return;
+
+        // No specific contact in context (opened from Settings rather than a chat) — a
+        // per-contact badge would be meaningless here.
+        if (partnerUid == null) {
+            verifiedBadge.setVisibility(android.view.View.GONE);
+            if (tvVerifyHint != null) tvVerifyHint.setText(R.string.fingerprint_info);
+            return;
+        }
+
+        verifiedBadge.setVisibility(android.view.View.VISIBLE);
+        boolean verified = VerificationStore.isVerified(this, partnerUid);
+        boolean stale    = verified
+                && VerificationStore.isStale(this, partnerUid, partnerFingerprintHex);
+
+        int color;
+        int bg;
+        String label;
+        int hint;
+
+        if (verified && !stale) {
+            color = androidx.core.content.ContextCompat.getColor(this, R.color.ds_verified);
+            bg    = androidx.core.content.ContextCompat.getColor(this, R.color.ds_verified_bg);
+            String on = VerificationStore.formatVerifiedOn(this, partnerUid);
+            label = on != null
+                    ? getString(R.string.verify_state_verified_on, on)
+                    : getString(R.string.verify_state_verified);
+            hint  = R.string.verify_hint_verified;
+        } else if (stale) {
+            color = androidx.core.content.ContextCompat.getColor(this, R.color.ds_warning);
+            bg    = androidx.core.content.ContextCompat.getColor(this, R.color.ds_unverified_bg);
+            label = getString(R.string.verify_state_stale);
+            hint  = R.string.verify_hint_stale;
+        } else {
+            color = androidx.core.content.ContextCompat.getColor(this, R.color.ds_unverified);
+            bg    = androidx.core.content.ContextCompat.getColor(this, R.color.ds_unverified_bg);
+            label = getString(R.string.verify_state_not_verified);
+            hint  = R.string.verify_hint_not_verified;
+        }
+
+        tvVerifiedBadge.setText(label);
+        tvVerifiedBadge.setTextColor(color);
+        if (ivVerifiedBadge != null) {
+            ivVerifiedBadge.setImageResource(verified && !stale
+                    ? R.drawable.ic_verified_shield
+                    : R.drawable.ic_warning);
+            ivVerifiedBadge.setImageTintList(android.content.res.ColorStateList.valueOf(color));
+            // Not-verified is a neutral default state, not a warning — don't show an alarm
+            // icon for a contact the user simply hasn't gotten around to verifying.
+            ivVerifiedBadge.setVisibility(verified || stale
+                    ? android.view.View.VISIBLE : android.view.View.GONE);
+        }
+        verifiedBadge.setBackgroundTintList(android.content.res.ColorStateList.valueOf(bg));
+        // The pill is a status readout, so give TalkBack the whole thing as one label.
+        verifiedBadge.setContentDescription(label);
+        if (tvVerifyHint != null) tvVerifyHint.setText(hint);
     }
 
     // ── Show my fingerprint as QR ─────────────────────────────────────────────
@@ -283,10 +387,20 @@ public class KeyFingerprintActivity extends BaseActivity {
             byte[] raw = Base64.decode(identityB64, Base64.NO_WRAP);
             IdentityKey partnerKey = new IdentityKey(raw, 0);
             partnerFingerprintHex = sha256Hex(partnerKey.serialize());
-            if (tv != null) tv.setText(formatFingerprint(partnerFingerprintHex));
+            if (tv != null) {
+                String shown = formatFingerprint(partnerFingerprintHex);
+                tv.setText(shown);
+                // UX-8: group-by-group announcement, see tvMyFingerprint above.
+                tv.setContentDescription(
+                        getString(R.string.verify_a11y_partner_fingerprint, spokenFingerprint(shown)));
+            }
         } catch (Exception e) {
             if (tv != null) tv.setText("Error reading partner key.");
         }
+        // UX-1: the badge depends on the partner fingerprint, which may arrive
+        // asynchronously from Firestore — re-render once it is known so a stale
+        // verification can be detected against the key actually on file.
+        renderVerificationState();
     }
 
     private String sha256Hex(byte[] input) {
@@ -308,6 +422,15 @@ public class KeyFingerprintActivity extends BaseActivity {
             sb.append(t, i, Math.min(i + 4, t.length()));
         }
         return sb.toString();
+    }
+
+    /**
+     * UX-8: turns "A1B2 C3D4 …" into "A1B2, C3D4, …" so TalkBack pauses between groups
+     * instead of running the hex together or spelling it out character by character.
+     */
+    private String spokenFingerprint(String formatted) {
+        if (formatted == null) return "";
+        return formatted.trim().replaceAll("\\s+", ", ");
     }
 
     private int dp(int value) {

@@ -45,13 +45,32 @@
         android:textSize="15sp"
         android:layout_marginTop="10dp" />
 
-    <TextView
+    <!-- UX-5: "🔒" emoji replaced with a real vector icon. The row is grouped so TalkBack
+         announces one "End-to-end encrypted" label rather than reading a lock glyph. -->
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="🔒 End-to-end encrypted"
-        android:textColor="#4DFFFFFF"
-        android:textSize="12sp"
-        android:layout_marginTop="8dp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="8dp"
+        android:contentDescription="@string/encrypted_badge_desc">
+
+        <ImageView
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:layout_marginEnd="5dp"
+            android:src="@drawable/ic_lock"
+            app:tint="#4DFFFFFF"
+            android:importantForAccessibility="no" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/encrypted_badge_desc"
+            android:textColor="#4DFFFFFF"
+            android:textSize="12sp"
+            android:importantForAccessibility="no" />
+    </LinearLayout>
 
     <View android:layout_width="0dp" android:layout_height="0dp"
         android:layout_weight="1" />

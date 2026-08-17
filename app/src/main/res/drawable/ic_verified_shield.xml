@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- UX-1/UX-5: shield-with-check used for the durable "Verified" trust badge, replacing
+         the "✅" emoji previously used in verification copy. -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5L12,1zM10.5,16.5L6.75,12.75l1.41,-1.41 2.34,2.34 5.34,-5.34 1.41,1.41L10.5,16.5z"/>
+</vector>

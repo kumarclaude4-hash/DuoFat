@@ -226,6 +226,11 @@ public final class DuoShieldSignalStore
             // be a separate apply() call.
             ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE)
                .edit().putBoolean("safety_num_changed_" + address.getName(), true).apply();
+            // UX-1: the key the user previously verified is no longer the key in use, so any
+            // recorded verification is void. Drop it here or the "Verified" badge would
+            // outlive the key it vouched for.
+            com.duoshield.app.util.VerificationStore
+                    .clearVerification(ctx, address.getName());
             return true; // changed — caller may warn the user
         }
         return false; // unchanged
@@ -265,6 +270,9 @@ public final class DuoShieldSignalStore
                .edit()
                .putBoolean("safety_num_changed_" + address.getName(), true)
                .apply();
+            // UX-1: void any recorded verification — it vouched for the old key.
+            com.duoshield.app.util.VerificationStore
+                    .clearVerification(ctx, address.getName());
         }
         return trusted;
     }
