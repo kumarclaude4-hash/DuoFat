@@ -142,6 +142,22 @@
     <color name="ls_tagline">#7A6E90</color>
     <color name="ls_enter_pin">#2A1F50</color>
 
+    <!-- ══ Trust / verification surfaces ══ -->
+    <!-- UX-5 fix: the safety-number banner previously hardcoded #CC7B3A00 / #FFFFD54F /
+         #FFFFFFFF inline, bypassing the ds_* token system. Tokenised here so the app's
+         highest-stakes warning surface is themeable with everything else. -->
+    <color name="ds_warning_banner_bg">#CC7B3A00</color>
+    <color name="ds_warning_banner_text">#FFFFFFFF</color>
+    <color name="ds_warning_banner_action">#FFFFD54F</color>
+    <color name="ds_warning_banner_icon">#FFFFD54F</color>
+    <color name="ds_warning_banner_dismiss">#99FFFFFF</color>
+
+    <!-- Verified / unverified trust badge (UX-1) -->
+    <color name="ds_verified">#6BBF8A</color>
+    <color name="ds_verified_bg">#1F6BBF8A</color>
+    <color name="ds_unverified">#9A8FB0</color>
+    <color name="ds_unverified_bg">#149A8FB0</color>
+
     <!-- ══ Classic mode overrides ══ -->
     <color name="classic_background">#100D1A</color>
     <color name="classic_surface">#1E1A28</color>

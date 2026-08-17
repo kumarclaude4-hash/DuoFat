@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- UX-1: pill behind the durable "Verified" trust badge. Tinted at runtime via
+     setBackgroundTintList so the same shape serves the verified / unverified / stale
+     states without three near-identical drawables. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="100dp"/>
+    <solid android:color="@color/ds_verified_bg"/>
+</shape>

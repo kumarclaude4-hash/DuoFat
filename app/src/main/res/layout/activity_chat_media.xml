@@ -214,19 +214,30 @@
         android:gravity="center_vertical"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#CC7B3A00"
-        android:paddingStart="16dp"
+        android:background="@color/ds_warning_banner_bg"
+        android:paddingStart="12dp"
         android:paddingEnd="4dp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
         android:visibility="gone">
 
+        <!-- UX-5: real vector icon replaces the "⚠" emoji, which TalkBack read awkwardly
+             and which rendered inconsistently across OEM emoji fonts. Marked
+             importantForAccessibility="no" because the adjacent text already says it. -->
+        <ImageView
+            android:layout_width="17dp"
+            android:layout_height="17dp"
+            android:layout_marginEnd="9dp"
+            android:src="@drawable/ic_warning"
+            app:tint="@color/ds_warning_banner_icon"
+            android:importantForAccessibility="no"/>
+
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="⚠ Safety number changed — verify your contact"
-            android:textColor="#FFFFFFFF"
+            android:text="@string/safety_banner_text"
+            android:textColor="@color/ds_warning_banner_text"
             android:textSize="12.5sp"
             android:lineSpacingMultiplier="1.3"/>
 
@@ -235,10 +246,12 @@
             style="@style/Widget.AppCompat.Button.Borderless"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
-            android:text="VERIFY"
-            android:textColor="#FFFFD54F"
+            android:minWidth="0dp"
+            android:text="@string/safety_dismiss_verify"
+            android:textColor="@color/ds_warning_banner_action"
             android:textSize="12sp"
             android:textStyle="bold"
+            android:textAllCaps="true"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"/>
 
@@ -248,8 +261,11 @@
             android:layout_height="36dp"
             android:src="@drawable/ic_close"
             android:padding="9dp"
-            app:tint="#99FFFFFF"
-            android:contentDescription="Dismiss safety number warning"/>
+            app:tint="@color/ds_warning_banner_dismiss"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/safety_dismiss_a11y"/>
     </LinearLayout>
 
     <!-- ── Messages + scroll-to-bottom FAB ── -->

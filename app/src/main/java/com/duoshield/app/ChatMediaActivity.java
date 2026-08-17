@@ -2443,7 +2443,12 @@ public class ChatMediaActivity extends BaseActivity {
      * <p>VERIFY → hides banner for this session + opens {@link KeyFingerprintActivity};
      * the {@code safety_num_changed_} flag is cleared only after a successful QR-scan match
      * inside {@link KeyFingerprintActivity} (F23 fix — not cleared on tap alone).
-     * ✕ dismiss → hides for this session; flag persists until a successful QR verification.
+     *
+     * <p>UX-2 fix: ✕ dismiss used to hide the banner instantly, exactly like VERIFY did,
+     * which taught users that tapping ✕ was as good as verifying. It now opens a
+     * confirmation explaining that dismissing verifies nothing, and offers "Verify now" as
+     * the primary action. The flag always persists until a successful QR verification, so
+     * the banner returns on the next {@code onResume()} either way.
      */
     private void checkSafetyNumberBanner() {
         if (safetyNumberBanner == null || partnerUid == null) return;
@@ -2468,7 +2473,19 @@ public class ChatMediaActivity extends BaseActivity {
                     .putExtra("clear_safety_num_on_match", true));
         });
         if (btnDismiss != null) btnDismiss.setOnClickListener(v ->
-                safetyNumberBanner.setVisibility(View.GONE));
+                new androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle(R.string.safety_dismiss_title)
+                        .setMessage(R.string.safety_dismiss_body)
+                        // Verification is the action we want, so it gets the positive slot.
+                        .setPositiveButton(R.string.safety_dismiss_verify, (d, w) -> {
+                            safetyNumberBanner.setVisibility(View.GONE);
+                            startActivity(new Intent(this, KeyFingerprintActivity.class)
+                                    .putExtra("partner_uid", partnerUid)
+                                    .putExtra("clear_safety_num_on_match", true));
+                        })
+                        .setNegativeButton(R.string.safety_dismiss_confirm, (d, w) ->
+                                safetyNumberBanner.setVisibility(View.GONE))
+                        .show());
     }
 
     // 4.2 fix: refactor to use SelfDestructScheduler exclusively instead of duplicating

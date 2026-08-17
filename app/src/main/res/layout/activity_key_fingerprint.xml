@@ -17,8 +17,40 @@
             <ImageView android:layout_width="56dp" android:layout_height="56dp"
                 android:layout_gravity="center_horizontal"
                 android:src="@drawable/ic_lock" app:tint="@color/ds_accent"
-                android:contentDescription="key"/>
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:importantForAccessibility="no"/>
+
+            <!-- UX-1: durable verification state. Populated in
+                 KeyFingerprintActivity.renderVerificationState() from VerificationStore,
+                 so the outcome of a successful QR match survives the dialog being
+                 dismissed instead of vanishing with it. -->
+            <LinearLayout
+                android:id="@+id/verifiedBadge"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="14dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_verified_pill"
+                android:paddingStart="12dp" android:paddingEnd="14dp"
+                android:paddingTop="7dp" android:paddingBottom="7dp">
+                <ImageView
+                    android:id="@+id/ivVerifiedBadge"
+                    android:layout_width="16dp" android:layout_height="16dp"
+                    android:src="@drawable/ic_verified_shield"
+                    app:tint="@color/ds_verified"
+                    android:importantForAccessibility="no"/>
+                <TextView
+                    android:id="@+id/tvVerifiedBadge"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginStart="7dp"
+                    android:textColor="@color/ds_verified"
+                    android:textSize="12.5sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:letterSpacing="0.01"/>
+            </LinearLayout>
+
+            <TextView android:id="@+id/tvVerifyHint"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="12dp" android:gravity="center"
                 android:text="@string/fingerprint_info"
                 android:textColor="@color/ds_text_secondary" android:textSize="14sp"
@@ -35,12 +67,18 @@
                         android:textColor="@color/ds_accent" android:textSize="12sp"
                         android:textAllCaps="true" android:letterSpacing="0.08"
                         android:fontFamily="sans-serif-medium"/>
+                    <!-- UX-8: contentDescription is set in code to a spaced-out,
+                         group-by-group reading of the hex. Without it TalkBack announces
+                         the monospace digits one character at a time, which is unusable
+                         for the one screen where reading the value aloud is the point. -->
                     <TextView android:id="@+id/tv_my_fingerprint"
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:textColor="@color/ds_text_primary" android:textSize="13sp"
                         android:fontFamily="monospace" android:lineSpacingMultiplier="1.6"
-                        android:letterSpacing="0.04"/>
+                        android:letterSpacing="0.04"
+                        android:textIsSelectable="true"
+                        android:focusable="true"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
             <com.google.android.material.card.MaterialCardView
@@ -55,12 +93,15 @@
                         android:textColor="@color/ds_text_secondary" android:textSize="12sp"
                         android:textAllCaps="true" android:letterSpacing="0.08"
                         android:fontFamily="sans-serif-medium"/>
+                    <!-- UX-8: see tv_my_fingerprint above — contentDescription set in code. -->
                     <TextView android:id="@+id/tv_partner_fingerprint"
                         android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:textColor="@color/ds_text_primary" android:textSize="13sp"
                         android:fontFamily="monospace" android:lineSpacingMultiplier="1.6"
-                        android:letterSpacing="0.04"/>
+                        android:letterSpacing="0.04"
+                        android:textIsSelectable="true"
+                        android:focusable="true"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
             <com.google.android.material.button.MaterialButton

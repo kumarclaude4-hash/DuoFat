@@ -169,6 +169,37 @@
     <string name="fingerprint_info">If these fingerprints match what your contact sees, your conversation is secure.</string>
     <string name="share_fingerprint">Share fingerprint</string>
 
+    <!-- ══ Durable verification state (UX-1) ══
+         A successful fingerprint match used to leave no trace once the dialog was
+         dismissed. These strings back the persistent "Verified" badge. -->
+    <string name="verify_state_verified">Verified</string>
+    <string name="verify_state_verified_on">Verified on %1$s</string>
+    <string name="verify_state_not_verified">Not verified yet</string>
+    <string name="verify_state_stale">Verification out of date</string>
+    <string name="verify_hint_not_verified">Scan your contact\'s QR code to verify this conversation.</string>
+    <string name="verify_hint_verified">You verified this contact\'s key. You will be warned here if it ever changes.</string>
+    <string name="verify_hint_stale">This contact\'s key changed after you verified them. Verify again before trusting this conversation.</string>
+    <string name="verify_passed_title">Verification passed</string>
+    <string name="verify_failed_title">Verification failed</string>
+    <string name="verify_passed_body">Fingerprints match. You are talking to the right person and this conversation is secure.</string>
+    <string name="verify_failed_body">Fingerprints do NOT match.\n\nDo not continue this conversation. Your contact\'s key may have changed, or someone may be intercepting your messages.</string>
+    <string name="verify_no_key_body">No contact key on file yet.\n\nComplete pairing before verifying fingerprints.</string>
+    <string name="verify_a11y_your_fingerprint">Your fingerprint: %1$s</string>
+    <string name="verify_a11y_partner_fingerprint">Contact\'s fingerprint: %1$s</string>
+    <string name="verify_badge_icon_desc">Verification status</string>
+
+    <!-- ══ Safety-number banner (UX-2) ══ -->
+    <string name="safety_banner_text">Safety number changed — verify your contact</string>
+    <string name="safety_banner_icon_desc">Warning</string>
+    <string name="safety_dismiss_title">Ignore this warning?</string>
+    <string name="safety_dismiss_body">This contact\'s encryption key changed. That happens when they reinstall the app or switch phones — but it can also mean someone is intercepting your messages.\n\nDismissing only hides this banner. It does not verify anything, and the warning will come back until you scan your contact\'s QR code.</string>
+    <string name="safety_dismiss_verify">Verify now</string>
+    <string name="safety_dismiss_confirm">Ignore for now</string>
+    <string name="safety_dismiss_a11y">Dismiss safety number warning</string>
+
+    <!-- Decorative-adjacent lock marks replaced with real icons (UX-5) -->
+    <string name="encrypted_badge_desc">End-to-end encrypted</string>
+
     <!-- Search -->
     <string name="search_messages">Search messages</string>
     <string name="no_results">No results found</string>
