@@ -95,7 +95,7 @@ public class DisplayNameActivity extends AppCompatActivity {
         // Approved waitlist request id from RequestAccessActivity — required by
         // the server for brand-new accounts. Threaded here via
         // RecoveryPhraseWalkthroughActivity.
-        String waitlistRequestId = getIntent().getStringExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID);
+        String inviteToken = getIntent().getStringExtra(RequestAccessActivity.EXTRA_INVITE_TOKEN);
 
         // Diagnostic logging only. The gate above has already resolved the tier and
         // returned early on the non-durable case, so this can no longer be the
@@ -139,7 +139,7 @@ public class DisplayNameActivity extends AppCompatActivity {
                         // signs the server's challenge nonce to prove ownership
                         // (S07-C1). It never leaves the device.
                         identityKeyPair,
-                        waitlistRequestId,
+                        inviteToken,
                         new AuthTokenHelper.Callback() {
                             @Override public void onSuccess(String firebaseUid) {
                                 Log.i(TAG, "[2/3] Firebase sign-in complete");

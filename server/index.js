@@ -9,6 +9,7 @@ const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profil
 const { createAdminLockoutStore } = require("./lib/adminLockoutStore");
 const { createAdminSessionStore } = require("./lib/adminSessionStore");
 const { createAdminLockoutWorkerClient } = require("./lib/adminLockoutWorkerClient");
+const invite = require("./lib/invite");
 
 let serviceAccount;
 try {
@@ -1504,6 +1505,16 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   .section-body { padding:0 18px 18px; }
   .search-row { display:flex; gap:8px; align-items:center; }
   .search-row .search-input { flex:1; font-family:ui-monospace,SFMono-Regular,monospace; }
+  .invite-form,.invite-tools,.pager { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+  .invite-form { margin-bottom:14px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#0b121c; }
+  .field { display:flex; flex:1 1 180px; flex-direction:column; gap:6px; color:var(--muted); font-size:12px; }
+  .field input,.field select { min-height:42px; padding:9px 11px; border:1px solid var(--line); border-radius:8px; outline:0; background:var(--panel); color:var(--text); }
+  .token-reveal { margin:0 0 14px; padding:14px; border:1px solid rgba(0,201,224,.45); border-radius:10px; background:rgba(0,201,224,.07); }
+  .token-reveal .mono { display:block; margin:8px 0; color:var(--accent-strong); }
+  .invite-tools { margin-bottom:10px; }
+  .invite-tools .search-input { flex:1 1 220px; }
+  .status-pill { display:inline-flex; padding:4px 7px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:11px; text-transform:capitalize; }
+  .pager { justify-content:flex-end; margin-top:12px; }
   .search-result { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:12px 0 16px; padding:14px; border:1px solid var(--line); border-radius:10px; background:#0b121c; }
   .search-status { margin-top:4px; color:var(--muted); font-size:12px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -1526,7 +1537,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   .refresh { margin-left:auto; }
   .refresh:disabled { opacity:.6; cursor:wait; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-  @media (max-width:760px) { #app{width:min(calc(100% - 20px),620px);padding-top:18px}.app-header{flex-direction:column}.header-actions{width:100%}.header-actions .action{flex:1}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.section-head{padding:15px 14px 12px}.section-help,.section-body{padding-left:14px;padding-right:14px}.table-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px}.table-scroll table{min-width:570px}.search-row{align-items:stretch;flex-direction:column}.search-row .action{width:100%}.search-result{align-items:flex-start;flex-direction:column}.search-result .action{width:100%} }
+  @media (max-width:760px) { #app{width:min(calc(100% - 20px),620px);padding-top:18px}.app-header{flex-direction:column}.header-actions{width:100%}.header-actions .action{flex:1}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.section-head{padding:15px 14px 12px}.section-help,.section-body{padding-left:14px;padding-right:14px}.table-scroll{overflow-x:auto;margin:0 -14px;padding:0 14px}.table-scroll table{min-width:720px}.search-row,.invite-form,.invite-tools{align-items:stretch;flex-direction:column}.search-row .action,.invite-form .action,.invite-tools .action{width:100%}.search-result{align-items:flex-start;flex-direction:column}.search-result .action{width:100%} }
   @media (max-width:390px) { .gate{width:calc(100% - 20px);padding:24px 18px}.stats{gap:8px}.stat{padding:13px}.stat-value{font-size:21px} }
 </style>
 </head>
@@ -1535,7 +1546,7 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
   <div class="gate" id="gate" style="__GATE_STYLE__">
     <div class="brand-mark" aria-hidden="true">DS</div>
     <h1>DuoShield Admin</h1>
-    <div class="sub">Secure operator access for waitlist, account locks, and duress PIN eligibility.</div>
+      <div class="sub">Secure operator access for invitations, account locks, and duress PIN eligibility.</div>
     <form id="gateForm" action="/admin/login" method="post">
       <label class="sr-only" for="tokenInput">Admin token</label>
       <input type="password" id="tokenInput" name="token" placeholder="Enter admin token" autofocus autocomplete="current-password" required>
@@ -1561,18 +1572,39 @@ const ADMIN_PAGE_HTML = `<!DOCTYPE html>
     </header>
 
     <div class="stats" aria-label="Account summary">
-      <div class="stat"><div class="stat-label">Pending access</div><div class="stat-value" id="pendingCount">—</div></div>
+      <div class="stat"><div class="stat-label">Active invites</div><div class="stat-value" id="activeCount">—</div></div>
       <div class="stat"><div class="stat-label">Locked accounts</div><div class="stat-value" id="lockedCount">—</div></div>
       <div class="stat"><div class="stat-label">Duress enabled</div><div class="stat-value" id="duressCount">—</div></div>
       <div class="stat"><div class="stat-label">Recent actions</div><div class="stat-value" id="auditCount">—</div></div>
     </div>
 
     <section>
-      <div class="section-head"><h2>Pending waitlist requests</h2><button class="action refresh" type="button" id="waitlistRefreshBtn">Refresh</button></div>
+      <div class="section-head"><h2>Invitation access</h2><button class="action refresh" type="button" id="invitesRefreshBtn">Refresh</button></div>
+      <div class="section-help">Issue a single-use code to a known recipient. The full code is shown once and never stored by the server.</div>
       <div class="section-body">
-        <div class="table-scroll"><table><thead><tr><th>Request ID</th><th>Requested</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="waitlistBody"></tbody></table></div>
-        <div class="loading" id="waitlistLoading">Loading…</div>
-        <div class="empty" id="waitlistEmpty" hidden>No pending requests.</div>
+        <form class="invite-form" id="inviteCreateForm">
+          <label class="field">Recipient label<input id="inviteLabel" maxlength="80" required autocomplete="off" placeholder="e.g. Jordan — beta cohort"></label>
+          <label class="field">Internal notes<input id="inviteNotes" maxlength="500" autocomplete="off" placeholder="Optional"></label>
+          <label class="field">Expires<input id="inviteExpiry" type="datetime-local" required></label>
+          <button class="action primary" type="submit" id="inviteCreateBtn">Create invite</button>
+        </form>
+        <div class="token-reveal" id="inviteReveal" hidden role="status">
+          <strong>Copy this code now — it will not be shown again.</strong>
+          <span class="mono" id="inviteToken"></span>
+          <button class="action primary" type="button" id="inviteCopyBtn">Copy invite code</button>
+          <button class="action" type="button" id="inviteDismissBtn">Dismiss</button>
+        </div>
+        <div class="invite-tools">
+          <label class="sr-only" for="inviteSearch">Search recipient labels</label>
+          <input class="search-input" id="inviteSearch" maxlength="80" placeholder="Search recipient labels" autocomplete="off">
+          <label class="sr-only" for="inviteStatus">Filter by status</label>
+          <select class="action" id="inviteStatus"><option value="all">All statuses</option><option value="active">Active</option><option value="used">Used</option><option value="expired">Expired</option><option value="revoked">Revoked</option></select>
+          <button class="action" type="button" id="inviteApplyBtn">Apply</button>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>Recipient</th><th>Status</th><th>Fingerprint</th><th>Created</th><th>Expires</th><th><span class="sr-only">Action</span></th></tr></thead><tbody id="invitesBody"></tbody></table></div>
+        <div class="loading" id="invitesLoading">Loading…</div>
+        <div class="empty" id="invitesEmpty" hidden>No invitations match these filters.</div>
+        <div class="pager"><button class="action" type="button" id="invitesPrevBtn" disabled>Previous</button><button class="action" type="button" id="invitesNextBtn" disabled>Next</button></div>
       </div>
     </section>
 
@@ -1689,9 +1721,9 @@ function setCount(name, value) {
   if (el) el.textContent = String(value);
 }
 
-function refreshAll() {
-  return Promise.all([loadWaitlist(), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
-}
+  function refreshAll() {
+    return Promise.all([loadInvites(true), loadLocked(), loadDuressEnrolled(), loadAuditLog()]);
+  }
 
 // ── "Last updated" indicator ────────────────────────────────────────────────�����
 function markUpdated() {
@@ -1799,90 +1831,114 @@ document.addEventListener("keydown", (e) => {
   copyValue(cell);
 });
 
-async function loadWaitlist() {
-  setLoading("waitlist", true);
+let inviteCursor = null;
+let inviteNextCursor = null;
+let inviteCursorHistory = [];
+
+async function loadInvites(reset) {
+  if (reset) { inviteCursor = null; inviteCursorHistory = []; }
+  setLoading("invites", true);
   try {
-    const data = await api("/admin/api/waitlist");
+    const status = document.getElementById("inviteStatus").value;
+    const search = document.getElementById("inviteSearch").value.trim();
+    const params = new URLSearchParams({ status, search, pageSize: "25" });
+    if (inviteCursor) params.set("cursor", inviteCursor);
+    const data = await api("/admin/api/invites?" + params.toString());
     showApp();
-    const body = document.getElementById("waitlistBody");
+    inviteNextCursor = data.nextCursor;
+    document.getElementById("invitesPrevBtn").disabled = inviteCursorHistory.length === 0;
+    document.getElementById("invitesNextBtn").disabled = !inviteNextCursor;
+    setCount("active", data.counts.active);
+    const body = document.getElementById("invitesBody");
     body.innerHTML = "";
-    setCount("pending", data.requests.length);
-    setEmpty("waitlist", !data.requests.length);
-    for (const r of data.requests) {
+    setEmpty("invites", !data.items.length);
+    for (const item of data.items) {
       const tr = document.createElement("tr");
-
-      const idTd = document.createElement("td");
-      idTd.className = "mono";
-      idTd.textContent = r.requestId;
-      tr.appendChild(idTd);
-
-      const dateTd = document.createElement("td");
-      dateTd.textContent = r.createdAt ? new Date(r.createdAt).toLocaleString() : "—";
-      tr.appendChild(dateTd);
-
+      const labelTd = document.createElement("td");
+      labelTd.textContent = item.label;
+      if (item.notes) labelTd.title = item.notes;
+      tr.appendChild(labelTd);
+      const statusTd = document.createElement("td");
+      const pill = document.createElement("span");
+      pill.className = "status-pill";
+      pill.textContent = item.status;
+      statusTd.appendChild(pill);
+      tr.appendChild(statusTd);
+      const fpTd = document.createElement("td");
+      fpTd.className = "mono";
+      fpTd.textContent = item.fingerprint || "—";
+      tr.appendChild(fpTd);
+      for (const value of [item.createdAt, item.expiresAt]) {
+        const td = document.createElement("td");
+        td.textContent = value ? new Date(value).toLocaleString() : "—";
+        tr.appendChild(td);
+      }
       const actionTd = document.createElement("td");
-      const approveBtn = document.createElement("button");
-      approveBtn.className = "action";
-      approveBtn.textContent = "Approve";
-      approveBtn.onclick = () => approve(r.requestId, approveBtn, denyBtn);
-      actionTd.appendChild(approveBtn);
-
-      // S05-H2: pending -> approved used to be the only mutation available —
-      // a flood/junk request could never be rejected, so the queue only ever
-      // grew. Deny gives the operator a way to clear it out.
-      const denyBtn = document.createElement("button");
-      denyBtn.className = "action danger";
-      denyBtn.textContent = "Deny";
-      denyBtn.onclick = () => deny(r.requestId, denyBtn, approveBtn);
-      actionTd.appendChild(denyBtn);
-
+      if (item.status === "active") {
+        const revokeBtn = document.createElement("button");
+        revokeBtn.className = "action danger";
+        revokeBtn.textContent = "Revoke";
+        revokeBtn.onclick = () => revokeInvite(item.id, revokeBtn);
+        actionTd.appendChild(revokeBtn);
+      }
       tr.appendChild(actionTd);
-
       body.appendChild(tr);
     }
+    if (data.capped) toast("Showing the newest 1,000 invites. Archive older records to restore complete counts.");
   } catch (e) {
-    if (e.message !== "unauthorized") toast("Failed to load waitlist: " + e.message);
+    if (e.message !== "unauthorized") toast("Failed to load invites: " + e.message);
   } finally {
-    setLoading("waitlist", false);
+    setLoading("invites", false);
   }
 }
 
-async function approve(requestId, btn, siblingBtn) {
+async function createInvite(event) {
+  event.preventDefault();
+  const btn = document.getElementById("inviteCreateBtn");
   btn.disabled = true;
-  if (siblingBtn) siblingBtn.disabled = true;
-  btn.textContent = "Approving…";
   try {
-    await api("/admin/api/waitlist/approve", { method: "POST", body: JSON.stringify({ requestId }) });
-    toast("Approved " + requestId.slice(0, 8) + "…");
-    loadWaitlist();
-    loadAuditLog();
+    const expiresAt = new Date(document.getElementById("inviteExpiry").value).toISOString();
+    const data = await api("/admin/api/invites/create", { method: "POST", body: JSON.stringify({
+      label: document.getElementById("inviteLabel").value,
+      notes: document.getElementById("inviteNotes").value,
+      expiresAt,
+    }) });
+    const token = document.getElementById("inviteToken");
+    token.textContent = data.token;
+    token.dataset.full = data.token;
+    document.getElementById("inviteReveal").hidden = false;
+    document.getElementById("inviteCreateForm").reset();
+    setDefaultInviteExpiry();
+    await Promise.all([loadInvites(true), loadAuditLog()]);
   } catch (e) {
-    if (e.message !== "unauthorized") {
-      toast("Approve failed: " + e.message);
-      btn.disabled = false;
-      btn.textContent = "Approve";
-      if (siblingBtn) siblingBtn.disabled = false;
-    }
+    if (e.message !== "unauthorized") toast("Create failed: " + e.message);
+  } finally { btn.disabled = false; }
+}
+
+async function revokeInvite(inviteId, btn) {
+  if (!confirm("Revoke this unused invitation?")) return;
+  btn.disabled = true;
+  try {
+    await api("/admin/api/invites/revoke", { method: "POST", body: JSON.stringify({ inviteId }) });
+    toast("Invitation revoked.");
+    await Promise.all([loadInvites(false), loadAuditLog()]);
+  } catch (e) {
+    if (e.message !== "unauthorized") toast("Revoke failed: " + e.message);
+    btn.disabled = false;
   }
 }
 
-async function deny(requestId, btn, siblingBtn) {
-  btn.disabled = true;
-  if (siblingBtn) siblingBtn.disabled = true;
-  btn.textContent = "Denying…";
-  try {
-    await api("/admin/api/waitlist/deny", { method: "POST", body: JSON.stringify({ requestId }) });
-    toast("Denied " + requestId.slice(0, 8) + "…");
-    loadWaitlist();
-    loadAuditLog();
-  } catch (e) {
-    if (e.message !== "unauthorized") {
-      toast("Deny failed: " + e.message);
-      btn.disabled = false;
-      btn.textContent = "Deny";
-      if (siblingBtn) siblingBtn.disabled = false;
-    }
-  }
+function setDefaultInviteExpiry() {
+  const date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  document.getElementById("inviteExpiry").value = date.toISOString().slice(0, 16);
+}
+
+function dismissInviteToken() {
+  const token = document.getElementById("inviteToken");
+  token.textContent = "";
+  delete token.dataset.full;
+  document.getElementById("inviteReveal").hidden = true;
 }
 
 async function loadLocked() {
@@ -2213,7 +2269,23 @@ bindClick("autoRefreshBtn", () => toggleAutoRefresh());
 bindClick("refreshAllBtn", function () { reload(this, refreshAll); });
 bindClick("signOutBtn", () => logout());
 bindClick("revokeAllSessionsBtn", function () { revokeAllSessions(this); });
-bindClick("waitlistRefreshBtn", function () { reload(this, loadWaitlist); });
+bindClick("invitesRefreshBtn", function () { reload(this, () => loadInvites(false)); });
+bindClick("inviteApplyBtn", () => loadInvites(true));
+bindClick("inviteCopyBtn", () => copyValue(document.getElementById("inviteToken")));
+bindClick("inviteDismissBtn", () => dismissInviteToken());
+bindClick("invitesNextBtn", () => {
+  if (!inviteNextCursor) return;
+  inviteCursorHistory.push(inviteCursor);
+  inviteCursor = inviteNextCursor;
+  loadInvites(false);
+});
+bindClick("invitesPrevBtn", () => {
+  if (!inviteCursorHistory.length) return;
+  inviteCursor = inviteCursorHistory.pop();
+  loadInvites(false);
+});
+document.getElementById("inviteCreateForm").addEventListener("submit", createInvite);
+setDefaultInviteExpiry();
 bindClick("lockedRefreshBtn", function () { reload(this, loadLocked); });
 bindClick("duressRefreshBtn", function () { reload(this, loadDuressEnrolled); });
 bindClick("duressSearchButton", () => searchDuressAccount());
@@ -2299,7 +2371,7 @@ function setBaselineSecurityHeaders(req, res) {
   }
 }
 
-// ── Health + status + mintToken HTTP server ──────────────────────────────────��
+// ── Health + status + mintToken HTTP server ──────────────────────────────────���
 const server = http.createServer((req, res) => {
 
   // Baseline security headers on every response (merged with, and overridable by,
@@ -2361,7 +2433,7 @@ const server = http.createServer((req, res) => {
 
   // ── POST /mintToken ─────────────────────────────────────────────────────────
   //
-  // Body (JSON): { userId, identityPubKeyHex, nonce, signatureHex, waitlistRequestId? }
+  // Body (JSON): { userId, identityPubKeyHex, nonce, signatureHex, inviteToken? }
   //
   // Security model:
   //   • Proof of possession (S07-C1): the caller must present a nonce previously
@@ -2406,7 +2478,7 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const { userId, identityPubKeyHex, nonce, signatureHex, waitlistRequestId } =
+        const { userId, identityPubKeyHex, nonce, signatureHex, inviteToken } =
           JSON.parse(body);
         if (!userId || typeof userId !== "string" ||
             !identityPubKeyHex || typeof identityPubKeyHex !== "string") {
@@ -2539,24 +2611,45 @@ const server = http.createServer((req, res) => {
 
           const snap = await tx.get(idRef);
           if (!snap.exists) {
-            // New account — invite-only. Require an approved, not-yet-used
-            // waitlist request and consume it atomically alongside the
-            // identity claim so a token can never mint two accounts.
-            if (!waitlistRequestId || typeof waitlistRequestId !== "string" ||
-                !/^[0-9a-f]{32}$/.test(waitlistRequestId)) {
-              throw Object.assign(new Error("Access request required"), { status: 403 });
-            }
-            const waitlistRef = db.collection("waitlist").doc(waitlistRequestId);
-            const waitlistSnap = await tx.get(waitlistRef);
-            if (!waitlistSnap.exists || waitlistSnap.data().status !== "approved") {
-              throw Object.assign(new Error("Access request not approved"), { status: 403 });
+            // New account — invite-only. Modern invite tokens are stored hash-only
+            // and consumed in this same transaction as the identity claim. A narrow
+            // legacy branch permits only already-approved 32-hex waitlist IDs while
+            // pre-deployment approvals drain; no endpoint creates new legacy IDs.
+            const normalizedInvite = invite.normalizeInviteToken(inviteToken);
+            if (!normalizedInvite) {
+              throw Object.assign(new Error("Valid invite required"), { status: 403 });
             }
 
-            tx.update(waitlistRef, {
-              status:       "used",
-              usedByUserId: userId,
-              usedAt:       FieldValue.serverTimestamp(),
-            });
+            if (invite.isInviteToken(normalizedInvite)) {
+              const tokenHash = invite.hashInviteToken(normalizedInvite);
+              const inviteQuery = db.collection("invites").where("tokenHash", "==", tokenHash).limit(1);
+              const inviteSnap = await tx.get(inviteQuery);
+              if (inviteSnap.empty) {
+                throw Object.assign(new Error("Valid invite required"), { status: 403 });
+              }
+              const inviteDoc = inviteSnap.docs[0];
+              if (invite.inviteStatus(inviteDoc.data()) !== "active") {
+                throw Object.assign(new Error("Valid invite required"), { status: 403 });
+              }
+              tx.update(inviteDoc.ref, {
+                status: "used",
+                usedByUserId: userId,
+                usedAt: FieldValue.serverTimestamp(),
+              });
+            } else if (/^[0-9a-f]{32}$/.test(normalizedInvite)) {
+              const legacyRef = db.collection("waitlist").doc(normalizedInvite);
+              const legacySnap = await tx.get(legacyRef);
+              if (!legacySnap.exists || legacySnap.data().status !== "approved") {
+                throw Object.assign(new Error("Valid invite required"), { status: 403 });
+              }
+              tx.update(legacyRef, {
+                status: "used",
+                usedByUserId: userId,
+                usedAt: FieldValue.serverTimestamp(),
+              });
+            } else {
+              throw Object.assign(new Error("Valid invite required"), { status: 403 });
+            }
 
             // First claim — atomically write the identity binding
             tx.set(idRef, {
@@ -2594,6 +2687,11 @@ const server = http.createServer((req, res) => {
           }
         });
 
+        if (isNewAccount) {
+          // Never attach the bearer token or its hash to audit records.
+          auditAdminEvent("invite_redeemed", req, { userIdTag: uidTag(userId) });
+        }
+
         // Mint custom token — uid = userId (permanent, seed-derived)
         // Token is minted only after the atomic identity-claim succeeds.
         const token = await admin.auth().createCustomToken(userId);
@@ -2626,83 +2724,39 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /requestAccess ───────────────────────────���──────────────────────────
-  //
-  // Body: none required.
-  //
-  // Account creation is invite-only. A fresh install that wants a NEW account
-  // calls this first to get a request token, which sits in Firestore as
-  // "pending" until the operator manually approves it (Firebase console /
-  // admin script — never from the app). The client polls GET /waitlistStatus
-  // with the token and only proceeds to actual account creation once approved.
-  // Restoring an EXISTING account never touches this endpoint.
-  if (req.method === "POST" && req.url === "/requestAccess") {
+  // ── POST /invite/validate ───────────────────────────────────────────────────
+  // Generic preflight for the Android onboarding screen. Every invalid state
+  // (unknown, malformed, expired, revoked, or used) returns the same payload so
+  // this endpoint cannot be used as a lifecycle/state oracle.
+  if (req.method === "POST" && req.url === "/invite/validate") {
     (async () => {
       try {
-        const clientIp = getClientIp(req);
-        if (!checkWaitlistIpRateLimit(clientIp)) {
-          res.writeHead(429, { "Content-Type": "text/plain" });
-          res.end("Too many requests from this IP — wait 15 min and retry");
+        if (!checkWaitlistPollRateLimit(getClientIp(req))) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ valid: false }));
           return;
         }
-
-        // Drain the (empty) body so the connection closes cleanly.
-        await readBody(req, res).catch(() => "");
-
-        const requestId = crypto.randomBytes(16).toString("hex");
-        await db.collection("waitlist").doc(requestId).set({
-          status:    "pending",
-          createdAt: FieldValue.serverTimestamp(),
-        });
-
-        // S05-M1: uidTag-style pseudonymisation for the same reason as every
-        // other log line this control touches — see reqTag()'s comment.
-        console.log(`requestAccess: new waitlist entry requestId=${reqTag(requestId)}`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ requestId }));
+        const body = await readBody(req, res);
+        let token = "";
+        try { token = invite.normalizeInviteToken(JSON.parse(body).inviteToken); } catch { /* generic invalid */ }
+        let valid = false;
+        if (invite.isInviteToken(token)) {
+          const snap = await db.collection("invites")
+            .where("tokenHash", "==", invite.hashInviteToken(token))
+            .limit(1)
+            .get();
+          valid = !snap.empty && invite.inviteStatus(snap.docs[0].data()) === "active";
+        } else if (/^[0-9a-f]{32}$/.test(token)) {
+          // Bounded migration support for previously approved waitlist IDs.
+          const legacy = await db.collection("waitlist").doc(token).get();
+          valid = legacy.exists && legacy.data().status === "approved";
+        }
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ valid }));
       } catch (e) {
-        console.error("requestAccess error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal server error");
-      }
-    })();
-    return;
-  }
-
-  // ── GET /waitlistStatus?requestId=... ───────���────────────────────────────────
-  //
-  // Returns { status: "pending" | "approved" | "used" | "not_found" }.
-  // No auth required (the requestId itself is an unguessable 128-bit token,
-  // and it reveals nothing beyond one account's own pending/approved state).
-  if (req.method === "GET" && (req.url || "").split("?")[0] === "/waitlistStatus") {
-    (async () => {
-      try {
-        const clientIp = getClientIp(req);
-        // Use the dedicated poll bucket (60 hits / 15 min) so polling does
-        // not drain the stricter /requestAccess creation bucket.
-        if (!checkWaitlistPollRateLimit(clientIp)) {
-          res.writeHead(429, { "Content-Type": "text/plain" });
-          res.end("Too many requests from this IP — wait 15 min and retry");
-          return;
-        }
-
-        const requestUrl = new URL(req.url, "http://localhost");
-        const requestId = requestUrl.searchParams.get("requestId") || "";
-        if (!/^[0-9a-f]{32}$/.test(requestId)) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing or invalid requestId");
-          return;
-        }
-
-        const snap = await db.collection("waitlist").doc(requestId).get();
-        const status = snap.exists ? snap.data().status : "not_found";
-
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status }));
-      } catch (e) {
-        console.error("waitlistStatus error:", e.message);
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal server error");
+        console.error("invite/validate error:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ valid: false }));
       }
     })();
     return;
@@ -4057,7 +4111,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/duress-lock") {
     collectBody(req, res, async (body) => {
       try {
-        // ── S06-L2: rate limit the only unauthenticated mutating endpoint ─────
+        // ── S06-L2: rate limit the only unauthenticated mutating endpoint ─���───
         // This endpoint has to stay unauthenticated (the caller has been wiped
         // and signed out), so nothing throttled it at all. The risk is not nonce
         // brute force — 32 bytes of randomBytes is out of reach — it is that any
@@ -4351,156 +4405,135 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── GET /admin/api/waitlist ────────���──────────────────────────────────────
-  //
-  // Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either). Returns pending waitlist requests, newest
-  // first, so the operator can see who's asking for access.
-  if (req.method === "GET" && req.url === "/admin/api/waitlist") {
+  // ── Admin-issued invitation lifecycle (S05-H2) ──────────────────────────────
+  if (req.method === "GET" && (req.url || "").split("?")[0] === "/admin/api/invites") {
     (async () => {
       if (!(await requireAdminAuth(req, res))) return;
       try {
-        // Single-field filter only — deliberately NO `.orderBy("createdAt")`
-        // here. Combining a `where` on `status` with an `orderBy` on a
-        // different field is a Firestore composite query that fails with
-        // FAILED_PRECONDITION unless a composite index has been manually
-        // deployed, which would leave this table silently empty. We instead
-        // fetch by status (no index needed) and sort newest-first in memory.
-        const snap = await db.collection("waitlist")
-          .where("status", "==", "pending")
-          .limit(200)
-          .get();
-        const requests = snap.docs.map((d) => {
+        const requestUrl = new URL(req.url, "http://localhost");
+        const wantedStatus = requestUrl.searchParams.get("status") || "all";
+        const search = (requestUrl.searchParams.get("search") || "").trim().toLowerCase();
+        const pageSize = Math.min(100, Math.max(10, Number(requestUrl.searchParams.get("pageSize")) || 25));
+        const cursor = invite.decodeCursor(requestUrl.searchParams.get("cursor"));
+        if (!["all", "active", "used", "expired", "revoked"].includes(wantedStatus) || search.length > 80) {
+          throw new TypeError("Invalid filter");
+        }
+
+        // Bounded scan with deterministic in-memory ordering avoids requiring a
+        // fragile matrix of Firestore composite indexes for derived expiry + search.
+        const snap = await db.collection("invites").limit(1000).get();
+        const now = Date.now();
+        let records = snap.docs.map((d) => {
           const data = d.data();
-          const createdMs = data.createdAt && data.createdAt.toMillis ? data.createdAt.toMillis() : 0;
-          const createdAt = data.createdAt && data.createdAt.toDate ? data.createdAt.toDate().toISOString() : null;
-          return { requestId: d.id, createdAt, createdMs };
+          const createdAtMs = invite.timestampMs(data.createdAt);
+          return {
+            id: d.id,
+            label: data.label || "",
+            notes: data.notes || "",
+            fingerprint: data.tokenFingerprint || "",
+            status: invite.inviteStatus(data, now),
+            createdAt: createdAtMs ? new Date(createdAtMs).toISOString() : null,
+            createdAtMs,
+            expiresAt: invite.timestampMs(data.expiresAt) ? new Date(invite.timestampMs(data.expiresAt)).toISOString() : null,
+            usedAt: invite.timestampMs(data.usedAt) ? new Date(invite.timestampMs(data.usedAt)).toISOString() : null,
+            usedByUserId: data.usedByUserId || null,
+            revokedAt: invite.timestampMs(data.revokedAt) ? new Date(invite.timestampMs(data.revokedAt)).toISOString() : null,
+          };
         });
-        requests.sort((a, b) => b.createdMs - a.createdMs);
+        const counts = { active: 0, used: 0, expired: 0, revoked: 0 };
+        for (const record of records) counts[record.status]++;
+        records = records
+          .filter((r) => wantedStatus === "all" || r.status === wantedStatus)
+          .filter((r) => !search || r.label.toLowerCase().includes(search))
+          .sort((a, b) => b.createdAtMs - a.createdAtMs || b.id.localeCompare(a.id));
+        if (cursor) {
+          records = records.filter((r) => r.createdAtMs < cursor.createdAtMs ||
+            (r.createdAtMs === cursor.createdAtMs && r.id < cursor.id));
+        }
+        const page = records.slice(0, pageSize);
+        const nextCursor = records.length > pageSize && page.length
+          ? invite.encodeCursor(page[page.length - 1].createdAtMs, page[page.length - 1].id)
+          : null;
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ requests: requests.map(({ createdMs, ...r }) => r) }));
+        res.end(JSON.stringify({
+          items: page.map(({ createdAtMs, ...item }) => item),
+          nextCursor,
+          counts,
+          capped: snap.size === 1000,
+        }));
       } catch (e) {
-        sendServerError(res, "admin/api/waitlist", e);
+        if (e instanceof TypeError) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end(e.message);
+        } else sendServerError(res, "admin/api/invites", e);
       }
     })();
     return;
   }
 
-  // ── POST /admin/api/waitlist/approve ──────────────────────────────────────
-  //
-  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
-  // Flips a pending waitlist doc to status: "approved" so the requester's
-  // next /waitlistStatus poll lets them proceed to account creation.
-  if (req.method === "POST" && req.url === "/admin/api/waitlist/approve") {
+  if (req.method === "POST" && req.url === "/admin/api/invites/create") {
     requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
-        try { parsed = JSON.parse(body); } catch (_) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Invalid JSON");
-          return;
-        }
-        const { requestId } = parsed;
-        if (typeof requestId !== "string" || !/^[0-9a-f]{32}$/.test(requestId)) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing or invalid requestId");
-          return;
-        }
-        const ref = db.collection("waitlist").doc(requestId);
-        // S05-L4: this used to be a plain get()-then-update() outside any
-        // transaction. Two concurrent approvals of the same requestId both
-        // observed status === "pending" and both wrote "approved" — harmless
-        // to the waitlist doc itself (idempotent, and /mintToken's own
-        // transaction is the real single-use gate), but it produced TWO
-        // audit_approved rows for one effective action, corrupting the
-        // record S05-H3 made authoritative. db.runTransaction() serializes
-        // concurrent callers on this doc: only the first to commit observes
-        // "pending" and writes; a retried/losing transaction re-reads the
-        // now-"approved" doc and takes the already-handled branch below
-        // instead of writing or auditing again.
-        let notFound = false;
-        let alreadyStatus = null;
-        await db.runTransaction(async (txn) => {
-          const snap = await txn.get(ref);
-          if (!snap.exists) { notFound = true; return; }
-          if (snap.data().status !== "pending") { alreadyStatus = snap.data().status; return; }
-          txn.update(ref, { status: "approved", approvedAt: FieldValue.serverTimestamp() });
+        try { parsed = JSON.parse(body); } catch { throw new TypeError("Invalid JSON"); }
+        const input = invite.validateCreateInput(parsed);
+        const rawToken = invite.createInviteToken();
+        const ref = db.collection("invites").doc();
+        await ref.create({
+          tokenHash: invite.hashInviteToken(rawToken),
+          tokenFingerprint: invite.tokenFingerprint(rawToken),
+          status: "active",
+          label: input.label,
+          labelSearch: input.labelSearch,
+          notes: input.notes,
+          createdAt: FieldValue.serverTimestamp(),
+          expiresAt: admin.firestore.Timestamp.fromMillis(input.expiresAtMs),
         });
-        if (notFound) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          res.end("Request not found");
-          return;
-        }
-        if (alreadyStatus) {
-          res.writeHead(409, { "Content-Type": "text/plain" });
-          res.end(`Request is already "${alreadyStatus}", not pending`);
-          return;
-        }
-        console.log(`[admin] waitlist request approved: requestId=${reqTag(requestId)}`);
-
-        // S05-M1: this used to write directly to adminAuditLog with a raw
-        // `adminIp: getClientIp(req)` — bypassing auditAdminEvent() entirely
-        // (which pseudonymises the IP), even though the sink already existed
-        // and every OTHER admin-audit call site used it. Routing through it
-        // here closes that gap without changing the record's shape (requestId
-        // is still the queryable field auditlog consumers expect).
-        auditAdminEvent("waitlist_approved", req, { requestId });
-
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true }));
+        auditAdminEvent("invite_created", req, { inviteId: ref.id });
+        res.writeHead(201, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ id: ref.id, token: rawToken }));
       } catch (e) {
-        sendServerError(res, "admin/api/waitlist/approve", e);
+        if (e instanceof TypeError) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end(e.message);
+        } else sendServerError(res, "admin/api/invites/create", e);
       }
     });
     return;
   }
 
-  // ── POST /admin/api/waitlist/deny ───���─────────────────────────────────────
-  //
-  // Body: { requestId }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
-  // S05-H2: prior to this endpoint the ONLY mutation available on a waitlist
-  // doc was pending -> approved — a junk/flood request could never be
-  // rejected, so the queue grew forever and a sustained trickle of garbage
-  // requests could permanently push legitimate ones out of the operator's
-  // `orderBy(desc).limit(200)` view (see GET /admin/api/waitlist below).
-  // This does not fix the full design finding (no requester-identifying
-  // payload, no expiry on approved-but-unused invites, no pagination) — it
-  // closes the specific "no deny path" gap that S3-13's exit criteria names.
-  if (req.method === "POST" && req.url === "/admin/api/waitlist/deny") {
+  if (req.method === "POST" && req.url === "/admin/api/invites/revoke") {
     requireAdminAuthThenBody(req, res, async (body) => {
       try {
         let parsed;
-        try { parsed = JSON.parse(body); } catch (_) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Invalid JSON");
-          return;
-        }
-        const { requestId } = parsed;
-        if (typeof requestId !== "string" || !/^[0-9a-f]{32}$/.test(requestId)) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Missing or invalid requestId");
-          return;
-        }
-        const ref = db.collection("waitlist").doc(requestId);
-        const snap = await ref.get();
-        if (!snap.exists) {
-          res.writeHead(404, { "Content-Type": "text/plain" });
-          res.end("Request not found");
-          return;
-        }
-        if (snap.data().status !== "pending") {
-          res.writeHead(409, { "Content-Type": "text/plain" });
-          res.end(`Request is already "${snap.data().status}", not pending`);
-          return;
-        }
-        await ref.update({ status: "denied", deniedAt: FieldValue.serverTimestamp() });
-        console.log(`[admin] waitlist request denied: requestId=${reqTag(requestId)}`);
-
-        auditAdminEvent("waitlist_denied", req, { requestId });
-
+        try { parsed = JSON.parse(body); } catch { throw new TypeError("Invalid JSON"); }
+        const inviteId = typeof parsed.inviteId === "string" ? parsed.inviteId : "";
+        const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+        if (!/^[A-Za-z0-9_-]{10,40}$/.test(inviteId) || reason.length > 200) throw new TypeError("Invalid revoke request");
+        const ref = db.collection("invites").doc(inviteId);
+        let conflict = null;
+        let missing = false;
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) { missing = true; return; }
+          const current = invite.inviteStatus(snap.data());
+          if (current !== "active") { conflict = current; return; }
+          tx.update(ref, {
+            status: "revoked",
+            revokedAt: FieldValue.serverTimestamp(),
+            revocationReason: reason,
+          });
+        });
+        if (missing) { res.writeHead(404); res.end("Invite not found"); return; }
+        if (conflict) { res.writeHead(409); res.end(`Invite is ${conflict}`); return; }
+        auditAdminEvent("invite_revoked", req, { inviteId });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {
-        sendServerError(res, "admin/api/waitlist/deny", e);
+        if (e instanceof TypeError) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end(e.message);
+        } else sendServerError(res, "admin/api/invites/revoke", e);
       }
     });
     return;

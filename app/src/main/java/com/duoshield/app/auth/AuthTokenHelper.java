@@ -103,12 +103,12 @@ public final class AuthTokenHelper {
      * server ignores it entirely for accounts that already have an identity
      * record, so restoring an existing account should pass {@code null}.
      *
-     * @param waitlistRequestId approved access-request token from
+     * @param inviteToken approved access-request token from
      *                          {@code RequestAccessActivity}, or null
      */
     public static void signInWithSeed(String userId,
                                       IdentityKeyPair identityKeyPair,
-                                      String waitlistRequestId,
+                                      String inviteToken,
                                       Callback cb) {
         final Handler main = new Handler(Looper.getMainLooper());
         new Thread(() -> {
@@ -133,7 +133,7 @@ public final class AuthTokenHelper {
                         toHex(identityKeyPair.getPublicKey().serialize()),
                         nonceHex,
                         signatureHex,
-                        waitlistRequestId);
+                        inviteToken);
                 Log.i(TAG, "signInWithSeed: token received, signing in with Firebase…");
                 String uid = doSignIn(customToken);
                 Log.i(TAG, "signInWithSeed: Firebase sign-in SUCCESS");
@@ -173,7 +173,7 @@ public final class AuthTokenHelper {
         return out.toByteArray();
     }
 
-    // ── internals ─────────────────────────────────────────────────────────────
+    // ── internals ────────────────────────────────────────────��────────────────
 
     /** Resolves {@code path} against the configured push-server base URL. */
     private static String endpointFor(String path) throws Exception {
@@ -237,7 +237,7 @@ public final class AuthTokenHelper {
                                            String pubKeyHex,
                                            String nonceHex,
                                            String signatureHex,
-                                           String waitlistRequestId) throws Exception {
+                                           String inviteToken) throws Exception {
         String endpoint = endpointFor("mintToken");
 
         Log.d(TAG, "fetchCustomToken: POST " + endpoint);
@@ -247,8 +247,8 @@ public final class AuthTokenHelper {
         body.put("identityPubKeyHex", pubKeyHex);
         body.put("nonce",             nonceHex);
         body.put("signatureHex",      signatureHex);
-        if (waitlistRequestId != null && !waitlistRequestId.isEmpty()) {
-            body.put("waitlistRequestId", waitlistRequestId);
+        if (inviteToken != null && !inviteToken.isEmpty()) {
+            body.put("inviteToken", inviteToken);
         }
         byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
 

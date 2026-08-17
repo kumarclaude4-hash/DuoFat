@@ -23,14 +23,14 @@ public class RecoveryPhraseWalkthroughActivity extends AppCompatActivity {
 
         // Approved waitlist request id, threaded through from RequestAccessActivity
         // and passed on to DisplayNameActivity so it can reach /mintToken.
-        String waitlistRequestId = getIntent().getStringExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID);
+        String inviteToken = getIntent().getStringExtra(RequestAccessActivity.EXTRA_INVITE_TOKEN);
 
         findViewById(R.id.btnBack).setOnClickListener(v -> finish());
         MaterialButton continueButton = findViewById(R.id.btnContinue);
         ButtonPressAnimator.attach(continueButton);
         continueButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, DisplayNameActivity.class);
-            intent.putExtra(RequestAccessActivity.EXTRA_WAITLIST_REQUEST_ID, waitlistRequestId);
+            intent.putExtra(RequestAccessActivity.EXTRA_INVITE_TOKEN, inviteToken);
             startActivity(intent);
             finish();
         });
