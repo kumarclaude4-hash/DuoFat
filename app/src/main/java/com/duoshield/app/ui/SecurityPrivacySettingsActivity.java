@@ -72,12 +72,13 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         Button btnChangePinMode = findViewById(R.id.btnChangePinMode);
 
         // ── Restore saved state ───────────────────────────────────────────────
-        // Secure by default (S08-H2): screenshots are BLOCKED on a fresh install, so this
-        // switch starts unchecked. Must stay in lockstep with the matching default in
-        // BaseActivity.applyScreenshotSecurity() — if the two disagree, the switch shows
-        // one thing while a different FLAG_SECURE state is actually enforced.
+        // Screenshot default comes from BaseActivity.SCREENSHOTS_ALLOWED_BY_DEFAULT so the
+        // switch can never render out of step with the FLAG_SECURE state actually enforced.
+        // That constant is TEMPORARILY true for the screenshot/testing pass; revert it to
+        // false (secure by default, S08-H2) before release.
         if (switchAppScreenshot != null)
-            switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled", false));
+            switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled",
+                    com.duoshield.app.BaseActivity.SCREENSHOTS_ALLOWED_BY_DEFAULT));
         if (switchShakeLock != null)
             switchShakeLock.setChecked(prefs.getBoolean("shake_to_lock_enabled", false));
         if (switchRelayOnlyCalls != null)
@@ -133,7 +134,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         // ── Auto sign-out ─────────────────────────────────────────────────────
         if (btnAutoSignOut != null) btnAutoSignOut.setOnClickListener(v -> showAutoSignOutPicker());
 
-        // ── Lock timeout ──��───────────────────────────────────────────────────
+        // ── Lock timeout ──��─────────────────────────────────────────────────��─
         if (btnLockTimeout != null) btnLockTimeout.setOnClickListener(v -> showLockTimeoutPicker());
     }
 

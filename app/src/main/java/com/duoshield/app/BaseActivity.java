@@ -58,23 +58,25 @@ public class BaseActivity extends AppCompatActivity {
      * BaseActivity-derived activities now route through, matching what GroupChatActivity's
      * and ChatMediaActivity's onResume() comments already claimed was happening globally.
      *
-     * <p><b>Secure by default.</b> The {@code getBoolean} default below is {@code false},
-     * i.e. screenshots BLOCKED (FLAG_SECURE set) on a fresh install: with no user action
-     * at all, screenshots, screen recording, and the recents-list thumbnail are denied,
-     * which is the only defensible posture for a secure-messaging app. The default was
-     * temporarily {@code true} during the UI testing phase (flipped in {@code 9196a75});
-     * that regression is now reverted and the S08-H2 posture restored.
+     * <p><b>TEMPORARY TESTING DEFAULT — screenshots ALLOWED.</b> The {@code getBoolean}
+     * default below is currently {@code true}, i.e. FLAG_SECURE is NOT set on a fresh
+     * install, so screenshots, screen recording, and the recents-list thumbnail all work
+     * without the tester touching Settings. This exists only to capture screen-by-screen
+     * screenshots during the final testing pass.
      *
-     * <p><b>Do not flip this to {@code true} again.</b> If a future testing phase needs
-     * screenshots, change the toggle in Settings → Security &amp; Privacy at runtime rather
-     * than the default here. The matching {@code getBoolean} default in
-     * {@link com.duoshield.app.ui.SecurityPrivacySettingsActivity} must stay in sync with
-     * this one, or the switch will render out of step with the flag actually enforced.
+     * <p><b>REVERT BEFORE RELEASE.</b> The secure-by-default posture required by S08-H2 is
+     * {@code false} (screenshots BLOCKED); shipping with {@code true} re-introduces that
+     * finding. Set {@link #SCREENSHOTS_ALLOWED_BY_DEFAULT} back to {@code false} when the
+     * testing pass is finished. The matching {@code getBoolean} default in
+     * {@link com.duoshield.app.ui.SecurityPrivacySettingsActivity} reads this same constant,
+     * so the switch stays in step with the flag actually enforced.
      */
+    public static final boolean SCREENSHOTS_ALLOWED_BY_DEFAULT = true;
+
     static void applyScreenshotSecurity(android.app.Activity activity) {
         boolean screenshotsAllowed = activity
                 .getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_APP_SCREENSHOT_ENABLED, false);
+                .getBoolean(KEY_APP_SCREENSHOT_ENABLED, SCREENSHOTS_ALLOWED_BY_DEFAULT);
         if (screenshotsAllowed) {
             activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
         } else {
