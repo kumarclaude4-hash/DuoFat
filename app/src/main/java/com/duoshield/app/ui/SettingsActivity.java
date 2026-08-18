@@ -32,7 +32,6 @@ import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.android.gms.tasks.Task;
-import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.firestore.FirebaseFirestore;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -448,12 +447,10 @@ public class SettingsActivity extends BaseActivity {
 
     private void publishUploadedPhoto(String b2Path, byte[] jpeg, FirebaseUser user) {
         String previousPath = prefs.getString("my_photo_url", null);
-        Task<Void> userWrite = FirebaseFirestore.getInstance()
-                .collection("users").document(user.getUid())
-                .set(Collections.singletonMap("photoUrl", b2Path),
-                        com.google.firebase.firestore.SetOptions.merge());
-        Task<Void> propagation = propagatePhotoToConversations(user.getUid(), b2Path);
-        Tasks.whenAll(userWrite, propagation)
+        // publishPhotoReferences writes users/{uid}.photoUrl and every
+        // partnerPhotoUrl_<uid> chat field in a single atomic batch, so the
+        // user document can never land without the denormalized chat copies.
+        publishPhotoReferences(user.getUid(), b2Path)
                 .addOnSuccessListener(ignored -> bgExecutor.execute(() -> {
                     try {
                         saveOwnAvatarToDisk(jpeg);
