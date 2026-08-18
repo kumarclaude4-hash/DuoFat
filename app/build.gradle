@@ -210,6 +210,14 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
 
     implementation 'androidx.appcompat:appcompat:1.6.1'
+    // Declared explicitly even though appcompat 1.6.1 already resolves it transitively at
+    // exactly this version, so the build graph is unchanged today. WatchTogetherActivity
+    // depends on it *directly* for OnBackPressedCallback + getOnBackPressedDispatcher(),
+    // which is how Back dismisses the search panel under predictive back (the deprecated
+    // onBackPressed() override it replaced is simply never called on API 33+). Leaning on a
+    // transitive edge for a direct compile-time dependency means a future appcompat bump
+    // that reorganises its own dependencies breaks that for reasons nothing here explains.
+    implementation 'androidx.activity:activity:1.6.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
     implementation 'androidx.gridlayout:gridlayout:1.0.0'
