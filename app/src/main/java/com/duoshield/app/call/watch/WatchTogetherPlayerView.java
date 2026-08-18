@@ -125,11 +125,21 @@ public class WatchTogetherPlayerView extends WebView {
 
         // Pin navigation to YouTube. Any attempt to navigate elsewhere is refused so the
         // player cannot be redirected into arbitrary web content.
+        //
+        // Main-frame navigations are refused even when they ARE YouTube: the embed renders
+        // a "Watch on YouTube" affordance (and always does so when the video forbids
+        // embedding), and following it replaced this whole surface with the full m.youtube.com
+        // watch page — comments, Subscribe, "Open App" and all. That page is not our player:
+        // it has no WT bridge, so cue/play/pause/seek stop having any effect, the two devices
+        // silently stop being in sync, and the placeholder/session overlays end up drawn on
+        // top of somebody's unrelated YouTube browsing. Only sub-frame loads (the iframe
+        // player itself and its media/thumbnail hosts) are allowed through.
         setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String host = request.getUrl() != null ? request.getUrl().getHost() : null;
-                return !isYouTubeHost(host);
+                if (!isYouTubeHost(host)) return true;
+                return request.isForMainFrame();
             }
         });
 
@@ -217,6 +227,23 @@ public class WatchTogetherPlayerView extends WebView {
 
     public void stop() {
         eval("WT.stop()");
+    }
+
+    /**
+     * Returns the surface to a genuinely blank player page.
+     *
+     * <p>{@link #stop()} is a command to the IFrame player, so it can only clear pixels the
+     * player still owns. It does nothing when the page is showing YouTube's own
+     * "This video is unavailable" error card, and nothing when the embed has been torn down —
+     * that stale content then stays on screen underneath the Activity's idle/ended
+     * placeholder, producing two messages overlapping in the same space. Reloading the asset
+     * discards whatever the page had become and rebuilds the bridge, so the next cue() starts
+     * from a clean player.
+     */
+    public void reset() {
+        lastKnownPositionMs = 0L;
+        lastKnownPlaying = false;
+        loadPlayerPage();
     }
 
     /** Latest locally observed playback position, in ms. Used for drift comparison. */

@@ -71,6 +71,14 @@ public class WatchTogetherActivity extends AppCompatActivity
     /** Cycle of selectable playback speeds for {@link #btnPlaybackRate}. */
     private static final double[] RATE_STEPS = {0.5d, 0.75d, 1.0d, 1.25d, 1.5d, 2.0d};
 
+    /**
+     * Shown in place of the player when YouTube refuses the video on this device. Deliberately
+     * phrased around "here", because the usual cause is error 101/150 — the owner disallowed
+     * embedded playback — which is not a broken link and not something a retry fixes.
+     */
+    private static final String PLAYER_ERROR_MESSAGE =
+            "This video can't be played inside Watch Together. Pick another video to keep watching together.";
+
     private String callId;
     private String myUid;
     private String partnerName;
@@ -118,6 +126,15 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     /** The video ID currently cued into the WebView, so we only reload on a real change. */
     private String loadedVideoId;
+
+    /**
+     * The video ID the local player refused to play, if any.
+     *
+     * <p>Remembered per-video because reconcile() runs on every heartbeat: without this, the
+     * "can't be played" overlay would be wiped a second later by the next showActiveUi(),
+     * exposing YouTube's error card again. Cleared as soon as a different video is cued.
+     */
+    private String erroredVideoId;
 
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
     private final Runnable heartbeatRunnable = new Runnable() {
@@ -327,9 +344,13 @@ public class WatchTogetherActivity extends AppCompatActivity
 
         if (!state.isPlayable()) {
             // Session ended (or a malformed doc). Stop the local player and show the
-            // ended/idle placeholder.
+            // ended/idle placeholder. reset() as well as stop(): stop() cannot clear a
+            // YouTube error card or a paused last frame, and anything left behind would sit
+            // under the placeholder we are about to show.
             player.stop();
-            loadedVideoId = null;
+            player.reset();
+            loadedVideoId  = null;
+            erroredVideoId = null;
             showEndedUi(state);
             return;
         }
@@ -340,7 +361,7 @@ public class WatchTogetherActivity extends AppCompatActivity
             return;
         }
 
-        showActiveUi();
+        showActiveUi(state.videoId);
 
         // Project the target position from locally measured elapsed time — writer and
         // reader clocks are NOT comparable, so updatedAtMs is never used here.
@@ -348,7 +369,8 @@ public class WatchTogetherActivity extends AppCompatActivity
         long target  = WatchTogetherState.projectedPositionMs(state, elapsed);
 
         if (!state.videoId.equals(loadedVideoId)) {
-            loadedVideoId = state.videoId;
+            loadedVideoId  = state.videoId;
+            erroredVideoId = null;
             player.cue(state.videoId, target, state.playing, state.playbackRate);
         } else {
             long local = player.getLastKnownPositionMs();
@@ -698,24 +720,61 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     // ── UI state ────────────────────────────────────────────────────────────
 
-    private void showActiveUi() {
-        if (tvPlaceholder != null) tvPlaceholder.setVisibility(View.GONE);
-        if (controlsRow   != null) controlsRow.setVisibility(View.VISIBLE);
-        if (tvStatus      != null) {
-            tvStatus.setText("You and " + partnerName + " are watching together");
+    /**
+     * Shows the live player for {@code videoId} — unless that exact video already failed
+     * locally, in which case the failure message stays put instead of being replaced by a
+     * player that cannot play anything.
+     */
+    private void showActiveUi(String videoId) {
+        boolean failedHere = erroredVideoId != null && erroredVideoId.equals(videoId);
+
+        // Controls follow the surface: transport buttons over an error message would claim
+        // playback this device does not have.
+        if (controlsRow != null) {
+            controlsRow.setVisibility(failedHere ? View.GONE : View.VISIBLE);
+        }
+        if (tvStatus != null) {
+            tvStatus.setText(failedHere
+                    ? "" : "You and " + partnerName + " are watching together");
+        }
+
+        if (failedHere) {
+            showOverlayMessage(PLAYER_ERROR_MESSAGE);
+        } else {
+            showPlayerSurface();
         }
     }
 
     private void showEndedUi(WatchTogetherState state) {
         if (controlsRow != null) controlsRow.setVisibility(View.GONE);
+        boolean hadSession = state != null && state.videoId != null && !state.videoId.isEmpty();
+        showOverlayMessage(hadSession
+                ? "Watch Together ended. Search or paste a link to start again."
+                : "Search YouTube or paste a link below to start watching together.");
+        if (tvStatus != null) tvStatus.setText("");
+    }
+
+    /**
+     * Reveals the player and hides the text overlay.
+     *
+     * <p>The two are strictly exclusive, and that is the whole point: the overlay is a
+     * transparent, match_parent TextView stacked on top of the WebView, so whenever both were
+     * visible their text composited into one illegible block — the idle "Search YouTube or
+     * paste a link…" copy printed straight through YouTube's "This video is unavailable" card
+     * and through live video. Toggling the WebView's visibility alongside the overlay makes
+     * that state unreachable no matter what the page happens to be showing.
+     */
+    private void showPlayerSurface() {
+        if (player        != null) player.setVisibility(View.VISIBLE);
+        if (tvPlaceholder != null) tvPlaceholder.setVisibility(View.GONE);
+    }
+
+    private void showOverlayMessage(String message) {
+        if (player != null) player.setVisibility(View.INVISIBLE);
         if (tvPlaceholder != null) {
-            boolean hadSession = state != null && state.videoId != null && !state.videoId.isEmpty();
-            tvPlaceholder.setText(hadSession
-                    ? "Watch Together ended. Search or paste a link to start again."
-                    : "Search YouTube or paste a link below to start watching together.");
+            tvPlaceholder.setText(message);
             tvPlaceholder.setVisibility(View.VISIBLE);
         }
-        if (tvStatus != null) tvStatus.setText("");
     }
 
     private void updatePlayPauseIcon(boolean playing) {
@@ -759,5 +818,17 @@ public class WatchTogetherActivity extends AppCompatActivity
     @Override
     public void onPlayerError(int code) {
         Log.w(TAG, "YouTube player error code=" + code);
+
+        // Previously this only logged, so the page was left displaying YouTube's own error
+        // card with our idle placeholder printed over the top of it, and the controls still
+        // implied a running session. Own the failure instead: hide the dead player behind our
+        // own message and remember the video so reconcile()'s next pass does not un-hide it.
+        // The session document is left untouched on purpose — the error is per-device (an
+        // embed can fail here and play fine for the other participant), so ending the shared
+        // session from one side would be wrong.
+        erroredVideoId = loadedVideoId;
+        showOverlayMessage(PLAYER_ERROR_MESSAGE);
+        if (controlsRow != null) controlsRow.setVisibility(View.GONE);
+        if (tvStatus != null) tvStatus.setText("");
     }
 }
