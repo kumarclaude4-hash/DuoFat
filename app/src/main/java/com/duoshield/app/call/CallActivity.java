@@ -257,6 +257,20 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         setupButtons();
         setupAudio();
 
+        // Attach the in-call chat banner listener as early as we possibly can.
+        //
+        // It used to be attached only from inside doStartCall(), which fires when the TURN
+        // prefetch callback returns *or* after a 3-second hard timeout. Every message the
+        // partner sent during that window was lost, and since the two devices reach that
+        // point at different times (TURN disk-cache warmth differs per device), the loss
+        // landed on one side only — the other half of the "pop-up shows on one side" report.
+        //
+        // The callee already knows its callId here (it arrives in the Intent) so it can
+        // start listening immediately; the caller has no callId until startCall() mints one,
+        // so it attaches from doStartCall(). listenForInCallMessages() is idempotent, so
+        // whichever path applies runs once and the other is a harmless no-op.
+        listenForInCallMessages();
+
         callManager = new CallManager(this);
         callManager.setListener(this);
 
@@ -359,9 +373,19 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             }
 
             // Start listening for in-call chat messages so we can show Google Meet-style
-            // banners when the partner sends a message (video calls only — audio calls
-            // have no chat feature).
-            if (isVideo) listenForInCallMessages();
+            // banners when the partner sends a message.
+            //
+            // This is the CALLER's attach point: the callee already attached in onCreate
+            // (its callId arrives in the Intent), but the caller's callId only comes into
+            // existence when CallManager.startCall() generates it a few lines above.
+            //
+            // Deliberately NOT gated on isVideo any more. The old `if (isVideo)` gate was
+            // justified as "audio calls have no chat", but the camera-permission fallback
+            // above can flip isVideo to false *after* setupButtons() has already made the
+            // chat button visible — leaving that device with a reachable chat whose
+            // banners never fire, while the partner's still do. The chat path is pure
+            // Firestore and does not depend on the video track at all.
+            listenForInCallMessages();
         };
 
         // Hard deadline: start the call after 3 s even if TURN fetch is still in-flight.
@@ -900,45 +924,61 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     /**
      * Listens for new in-call chat messages and shows a banner for partner messages.
      *
-     * <p>Previous implementation filtered by {@code ts > System.currentTimeMillis()}.
-     * This caused one-way notification failures: if device clocks differ by even a
-     * few seconds, the partner's messages arrive with a ts < our listenStartMs and
-     * the query silently drops them. The caller or callee would then never see the
-     * banner for the other party's messages.
+     * <p><b>History of this bug.</b> The first implementation filtered by
+     * {@code ts > listenStartMs}. With even a few seconds of clock skew between the
+     * two devices the partner's messages carried a smaller ts and the query dropped
+     * them, so one side never got a banner.
      *
-     * <p>Fix: listen from the beginning of the subcollection (no ts filter) and use
-     * an initial-load seed pass to mark all already-existing messages as seen so
-     * they don't trigger spurious banners. Every ADDED document after the first
-     * snapshot is a genuinely new message.
+     * <p>The follow-up fix removed the ts filter but added an "initial load" pass
+     * that marked <em>every</em> document in the first snapshot as already-seen and
+     * returned early. That reintroduced the same one-sided symptom for a different
+     * reason: the content of Firestore's first snapshot is not deterministic. It is
+     * raised from the local cache when there is cached data and from the server
+     * otherwise, so whether a freshly-sent message lands *in* the first snapshot or
+     * arrives *after* it as an ADDED change depends on cache warmth and round-trip
+     * timing — which differ per device. On the device where the message happened to
+     * be inside that first snapshot it was silently swallowed as "history" and the
+     * banner never fired, while the other device saw it as ADDED and worked. Hence
+     * "the pop-up only comes on one side".
+     *
+     * <p><b>Current approach.</b> The {@code calls/{callId}/chat} subcollection is
+     * created fresh for each call and swept when the call document is deleted, so
+     * there is no historical backlog that needs suppressing — the seed pass had no
+     * legitimate purpose. Every ADDED change is therefore processed, with
+     * {@link #seenChatMsgIds} as the only dedupe (it also absorbs the duplicate
+     * cache→server delivery of the same document). No wall-clock comparison is
+     * involved, so device clock skew cannot affect it either.
      */
     private void listenForInCallMessages() {
         if (callId == null || myUid == null) return;
-        final boolean[] initialLoadDone = {false};
+        // Idempotent: the callee attaches from onCreate (callId arrives in the Intent)
+        // and the caller attaches as soon as CallManager has generated the callId.
+        // Whichever path runs first wins; a second call is a no-op rather than a
+        // duplicate listener that would double-banner every message.
+        if (chatMessageListener != null) return;
+
         chatMessageListener = FirebaseFirestore.getInstance()
                 .collection("calls").document(callId)
                 .collection("chat")
                 .orderBy("ts", com.google.firebase.firestore.Query.Direction.ASCENDING)
                 .addSnapshotListener((snapshots, e) -> {
-                    if (e != null || snapshots == null) return;
-                    if (!initialLoadDone[0]) {
-                        // Seed seen-set with every document already in the subcollection
-                        // so we never banner for messages sent before our listener started.
-                        for (DocumentSnapshot ds : snapshots.getDocuments()) {
-                            seenChatMsgIds.add(ds.getId());
-                        }
-                        initialLoadDone[0] = true;
+                    if (e != null) {
+                        // Never fail silently: a PERMISSION_DENIED or transient network
+                        // error here is invisible to the user and looks exactly like
+                        // "the banner works for them but not for me".
+                        Log.w(TAG, "In-call chat listener error — banners may be missed", e);
                         return;
                     }
-                    // Incremental updates: only process ADDED changes from the partner
+                    if (snapshots == null) return;
                     for (DocumentChange dc : snapshots.getDocumentChanges()) {
                         if (dc.getType() != DocumentChange.Type.ADDED) continue;
                         String senderId = dc.getDocument().getString("senderId");
                         if (myUid.equals(senderId)) continue; // skip my own messages
                         String text = dc.getDocument().getString("text");
                         if (text == null || text.isEmpty()) continue;
-                        String docId = dc.getDocument().getId();
-                        if (seenChatMsgIds.contains(docId)) continue;
-                        seenChatMsgIds.add(docId);
+                        // Set.add() returns false when the id was already present, so this
+                        // is both the "already bannered" check and the record, in one step.
+                        if (!seenChatMsgIds.add(dc.getDocument().getId())) continue;
                         String preview = text.length() > 48 ? text.substring(0, 48) + "…" : text;
                         runOnUiThread(() -> showNewMessageBanner(preview));
                     }
