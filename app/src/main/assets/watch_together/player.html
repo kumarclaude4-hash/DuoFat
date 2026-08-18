@@ -28,6 +28,9 @@
     WT.seek(positionMs)
     WT.setRate(rate)
     WT.stop()
+    WT.setVolume(volume0to100)
+    WT.mute()
+    WT.unMute()
 
   JS -> Java (@JavascriptInterface on object named DuoShieldWT):
     DuoShieldWT.onPlayerReady()
@@ -77,6 +80,13 @@
       // here and replayed on ready. Without this, a fast Firestore snapshot arriving
       // before onYouTubeIframeAPIReady would be silently dropped.
       var pending = null;
+
+      // Volume/mute requested before the player was ready. Replayed on onReady, in the
+      // same spirit as `pending` above: Java attenuates the video the moment it learns the
+      // player exists, and that command must not be dropped if it wins the race.
+      // null means "nothing was requested", which is distinct from 0 / false.
+      var pendingVolume = null;
+      var pendingMuted = null;
 
       function bridge() {
         return (typeof DuoShieldWT !== 'undefined') ? DuoShieldWT : null;
@@ -192,6 +202,49 @@
         stop: function () {
           stopTicking();
           if (ready && player) safe(function () { player.stopVideo(); });
+        },
+
+        /**
+         * Sets the embed's volume, 0-100.
+         *
+         * WHY THIS EXISTS: the video plays underneath a live voice call. Without
+         * attenuation the two audio sources compete at equal loudness and the
+         * participants cannot hear each other over the video.
+         *
+         * Deliberately NOT implemented with Android audio focus. CallActivity holds
+         * AUDIOFOCUS_GAIN and its focus-change listener responds to any loss by muting the
+         * local microphone (callManager.setMuted(true)), only restoring it on
+         * AUDIOFOCUS_GAIN. So requesting even transient focus from the Watch Together
+         * screen would silence the user's own mic for the whole watch session. Lowering the
+         * player's volume achieves the ducking intent with no focus transaction at all.
+         *
+         * Queued exactly like cue() when the player is not ready yet: Java applies the
+         * initial attenuation as soon as it hears about onPlayerReady, but a race between
+         * that callback and the first cue is cheap to close here rather than reason about.
+         */
+        setVolume: function (v) {
+          var vol = Math.max(0, Math.min(100, Math.round(v || 0)));
+          if (!ready || !player) {
+            pendingVolume = vol;
+            return;
+          }
+          safe(function () { player.setVolume(vol); });
+        },
+
+        mute: function () {
+          if (!ready || !player) {
+            pendingMuted = true;
+            return;
+          }
+          safe(function () { player.mute(); });
+        },
+
+        unMute: function () {
+          if (!ready || !player) {
+            pendingMuted = false;
+            return;
+          }
+          safe(function () { player.unMute(); });
         }
       };
 
@@ -216,6 +269,20 @@
             onReady: function () {
               ready = true;
               startTicking();
+
+              // Applied BEFORE the pending cue below, so a queued video never gets to play
+              // even one frame at full volume over the top of the call.
+              if (pendingVolume !== null) {
+                var v = pendingVolume;
+                pendingVolume = null;
+                window.WT.setVolume(v);
+              }
+              if (pendingMuted !== null) {
+                var m = pendingMuted;
+                pendingMuted = null;
+                if (m) window.WT.mute(); else window.WT.unMute();
+              }
+
               var b = bridge();
               if (b && b.onPlayerReady) safe(function () { b.onPlayerReady(); });
               if (pending) {

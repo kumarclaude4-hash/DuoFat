@@ -232,6 +232,105 @@ public class YouTubeSearchStateTest {
         assertFalse(state.message().trim().isEmpty());
     }
 
+    // ── Retryability ──────────────────────────────────────────────────────────
+    // The Retry affordance is driven from here. The failures that cannot be fixed by tapping
+    // again must not offer it — a button whose only possible outcome is the identical error,
+    // shown under copy that just told the user to do something else, is worse than no button.
+
+    @Test
+    public void terminalFailuresAreNotRetryable() {
+        int[] terminal = {
+                YouTubeSearchParser.STATUS_NOT_CONFIGURED, // search is not in this build
+                400,                                       // YouTube rejected the terms
+                413,                                       // query too long
+        };
+        for (int status : terminal) {
+            YouTubeSearchState s = new YouTubeSearchState();
+            long t = s.beginSearch("lofi beats");
+            assertTrue(s.onError(t, YouTubeSearchParser.messageForStatus(status, null), status));
+            assertEquals(YouTubeSearchState.Phase.ERROR, s.phase());
+            assertFalse("status " + status + " must not offer Retry", s.isRetryable());
+        }
+    }
+
+    @Test
+    public void transientFailuresAreRetryable() {
+        int[] transientStatuses = {
+                YouTubeSearchParser.STATUS_NETWORK_FAILURE,
+                401, 429, 500, 502, 503, 504,
+        };
+        for (int status : transientStatuses) {
+            YouTubeSearchState s = new YouTubeSearchState();
+            long t = s.beginSearch("lofi beats");
+            assertTrue(s.onError(t, YouTubeSearchParser.messageForStatus(status, null), status));
+            assertTrue("status " + status + " must offer Retry", s.isRetryable());
+        }
+    }
+
+    /** The pre-existing two-arg signature must keep the historical permissive behaviour. */
+    @Test
+    public void legacyOnErrorKeepsOfferingRetry() {
+        long t = state.beginSearch("lofi beats");
+        assertTrue(state.onError(t, "Search failed. Try again."));
+        assertTrue(state.isRetryable());
+    }
+
+    @Test
+    public void explicitUnknownStatusKeepsOfferingRetry() {
+        long t = state.beginSearch("lofi beats");
+        assertTrue(state.onError(t, "Search failed. Try again.",
+                YouTubeSearchState.RETRYABLE_UNKNOWN));
+        assertTrue(state.isRetryable());
+    }
+
+    /**
+     * A non-retryable verdict describes one response. It must not survive into the next
+     * dispatch, a success, a too-short hint, or a reset — otherwise a single 400 would
+     * suppress Retry for every later network failure in the session.
+     */
+    @Test
+    public void nonRetryableVerdictDoesNotLeakForward() {
+        long t = state.beginSearch("lofi beats");
+        state.onError(t, "too long", 413);
+        assertFalse(state.isRetryable());
+
+        long t2 = state.beginSearch("lofi beats");
+        assertTrue("a new dispatch clears the previous verdict", state.isRetryable());
+        state.onError(t2, "No connection.", YouTubeSearchParser.STATUS_NETWORK_FAILURE);
+        assertTrue(state.isRetryable());
+
+        state.onError(state.beginSearch("q"), "too long", 413);
+        assertFalse(state.isRetryable());
+        state.onResults(state.currentToken(), rows(row(ID, "A")));
+        assertTrue("a success clears it", state.isRetryable());
+
+        state.onError(state.beginSearch("q2"), "too long", 413);
+        state.markTooShort();
+        assertTrue("markTooShort clears it", state.isRetryable());
+
+        state.onError(state.beginSearch("q3"), "too long", 413);
+        state.reset();
+        assertTrue("reset restores the default", state.isRetryable());
+    }
+
+    @Test
+    public void freshStateDefaultsToRetryable() {
+        assertTrue(new YouTubeSearchState().isRetryable());
+    }
+
+    @Test
+    public void staleErrorCannotChangeRetryability() {
+        long slow = state.beginSearch("lofi");
+        long fast = state.beginSearch("lofi beats");
+        state.onError(fast, "No connection.", YouTubeSearchParser.STATUS_NETWORK_FAILURE);
+        assertTrue(state.isRetryable());
+
+        // A late 400 for the abandoned query must not hide the Retry button for the error
+        // actually on screen.
+        assertFalse(state.onError(slow, "bad query", 400));
+        assertTrue(state.isRetryable());
+    }
+
     // ── Stale-response rejection ──────────────────────────────────────────────
 
     @Test

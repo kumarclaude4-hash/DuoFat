@@ -44,6 +44,15 @@ public final class YouTubeSearchState {
     /** How many results to request. Server clamps to [1, 15]. */
     public static final int PAGE_SIZE = 12;
 
+    /**
+     * Passed as the status to {@link #onError(long, String, int)} when the caller genuinely
+     * does not know it, keeping the permissive "offer Retry" default.
+     *
+     * <p>Distinct from every real status and from both of {@link YouTubeSearchParser}'s
+     * negative sentinels, so it can never be confused for one.
+     */
+    public static final int RETRYABLE_UNKNOWN = Integer.MIN_VALUE;
+
     /** What the search area should be showing. */
     public enum Phase {
         /** Nothing typed, or the panel is closed. Search UI hidden. */
@@ -69,6 +78,13 @@ public final class YouTubeSearchState {
 
     /** Monotonic dispatch counter. 0 means "nothing has ever been dispatched". */
     private long token = 0L;
+
+    /**
+     * Whether the current {@link Phase#ERROR} is worth retrying. Meaningless in every other
+     * phase. Defaults to {@code true} so any path that does not supply a status keeps the
+     * historical "offer Retry" behaviour rather than silently hiding the affordance.
+     */
+    private boolean retryable = true;
 
     // ── Query normalisation / validation (static, no instance state) ───────────
 
@@ -154,6 +170,18 @@ public final class YouTubeSearchState {
         return phase == Phase.LOADING;
     }
 
+    /**
+     * Whether the failure currently on screen could plausibly succeed if the identical query
+     * were sent again — i.e. whether a Retry affordance is honest.
+     *
+     * <p>Only meaningful while {@link #phase()} is {@link Phase#ERROR}. Callers should gate on
+     * the phase first; this deliberately does not fold the phase check in, so the two concerns
+     * stay separately testable.
+     */
+    public boolean isRetryable() {
+        return retryable;
+    }
+
     // ── Transitions ───────────────────────────────────────────────────────────
 
     /**
@@ -181,6 +209,9 @@ public final class YouTubeSearchState {
         message = "";
         results = Collections.emptyList();
         activeQuery = normalized == null ? "" : normalized;
+        // Clear any verdict left over from a previous failure: it describes a status this
+        // dispatch has not received yet.
+        retryable = true;
         return ++token;
     }
 
@@ -203,17 +234,47 @@ public final class YouTubeSearchState {
         // UI can say "no matches" rather than showing a scary error.
         phase = safe.isEmpty() ? Phase.EMPTY : Phase.RESULTS;
         message = "";
+        retryable = true;
         return true;
     }
 
-    /** Applies a failure. Ignored (returns {@code false}) when the token is stale. */
+    /**
+     * Applies a failure. Ignored (returns {@code false}) when the token is stale.
+     *
+     * <p>Retained signature: leaves {@link #isRetryable()} at its permissive default, which is
+     * the historical behaviour (the UI offered Retry for every error). Prefer
+     * {@link #onError(long, String, int)} — the overload that knows the status — for anything
+     * user-facing.
+     */
     public boolean onError(long responseToken, String userMessage) {
+        return onError(responseToken, userMessage, RETRYABLE_UNKNOWN);
+    }
+
+    /**
+     * Applies a failure and records whether retrying the identical query could plausibly
+     * succeed, per {@link YouTubeSearchParser#isRetryable(int)}.
+     *
+     * <p><strong>Why the status has to be carried here.</strong> {@code isRetryable} existed,
+     * was fully unit tested, and had no production caller — the UI simply showed a Retry button
+     * for every {@link Phase#ERROR}. That means the three genuinely terminal failures
+     * ({@code STATUS_NOT_CONFIGURED} — search is not built into this APK at all; {@code 400} —
+     * YouTube rejected the terms; {@code 413} — the query is too long) each rendered a button
+     * whose only possible outcome was the identical error, next to copy that had just told the
+     * user to do something else ("Paste a YouTube link instead", "Try fewer words"). Every one
+     * of those taps is also a wasted round trip. The state machine is the only thing that
+     * survives between the response and the render, so the decision has to be recorded here.
+     *
+     * @param status an HTTP status, or one of {@link YouTubeSearchParser}'s two non-HTTP
+     *               sentinels, or {@link #RETRYABLE_UNKNOWN} to keep the permissive default
+     */
+    public boolean onError(long responseToken, String userMessage, int status) {
         if (!isCurrent(responseToken)) return false;
         results = Collections.emptyList();
         phase = Phase.ERROR;
         message = (userMessage == null || userMessage.trim().isEmpty())
                 ? "Search failed. Try again."
                 : userMessage.trim();
+        retryable = (status == RETRYABLE_UNKNOWN) || YouTubeSearchParser.isRetryable(status);
         return true;
     }
 
@@ -228,6 +289,7 @@ public final class YouTubeSearchState {
         message = "";
         results = Collections.emptyList();
         activeQuery = "";
+        retryable = true;
         token++;
     }
 
@@ -243,6 +305,7 @@ public final class YouTubeSearchState {
         message = "";
         results = Collections.emptyList();
         activeQuery = "";
+        retryable = true;
         token++;
     }
 

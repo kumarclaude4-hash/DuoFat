@@ -252,6 +252,28 @@
             android:textSize="14sp"
             android:textAllCaps="false"
             android:contentDescription="Change playback speed" />
+
+        <!--
+          Mutes the VIDEO on this device only — never the call, and never the other
+          participant's video. The video already plays attenuated so voices sit on top of it;
+          this is the escape hatch for when someone needs the video silent entirely (to talk,
+          or to listen to the call audio alone) without pausing playback for both people.
+
+          Deliberately device-local and never written to the session document: muting is a
+          personal listening choice, unlike play/pause/seek/rate which are shared intent.
+        -->
+        <Button
+            android:id="@+id/btnWatchMute"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="56dp"
+            android:text="Vol"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textAllCaps="false"
+            android:contentDescription="Mute or unmute the video on this device" />
     </LinearLayout>
 
     <!-- ── Start / change video input row ── -->

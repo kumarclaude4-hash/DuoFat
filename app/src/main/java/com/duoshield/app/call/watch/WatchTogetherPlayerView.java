@@ -35,7 +35,8 @@ import java.util.Locale;
  *
  * <p><strong>Bridge contract.</strong> Must stay in sync with {@code player.html}:
  * <ul>
- *   <li>Java → JS ({@code evaluateJavascript}): {@code WT.cue/play/pause/seek/setRate/stop}.</li>
+ *   <li>Java → JS ({@code evaluateJavascript}):
+ *       {@code WT.cue/play/pause/seek/setRate/stop/setVolume/mute/unMute}.</li>
  *   <li>JS → Java ({@code @JavascriptInterface} on {@code DuoShieldWT}):
  *       {@code onPlayerReady}, {@code onPlayerStateChange}, {@code onPositionTick},
  *       {@code onPlaybackRateChange}, {@code onPlayerError}.</li>
@@ -99,6 +100,17 @@ public class WatchTogetherPlayerView extends WebView {
      */
     private volatile long lastKnownPositionRealtime = 0L;
     private volatile double lastKnownRate = WatchTogetherState.DEFAULT_PLAYBACK_RATE;
+
+    /**
+     * Set once {@link #destroy()} has run. Every path that could reach the WebView after
+     * teardown checks it: {@code evaluateJavascript} on a destroyed WebView throws, and JS
+     * callbacks are marshalled through a {@link Handler} so one can already be queued when
+     * the Activity tears the player down.
+     */
+    private boolean destroyed;
+
+    /** Tracks {@link #onPause()}/{@link #onResume()} so neither can be applied twice. */
+    private boolean paused;
 
     public WatchTogetherPlayerView(Context context) {
         super(context);
@@ -183,6 +195,7 @@ public class WatchTogetherPlayerView extends WebView {
     }
 
     private void loadPlayerPage() {
+        if (destroyed) return;
         String html = readAsset();
         if (html == null) {
             Log.e(TAG, "Could not read " + PLAYER_ASSET + " — player will not load");
@@ -244,6 +257,33 @@ public class WatchTogetherPlayerView extends WebView {
 
     public void stop() {
         eval("WT.stop()");
+    }
+
+    /**
+     * Sets the video's volume as a percentage, clamped to {@code [0, 100]}.
+     *
+     * <p><strong>Why volume and not audio focus.</strong> This screen runs on top of a live
+     * WebRTC voice call. {@code CallActivity} holds {@code AUDIOFOCUS_GAIN} and its
+     * focus-change listener treats <em>any</em> loss — including
+     * {@code AUDIOFOCUS_LOSS_TRANSIENT}, which is what a "duck the other app" request
+     * produces — by calling {@code callManager.setMuted(true)}, i.e. disabling the local
+     * audio track, and only restores it on {@code AUDIOFOCUS_GAIN}. Requesting focus from
+     * here would therefore mute the user's own microphone for the entire watch session,
+     * exactly when they most want to talk. Attenuating the player instead achieves the same
+     * perceptual result and touches no call audio at all.
+     */
+    public void setVolume(int volumePercent) {
+        int clamped = Math.max(0, Math.min(100, volumePercent));
+        eval("WT.setVolume(" + clamped + ")");
+    }
+
+    /**
+     * Mutes or unmutes the video only. Deliberately device-local: it is never written to the
+     * shared session document, because one participant silencing the video for themselves
+     * must not silence it for the other.
+     */
+    public void setMuted(boolean muted) {
+        eval(muted ? "WT.mute()" : "WT.unMute()");
     }
 
     /**
@@ -316,8 +356,96 @@ public class WatchTogetherPlayerView extends WebView {
         return rate > 0d ? rate : WatchTogetherState.DEFAULT_PLAYBACK_RATE;
     }
 
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    /**
+     * Pauses the page's timers and any media it owns.
+     *
+     * <p>Declared explicitly rather than relying on the inherited {@link WebView#onPause()}
+     * because {@code WatchTogetherActivity} depends on this contract in {@code onPause()} —
+     * and, critically, on the fact that a paused page stops ticking, which is what
+     * {@link #hasFreshPosition()} and the heartbeat's stall-handover logic are built around.
+     * A silently inherited method can be changed by a dependency bump without anything here
+     * noticing; an override cannot.
+     *
+     * <p>Guarded against a double-pause: the framework can deliver {@code onPause} more than
+     * once around a configuration change, and pausing an already-paused WebView is documented
+     * as undefined rather than idempotent.
+     */
+    @Override
+    public void onPause() {
+        if (destroyed || paused) return;
+        paused = true;
+        super.onPause();
+    }
+
+    /** Counterpart to {@link #onPause()}; a no-op unless this view is actually paused. */
+    @Override
+    public void onResume() {
+        if (destroyed || !paused) return;
+        paused = false;
+        super.onResume();
+    }
+
+    /**
+     * Tears the player down in the order the WebView contract requires.
+     *
+     * <p>{@code WebView.destroy()} is only safe on a WebView that has already been removed
+     * from its view hierarchy — the framework documents calling it while still attached as
+     * undefined behaviour, and in practice it is a known crash/leak path (the render process
+     * keeps a reference to a view whose window is going away). Nothing in this class or the
+     * Activity previously did that removal, so every session leaked a WebView at best.
+     *
+     * <p>Order matters and each step exists for a reason:
+     * <ol>
+     *   <li>Stop the page doing anything: {@code stopLoading()} plus {@code about:blank}
+     *       discards the YouTube embed, which is what actually stops the video's audio. A
+     *       {@code destroy()} on its own can leave media playing for a moment.</li>
+     *   <li>Drop the JS bridge, so a tick already queued on the WebView thread cannot reach
+     *       a {@link Listener} attached to a dying Activity.</li>
+     *   <li>Detach from the parent, satisfying the "not attached" precondition.</li>
+     *   <li>Only then {@code super.destroy()}.</li>
+     * </ol>
+     *
+     * <p>Idempotent: {@code destroy()} on an already-destroyed WebView throws, and both the
+     * Activity and the framework can plausibly reach here.
+     */
+    @Override
+    public void destroy() {
+        if (destroyed) return;
+        destroyed = true;
+
+        listener = null;
+
+        try {
+            // Stop ticking at the source. stopTicking() lives in the page, so it goes away
+            // with the page below; this just makes sure nothing is mid-flight first.
+            stopLoading();
+            removeJavascriptInterface(BRIDGE_NAME);
+            // about:blank tears down the YouTube iframe (and therefore its audio) while the
+            // WebView is still in a valid state to load something.
+            loadUrl("about:blank");
+        } catch (Exception e) {
+            Log.w(TAG, "destroy: pre-teardown failed (non-fatal): " + e.getMessage());
+        }
+
+        try {
+            android.view.ViewParent parent = getParent();
+            if (parent instanceof android.view.ViewGroup) {
+                ((android.view.ViewGroup) parent).removeView(this);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "destroy: detach failed (non-fatal): " + e.getMessage());
+        }
+
+        super.destroy();
+    }
+
     private void eval(final String js) {
+        if (destroyed) return;
         main.post(() -> {
+            // Re-checked inside the post: destroy() can land between the two.
+            if (destroyed) return;
             try {
                 evaluateJavascript(js, null);
             } catch (Exception e) {
