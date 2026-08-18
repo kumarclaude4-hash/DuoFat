@@ -92,11 +92,19 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <!-- Shown before a session starts and after it ends -->
+        <!--
+          Shown before a session starts, after it ends, and when the local player refuses the
+          video. Opaque, not transparent: it is stacked on top of the WebView, and a see-through
+          overlay let its copy composite with whatever the page was still displaying (live video,
+          a paused frame, or YouTube's "This video is unavailable" card) into one unreadable
+          pile of overlapping text. The Activity also hides the player whenever this is visible;
+          the solid background is the belt to that braces.
+        -->
         <TextView
             android:id="@+id/tvPlayerPlaceholder"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:background="#000000"
             android:gravity="center"
             android:padding="24dp"
             android:text="Search YouTube or paste a link below to start watching together."
