@@ -87,7 +87,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
    * doing so would hand an attacker holding a coerced seed phrase a signal
    * about what to try next.
    *
-   * <p>"The account does not exist" was chosen deliberately over a vaguer
+   * <p>"Account does not exist" was chosen deliberately over a vaguer
    * "restore failed, check your details" wording: it reads as a dead end
    * rather than an invitation to keep retrying, and it is the one explanation
    * that is simultaneously true-sounding for a wrong seed, a wrong Account ID,
@@ -95,7 +95,7 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
    * screen where a locked account's owner benefits from the attacker knowing
    * the account is real but inaccessible instead of believing it never existed.
    */
-  private static final String GENERIC_RESTORE_FAILURE = "The account does not exist.";
+  private static final String GENERIC_RESTORE_FAILURE = "Account does not exist.";
 
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
@@ -825,9 +825,25 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         // Credential-mismatch cases are deliberately collapsed to the same generic
         // message as the client-side derivedUserId check above — see
         // GENERIC_RESTORE_FAILURE's javadoc for why distinguishing them is unsafe.
+        // Every server-side refusal of a restore is folded in here, not just the
+        // key-mismatch ones. A locked (duress-latched) account is rejected by
+        // /mintToken with the 403 body "Access request not approved", and
+        // AuthTokenHelper deliberately re-throws that reason string verbatim so the
+        // *signup* screen can tell an unapproved invite apart from a bad key. On
+        // this screen that same string used to fall through to the "Restore failed:
+        // <message>" tail, printing "Restore failed: Access request not approved" —
+        // a message no other failure produces, which told anyone holding a coerced
+        // seed phrase that the account is real and was locked rather than never
+        // having existed. That is exactly the inference GENERIC_RESTORE_FAILURE
+        // exists to prevent, so match it (and the invite-gate string a restore of a
+        // never-created account produces) before the tail can reach it.
+        String lower = s.toLowerCase(Locale.ROOT);
         if (s.contains("Key mismatch") || s.contains("403")
                 || s.contains("Recovery phrase does not match")
-                || s.contains("Credential mismatch"))
+                || s.contains("Credential mismatch")
+                || lower.contains("access request")
+                || lower.contains("valid invite required")
+                || lower.contains("locked"))
             return GENERIC_RESTORE_FAILURE;
         if (s.contains("429") || s.contains("Too many"))
             return "Too many attempts. Please wait a moment and try again.";
