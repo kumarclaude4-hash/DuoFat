@@ -204,3 +204,92 @@ test("plain-object data (not a function) is also supported", () => {
   assert.equal(decision.allowed, true);
   assert.equal(decision.reason, SCOPE_ALLOW.CHAT);
 });
+
+// ── Avatar keys (SEC-A01 / profile-photo "Invalid key format" fix) ───────────
+// Profile photos are stored as `avatars/<ownerUid>_<millis>.jpg` — a two-segment
+// key that never matched the conversation-media allow-list, so every upload died
+// at /mediaToken with "400 Invalid key format". These assert the key shape the
+// client (SettingsActivity.uploadProfilePhoto) actually produces is recognised,
+// and that ownership is decided from the key alone with no Firestore I/O.
+
+// A representative real key: a 28-char Firebase UID + 13-digit millis timestamp.
+const AVATAR_OWNER = "aBcDeF1234567890AbCdEf123456";
+const AVATAR_KEY = `avatars/${AVATAR_OWNER}_1787064081340.jpg`;
+
+test("isAvatarKey accepts the key shape the client uploads", () => {
+  assert.equal(isAvatarKey(AVATAR_KEY), true);
+  // Shortest/longest UID bounds (8..64) and the 10..17 digit timestamp bounds.
+  assert.equal(isAvatarKey("avatars/12345678_1000000000.jpg"), true);
+  assert.equal(isAvatarKey(`avatars/${"a".repeat(64)}_99999999999999999.jpg`), true);
+});
+
+test("isAvatarKey rejects conversation-media keys and malformed input", () => {
+  // A well-formed media key must NOT be mistaken for an avatar (and vice versa),
+  // so the two families keep their separate authorization questions.
+  assert.equal(isAvatarKey("media/chat0123456789abcd/photo.jpg"), false);
+  assert.equal(isAvatarKey("voice/chat0123456789abcd/clip.m4a"), false);
+  // Avatars are JPEG-only — no smuggling a video extension through this branch.
+  assert.equal(isAvatarKey(`avatars/${AVATAR_OWNER}_1787064081340.mp4`), false);
+  // Path traversal, missing timestamp, wrong prefix, non-string.
+  assert.equal(isAvatarKey("avatars/../etc/passwd"), false);
+  assert.equal(isAvatarKey(`avatars/${AVATAR_OWNER}.jpg`), false);
+  assert.equal(isAvatarKey("avatar/x_1787064081340.jpg"), false);
+  assert.equal(isAvatarKey(null), false);
+  assert.equal(isAvatarKey(42), false);
+});
+
+test("avatarOwnerFromKey extracts the owning UID, null on a non-avatar key", () => {
+  assert.equal(avatarOwnerFromKey(AVATAR_KEY), AVATAR_OWNER);
+  assert.equal(avatarOwnerFromKey("media/chat0123456789abcd/photo.jpg"), null);
+  assert.equal(avatarOwnerFromKey("not a key"), null);
+  assert.equal(avatarOwnerFromKey(undefined), null);
+});
+
+test("avatar write is allowed for the owner embedded in the key", () => {
+  const decision = decideAvatarAccess({ uid: AVATAR_OWNER, key: AVATAR_KEY, op: "write" });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, SCOPE_ALLOW.AVATAR_OWNER);
+});
+
+test("avatar write/delete is denied for anyone who is not the owner", () => {
+  for (const op of ["write", "delete"]) {
+    const decision = decideAvatarAccess({ uid: ATTACKER, key: AVATAR_KEY, op });
+    assert.equal(decision.allowed, false, `op=${op}`);
+    assert.equal(decision.reason, SCOPE_DENY.NOT_OWNER, `op=${op}`);
+  }
+});
+
+test("avatar delete is allowed for the owner", () => {
+  const decision = decideAvatarAccess({ uid: AVATAR_OWNER, key: AVATAR_KEY, op: "delete" });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, SCOPE_ALLOW.AVATAR_OWNER);
+});
+
+test("avatar read is allowed for any authenticated caller (partner avatars)", () => {
+  // Matches the existing exposure of photoUrl on users/{uid}: any signed-in
+  // user may read the bytes, so chat-list partner avatars load.
+  const decision = decideAvatarAccess({ uid: ATTACKER, key: AVATAR_KEY, op: "read" });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, SCOPE_ALLOW.AVATAR_READER);
+});
+
+test("avatar access fails closed on empty uid, bad key, or unknown verb", () => {
+  // Missing/empty uid — never authorize an anonymous caller.
+  for (const uid of [undefined, null, "", 0, {}]) {
+    const decision = decideAvatarAccess({ uid, key: AVATAR_KEY, op: "read" });
+    assert.equal(decision.allowed, false, `uid=${JSON.stringify(uid)}`);
+    assert.equal(decision.reason, SCOPE_DENY.BAD_INPUT, `uid=${JSON.stringify(uid)}`);
+  }
+  // A key that is not a well-formed avatar key is bad input, not a denial to reason about.
+  assert.deepEqual(
+    decideAvatarAccess({ uid: AVATAR_OWNER, key: "media/chat0123456789abcd/x.jpg", op: "write" }),
+    { allowed: false, reason: SCOPE_DENY.BAD_INPUT }
+  );
+  // Unknown verb must not fall through to the permissive read branch.
+  assert.deepEqual(
+    decideAvatarAccess({ uid: AVATAR_OWNER, key: AVATAR_KEY, op: "list" }),
+    { allowed: false, reason: SCOPE_DENY.BAD_INPUT }
+  );
+  // Called with nothing at all, denies rather than throwing.
+  assert.equal(decideAvatarAccess().allowed, false);
+});
