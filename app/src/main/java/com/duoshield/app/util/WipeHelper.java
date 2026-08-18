@@ -115,6 +115,24 @@ public class WipeHelper {
             Log.w(TAG, "clearDiskCache() failed during wipe (non-fatal)", e);
         }
 
+        // Step 3a: Delete the durable local profile photo. Like the b2_cache above, this
+        // lives directly in filesDir — NOT getCacheDir() — so neither step 3 nor the
+        // cache-directory delete in step 9 reaches it. It is a plain unencrypted JPEG of
+        // the account holder's face, readable without any key, so leaving it behind
+        // identifies the previous user and contradicts the fresh-install appearance a
+        // duress wipe must present. The ".tmp" sibling is the staging file used by
+        // SettingsActivity's atomic write-then-rename and can survive a crash mid-save.
+        for (String avatarFile : new String[]{"own_avatar.jpg", "own_avatar.jpg.tmp"}) {
+            try {
+                java.io.File f = new java.io.File(appCtx.getFilesDir(), avatarFile);
+                if (f.exists() && !f.delete()) {
+                    Log.w(TAG, "Could not delete " + avatarFile + " during wipe");
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Avatar delete failed during wipe (non-fatal): " + avatarFile, e);
+            }
+        }
+
         // Step 4: Destroy key material (Signal identity key pair, prekeys, PIN hashes,
         // SQLCipher DB key) synchronously.
         // NOTE: this clears the account-scoped SecurePrefs file only — the device-level
