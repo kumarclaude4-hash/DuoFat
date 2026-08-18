@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -62,6 +63,13 @@ public class WatchTogetherPlayerView extends WebView {
 
     private static final String PLAYER_ASSET = "watch_together/player.html";
 
+    /**
+     * Longest gap over which a stale position sample may be projected forward. Comfortably
+     * above the page's 500ms tick so normal jitter is still compensated, low enough that a
+     * page which stopped ticking cannot report an invented position.
+     */
+    private static final long MAX_PROJECTION_MS = 2_000L;
+
     /** YouTube IFrame player state code for "playing". */
     public static final int YT_STATE_PLAYING = 1;
     /** YouTube IFrame player state code for "ended". */
@@ -82,6 +90,15 @@ public class WatchTogetherPlayerView extends WebView {
     /** Most recent locally observed playback position, kept fresh by JS position ticks. */
     private volatile long lastKnownPositionMs = 0L;
     private volatile boolean lastKnownPlaying = false;
+
+    /**
+     * {@link SystemClock#elapsedRealtime()} when {@link #lastKnownPositionMs} was sampled,
+     * and the rate it was advancing at. Needed because a tick is only taken every
+     * {@code TICK_INTERVAL_MS}, so the cached position is up to that much out of date by the
+     * time Java reads it — see {@link #getEstimatedPositionMs()}.
+     */
+    private volatile long lastKnownPositionRealtime = 0L;
+    private volatile double lastKnownRate = WatchTogetherState.DEFAULT_PLAYBACK_RATE;
 
     public WatchTogetherPlayerView(Context context) {
         super(context);
@@ -243,12 +260,41 @@ public class WatchTogetherPlayerView extends WebView {
     public void reset() {
         lastKnownPositionMs = 0L;
         lastKnownPlaying = false;
+        lastKnownPositionRealtime = 0L;
+        lastKnownRate = WatchTogetherState.DEFAULT_PLAYBACK_RATE;
         loadPlayerPage();
     }
 
-    /** Latest locally observed playback position, in ms. Used for drift comparison. */
+    /** Latest raw sample of the local playback position, in ms, exactly as JS reported it. */
     public long getLastKnownPositionMs() {
         return lastKnownPositionMs;
+    }
+
+    /**
+     * Where the local player is <em>right now</em>: the last sample, advanced by the time
+     * that has passed since it was taken.
+     *
+     * <p>This, not {@link #getLastKnownPositionMs()}, is what may be compared against a
+     * target projected to the current instant. Positions arrive from JS only once per tick,
+     * so the raw sample is on average half a tick stale and always stale in the same
+     * direction — it reads low while playing. Comparing that against a live target made
+     * every drift measurement overstate how far behind this device was, so followers
+     * accumulated spurious forward seeks (doubly so at 2x rate, where the same tick gap is
+     * twice as many ms of video). A paused player is not projected: its position is not
+     * advancing.
+     */
+    public long getEstimatedPositionMs() {
+        long sample = lastKnownPositionMs;
+        if (!lastKnownPlaying || lastKnownPositionRealtime <= 0L) return sample;
+
+        long age = SystemClock.elapsedRealtime() - lastKnownPositionRealtime;
+        if (age <= 0L) return sample;
+        // A stale sample means ticks stopped arriving (backgrounded WebView, torn-down page).
+        // Projecting across a long gap would invent a position, so fall back to the sample.
+        if (age > MAX_PROJECTION_MS) return sample;
+
+        double rate = lastKnownRate > 0d ? lastKnownRate : WatchTogetherState.DEFAULT_PLAYBACK_RATE;
+        return Math.max(0L, sample + (long) (age * rate));
     }
 
     /** Whether the local player last reported that it was playing. */
@@ -286,6 +332,7 @@ public class WatchTogetherPlayerView extends WebView {
             final long pos = (long) Math.max(0d, positionMs);
             lastKnownPositionMs = pos;
             lastKnownPlaying = ytState == YT_STATE_PLAYING;
+            lastKnownPositionRealtime = SystemClock.elapsedRealtime();
             main.post(() -> {
                 if (listener != null) listener.onPlayerStateChange(ytState, pos);
             });
@@ -296,6 +343,10 @@ public class WatchTogetherPlayerView extends WebView {
                                    final double rate) {
             lastKnownPositionMs = (long) Math.max(0d, positionMs);
             lastKnownPlaying = playing;
+            lastKnownRate = rate > 0d ? rate : WatchTogetherState.DEFAULT_PLAYBACK_RATE;
+            // Stamped last: readers project from this, so it must never be newer than the
+            // sample it describes.
+            lastKnownPositionRealtime = SystemClock.elapsedRealtime();
         }
 
         @JavascriptInterface

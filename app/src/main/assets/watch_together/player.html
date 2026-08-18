@@ -141,6 +141,15 @@
             pending = { videoId: videoId, posMs: posMs, playing: playing, rate: rate };
             return;
           }
+          // Ticking must be (re)started by every command that can resume playback, not
+          // only by onReady. stop() clears the interval, and for a long time nothing ever
+          // set it up again, so after the first session ended this page stopped reporting
+          // positions for good. Java kept serving the last value it had received from
+          // getLastKnownPositionMs(), which silently poisoned everything downstream: the
+          // drift check compared a live target against a frozen local position, and the
+          // heartbeat published that frozen position to the peer every 10s, dragging the
+          // other device back to a timestamp from a previous video.
+          startTicking();
           var seconds = Math.max(0, (posMs || 0) / 1000);
           if (playing) {
             safe(function () { player.loadVideoById({ videoId: videoId, startSeconds: seconds }); });
@@ -153,15 +162,21 @@
         },
 
         play: function () {
-          if (ready && player) safe(function () { player.playVideo(); });
+          if (ready && player) {
+            startTicking();
+            safe(function () { player.playVideo(); });
+          }
         },
 
         pause: function () {
+          // Keep ticking while paused: Java still needs a fresh position to seed the next
+          // play/seek/rate write, and a paused position is cheap to read.
           if (ready && player) safe(function () { player.pauseVideo(); });
         },
 
         seek: function (posMs) {
           if (ready && player) {
+            startTicking();
             var seconds = Math.max(0, (posMs || 0) / 1000);
             // allowSeekAhead=true so seeking past the buffer issues a new request.
             safe(function () { player.seekTo(seconds, true); });
