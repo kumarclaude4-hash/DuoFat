@@ -72,6 +72,14 @@ public class WatchTogetherActivity extends AppCompatActivity
     private static final double[] RATE_STEPS = {0.5d, 0.75d, 1.0d, 1.25d, 1.5d, 2.0d};
 
     /**
+     * Grace period after cueing a video during which drift correction is suppressed, giving
+     * the embed time to load, buffer and start reporting real positions. Long enough to cover
+     * a slow network load, short enough that genuine drift is still corrected promptly by the
+     * heartbeat that follows.
+     */
+    private static final long CUE_SETTLE_MS = 5_000L;
+
+    /**
      * Shown in place of the player when YouTube refuses the video on this device. Deliberately
      * phrased around "here", because the usual cause is error 101/150 — the owner disallowed
      * embedded playback — which is not a broken link and not something a retry fixes.
@@ -126,6 +134,16 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     /** The video ID currently cued into the WebView, so we only reload on a real change. */
     private String loadedVideoId;
+
+    /**
+     * {@link SystemClock#elapsedRealtime()} before which drift correction is skipped, set
+     * whenever a video is cued.
+     *
+     * <p>A freshly cued embed reports position 0 until it has loaded and buffered, which is
+     * indistinguishable from "hopelessly behind" to the drift check. Correcting against that
+     * re-seeks a player that has not started yet, which restarts buffering and can loop.
+     */
+    private long suppressDriftUntilRealtime;
 
     /**
      * The video ID the local player refused to play, if any.
@@ -197,7 +215,13 @@ public class WatchTogetherActivity extends AppCompatActivity
         // counting across the background window, so projectedPositionMs() already
         // accounts for the time we missed and shouldSeek() closes the gap. No write, no
         // extra read, no second listener.
+        //
+        // The cue settle window is dropped first. It exists to let a loading embed report a
+        // real position before we correct it, but WebView.onPause() froze that loading — so
+        // on the way back the window is just a leftover that would suppress the one catch-up
+        // seek this whole path exists to perform.
         if (appliedState != null && appliedState.isPlayable()) {
+            suppressDriftUntilRealtime = 0L;
             reconcile(appliedState);
         }
     }
@@ -351,6 +375,7 @@ public class WatchTogetherActivity extends AppCompatActivity
             player.reset();
             loadedVideoId  = null;
             erroredVideoId = null;
+            suppressDriftUntilRealtime = 0L;
             showEndedUi(state);
             return;
         }
@@ -371,9 +396,34 @@ public class WatchTogetherActivity extends AppCompatActivity
         if (!state.videoId.equals(loadedVideoId)) {
             loadedVideoId  = state.videoId;
             erroredVideoId = null;
+            // cue() is asynchronous: the embed has to load and buffer before it reports any
+            // position. Suppress drift correction until it does. Without this, the next
+            // reconcile pass (a heartbeat arrives every 10s) compares a still-loading player
+            // reporting ~0 against a target that has raced ahead, "corrects" the difference,
+            // and restarts buffering — so a slow-loading video could be seek-stormed
+            // indefinitely and never actually begin playing.
+            suppressDriftUntilRealtime =
+                    SystemClock.elapsedRealtime() + CUE_SETTLE_MS;
             player.cue(state.videoId, target, state.playing, state.playbackRate);
+        } else if (SystemClock.elapsedRealtime() < suppressDriftUntilRealtime) {
+            // Still settling from a recent cue(). Keep the rate and play/pause intent in
+            // sync — those are cheap and idempotent — but leave the position alone.
+            player.setRate(state.playbackRate);
+            if (state.playing) {
+                player.play();
+            } else {
+                player.pause();
+            }
         } else {
-            long local = player.getLastKnownPositionMs();
+            // Compare like with like: `target` was projected to this instant, so the local
+            // side must be too. getLastKnownPositionMs() is a raw tick sample up to one
+            // 500ms tick old and always stale in the same direction (it reads low while
+            // playing), so measuring it against a live target overstated how far behind
+            // this device was and produced a forward seek on every single pass — twice as
+            // many ms of video at 2x rate. getEstimatedPositionMs() advances that sample by
+            // its own age, so a device that is actually in sync now measures as in sync and
+            // stays put.
+            long local = player.getEstimatedPositionMs();
             if (WatchTogetherState.shouldSeek(local, target)) {
                 player.seek(target);
             }
@@ -623,8 +673,10 @@ public class WatchTogetherActivity extends AppCompatActivity
     private void togglePlayPause() {
         if (appliedState == null || !appliedState.isPlayable() || player == null) return;
 
+        // Estimated, not raw: this position is what the peer will seek to, so a sample that
+        // is half a tick old hands them a small rewind on every play/pause.
         WatchTogetherState s = appliedState.copy();
-        s.positionMs = player.getLastKnownPositionMs();
+        s.positionMs = player.getEstimatedPositionMs();
         s.playing    = !appliedState.playing;
         performLocalWrite(
                 s.playing ? WatchTogetherState.ACTION_PLAY : WatchTogetherState.ACTION_PAUSE, s);
@@ -633,8 +685,10 @@ public class WatchTogetherActivity extends AppCompatActivity
     private void seekBy(long deltaMs) {
         if (appliedState == null || !appliedState.isPlayable() || player == null) return;
 
+        // Skips are relative, so a stale base makes every ±10s tap land short of where the
+        // user actually was — and the error compounds across repeated taps.
         WatchTogetherState s = appliedState.copy();
-        long base = player.getLastKnownPositionMs();
+        long base = player.getEstimatedPositionMs();
         s.positionMs = Math.max(0L, base + deltaMs);
         performLocalWrite(WatchTogetherState.ACTION_SEEK, s);
     }
@@ -653,7 +707,7 @@ public class WatchTogetherActivity extends AppCompatActivity
         }
 
         WatchTogetherState s = appliedState.copy();
-        if (player != null) s.positionMs = player.getLastKnownPositionMs();
+        if (player != null) s.positionMs = player.getEstimatedPositionMs();
         s.playbackRate = RATE_STEPS[nextIndex];
         performLocalWrite(WatchTogetherState.ACTION_RATE, s);
     }
@@ -680,8 +734,21 @@ public class WatchTogetherActivity extends AppCompatActivity
         if (!isDesignatedWriter && !writerSeemsStalled) return;
         if (player == null) return;
 
+        // A heartbeat is pure drift correction, so it must report where this device actually
+        // is right now. The raw sample is up to a full tick stale and always low, and this
+        // write repeats every 10s — so publishing it steadily dragged the peer backwards,
+        // undoing the correction the heartbeat exists to provide.
+        //
+        // Only report a position we can still vouch for. If the local page has stopped
+        // ticking (backgrounded WebView, torn-down embed), getEstimatedPositionMs() falls
+        // back to a frozen sample; broadcasting that as authoritative would pull a peer who
+        // IS playing correctly back to a dead timestamp. Skipping the write instead lets the
+        // peer's own stall-takeover path (below) claim the writer role, which is exactly the
+        // handover this design already relies on.
+        if (!player.isLocallyPlaying()) return;
+
         WatchTogetherState s = appliedState.copy();
-        s.positionMs = player.getLastKnownPositionMs();
+        s.positionMs = player.getEstimatedPositionMs();
         s.playing    = true;
         boolean ok = repo.writeState(callId, s, WatchTogetherState.ACTION_HEARTBEAT, myUid);
         if (ok) {
