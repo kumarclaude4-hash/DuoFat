@@ -59,6 +59,12 @@ public class InCallChatActivity extends AppCompatActivity {
     private InCallChatAdapter adapter;
     private ListenerRegistration chatListener;
 
+    /** Backoff state for re-attaching a listener that Firestore rejected (see listenForMessages). */
+    private final android.os.Handler retryHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private int listenAttempts = 0;
+    private static final int MAX_LISTEN_ATTEMPTS = 8;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @Override
@@ -84,7 +90,8 @@ public class InCallChatActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (chatListener != null) chatListener.remove();
+        retryHandler.removeCallbacksAndMessages(null);
+        if (chatListener != null) { chatListener.remove(); chatListener = null; }
     }
 
     // ── View setup ────────────────────────────────────────────────────────────
@@ -155,13 +162,34 @@ public class InCallChatActivity extends AppCompatActivity {
     }
 
     private void listenForMessages() {
+        if (chatListener != null) return;
         chatListener = FirebaseFirestore.getInstance()
                 .collection("calls").document(callId)
                 .collection("chat")
                 .orderBy("ts", Query.Direction.ASCENDING)
                 .addSnapshotListener((snapshots, e) -> {
-                    if (e != null) { Log.w(TAG, "listener error", e); return; }
+                    if (e != null) {
+                        // A rejected listener is dead for good in Firestore. Opening this
+                        // screen in the first moment of a call can race the creation of the
+                        // parent calls/{callId} document that the security rule resolves,
+                        // which used to leave the thread permanently empty on that device.
+                        // Drop the dead registration and re-attach with backoff.
+                        Log.w(TAG, "listener error — re-attaching (attempt "
+                                + listenAttempts + ")", e);
+                        if (chatListener != null) { chatListener.remove(); chatListener = null; }
+                        if (isFinishing() || isDestroyed()) return;
+                        if (listenAttempts >= MAX_LISTEN_ATTEMPTS) {
+                            Log.e(TAG, "in-call chat listener gave up after "
+                                    + listenAttempts + " attempts");
+                            return;
+                        }
+                        long delay = Math.min(600L * (1L << listenAttempts), 4_000L);
+                        listenAttempts++;
+                        retryHandler.postDelayed(this::listenForMessages, delay);
+                        return;
+                    }
                     if (snapshots == null) return;
+                    listenAttempts = 0;
 
                     List<InCallChatMessage> updated = new ArrayList<>();
                     for (DocumentSnapshot ds : snapshots.getDocuments()) {
