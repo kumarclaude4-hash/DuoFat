@@ -126,6 +126,30 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private ListenerRegistration  chatMessageListener;
     private final Set<String>     seenChatMsgIds = new HashSet<>();
 
+    /**
+     * Re-attach support for the in-call chat listener.
+     *
+     * <p>The caller attaches its listener immediately after {@code startCall()}, but the
+     * {@code calls/{callId}} document is only written a moment later (inside the
+     * createOffer → setLocalDescription callback, plus a network round-trip). The security
+     * rule for {@code calls/{callId}/chat} resolves the parent call document to check
+     * {@code callerId}/{@code calleeId}; while that parent does not exist yet the rule
+     * evaluation fails and the query is rejected with PERMISSION_DENIED. Firestore treats
+     * a rejected snapshot listener as permanently dead — it never retries — so the caller
+     * ended up with no chat listener for the whole call while the callee (which attaches
+     * after the document already exists) worked fine. That is the real
+     * "pop-up only shows on one side" asymmetry.
+     */
+    private final Handler chatRetryHandler = new Handler(Looper.getMainLooper());
+    private int           chatListenAttempts = 0;
+    private static final int  CHAT_LISTEN_MAX_ATTEMPTS = 8;
+    private static final long CHAT_LISTEN_RETRY_CAP_MS = 4_000L;
+
+    /** Banner delivery state — a banner shown while the screen is not visible is invisible. */
+    private boolean isActivityVisible = false;
+    private boolean chatScreenOpen    = false;
+    private String  pendingBannerPreview;
+
     // ── Audio focus ───────────────────────────────────────────────────────────
     private AudioFocusRequest audioFocusRequest; // API 26+
 
@@ -413,6 +437,28 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        isActivityVisible = true;
+        // Returning here means the in-call chat (or Watch Together) was dismissed.
+        chatScreenOpen = false;
+        // Re-attach if a listener error killed the registration while we were away.
+        listenForInCallMessages();
+        // Surface anything that arrived while the call screen was not on top.
+        if (pendingBannerPreview != null) {
+            String preview = pendingBannerPreview;
+            pendingBannerPreview = null;
+            showNewMessageBanner(preview);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isActivityVisible = false;
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
 
@@ -430,6 +476,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         durationHandler.removeCallbacksAndMessages(null);
         bannerDismissHandler.removeCallbacksAndMessages(null);
         noAnswerHandler.removeCallbacksAndMessages(null);
+        chatRetryHandler.removeCallbacksAndMessages(null);
         if (chatMessageListener != null) { chatMessageListener.remove(); chatMessageListener = null; }
         // Cancel the TURN-credential wait if it hasn't fired yet.
         if (turnTimeoutHandler != null) turnTimeoutHandler.removeCallbacksAndMessages(null);
@@ -461,7 +508,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         abandonAudioFocus();
     }
 
-    // ── View binding ──────────────────────────────────────────────────────────
+    // ── View binding ─────────────────────────────────────────────��────────────
 
     private void bindViews() {
         remoteVideoView     = findViewById(R.id.remoteVideoView);
@@ -948,6 +995,16 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      * {@link #seenChatMsgIds} as the only dedupe (it also absorbs the duplicate
      * cache→server delivery of the same document). No wall-clock comparison is
      * involved, so device clock skew cannot affect it either.
+     *
+     * <p><b>Third and actual cause of the one-sided report.</b> Neither fix above touched
+     * listener <em>survival</em>. The caller attaches here right after {@code startCall()},
+     * before the {@code calls/{callId}} document has been written, so the rule guarding
+     * {@code calls/{callId}/chat} cannot resolve its parent and Firestore rejects the query.
+     * A rejected snapshot listener is never retried by the SDK, so the caller stayed deaf
+     * for the entire call while the callee — which attaches after the document exists —
+     * worked normally. Sending still worked from both devices (the chat screen attaches
+     * later, once the document is there), which is why the symptom looked purely cosmetic.
+     * The error branch below now re-attaches with backoff instead of returning.
      */
     private void listenForInCallMessages() {
         if (callId == null || myUid == null) return;
@@ -966,10 +1023,36 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                         // Never fail silently: a PERMISSION_DENIED or transient network
                         // error here is invisible to the user and looks exactly like
                         // "the banner works for them but not for me".
-                        Log.w(TAG, "In-call chat listener error — banners may be missed", e);
+                        //
+                        // Firestore does NOT resurrect a rejected listener, so simply
+                        // logging and returning left this device permanently deaf to the
+                        // partner's messages. Drop the dead registration and re-attach with
+                        // backoff: by then the parent call document exists and the rule
+                        // passes. seenChatMsgIds survives the re-attach, so the replayed
+                        // ADDED changes cannot double-banner, and any message sent during
+                        // the dead window still surfaces on the first successful snapshot.
+                        Log.w(TAG, "In-call chat listener error — re-attaching (attempt "
+                                + chatListenAttempts + ")", e);
+                        if (chatMessageListener != null) {
+                            chatMessageListener.remove();
+                            chatMessageListener = null;
+                        }
+                        if (isFinishing() || isDestroyed()) return;
+                        if (chatListenAttempts >= CHAT_LISTEN_MAX_ATTEMPTS) {
+                            Log.e(TAG, "In-call chat listener gave up after "
+                                    + chatListenAttempts + " attempts — no message banners");
+                            return;
+                        }
+                        long delay = Math.min(600L * (1L << chatListenAttempts),
+                                              CHAT_LISTEN_RETRY_CAP_MS);
+                        chatListenAttempts++;
+                        chatRetryHandler.postDelayed(this::listenForInCallMessages, delay);
                         return;
                     }
                     if (snapshots == null) return;
+                    // A snapshot arrived, so the listener is healthy: reset the backoff so a
+                    // later transient network drop gets its full retry budget again.
+                    chatListenAttempts = 0;
                     for (DocumentChange dc : snapshots.getDocumentChanges()) {
                         if (dc.getType() != DocumentChange.Type.ADDED) continue;
                         String senderId = dc.getDocument().getString("senderId");
@@ -980,9 +1063,30 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                         // is both the "already bannered" check and the record, in one step.
                         if (!seenChatMsgIds.add(dc.getDocument().getId())) continue;
                         String preview = text.length() > 48 ? text.substring(0, 48) + "…" : text;
-                        runOnUiThread(() -> showNewMessageBanner(preview));
+                        runOnUiThread(() -> deliverNewMessageBanner(preview));
                     }
                 });
+    }
+
+    /**
+     * Decides where a partner message announcement goes.
+     *
+     * <p>The listener keeps running while this activity is in the background, so animating
+     * the pill there burned the 4-second auto-dismiss window against a screen nobody could
+     * see — the user came back to the call and had no idea a message had arrived. Three
+     * cases:
+     * <ul>
+     *   <li><b>In-call chat open</b> — the message is already visible in the thread, so a
+     *       banner would be noise. Skip it.</li>
+     *   <li><b>Call screen hidden</b> (Watch Together, home button, another app) — hold the
+     *       latest preview and show it from {@link #onResume()}.</li>
+     *   <li><b>Call screen visible</b> — show it now.</li>
+     * </ul>
+     */
+    private void deliverNewMessageBanner(String preview) {
+        if (chatScreenOpen) return;
+        if (!isActivityVisible) { pendingBannerPreview = preview; return; }
+        showNewMessageBanner(preview);
     }
 
     /**
@@ -1026,6 +1130,12 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                     Toast.LENGTH_SHORT).show();
             return;
         }
+        // While the thread is on screen the partner's messages are already visible in it,
+        // so suppress the pill instead of stacking a banner behind the chat UI. Cleared in
+        // onResume() when the user comes back to the call.
+        chatScreenOpen       = true;
+        pendingBannerPreview = null;
+
         Intent intent = new Intent(this, InCallChatActivity.class);
         intent.putExtra(InCallChatActivity.EXTRA_CALL_ID,      callId);
         intent.putExtra(InCallChatActivity.EXTRA_MY_UID,       myUid);
