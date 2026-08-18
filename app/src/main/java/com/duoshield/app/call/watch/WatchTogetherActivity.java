@@ -18,6 +18,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -80,6 +81,26 @@ public class WatchTogetherActivity extends AppCompatActivity
     private static final long CUE_SETTLE_MS = 5_000L;
 
     /**
+     * Volume the video plays at, as a percentage, while the call is live.
+     *
+     * <p>Watch Together runs <em>on top of an active voice call</em>: the WebRTC audio and the
+     * YouTube audio come out of the same speaker at the same time. Left at YouTube's default
+     * 100 the video simply drowns the other person out, which makes the feature unusable for
+     * its actual purpose — watching something together <em>while talking about it</em>. 35%
+     * leaves the video clearly audible while voices carry over it.
+     *
+     * <p><strong>This is the ducking mechanism, on purpose.</strong> The obvious alternative —
+     * requesting transient audio focus — is actively harmful here: {@code CallActivity} holds
+     * {@code AUDIOFOCUS_GAIN} and its listener mutes the local microphone on any focus loss,
+     * so a focus request from this screen would silence the user's own mic for the whole
+     * session. See {@link WatchTogetherPlayerView#setVolume(int)}.
+     */
+    private static final int CALL_DUCK_VOLUME_PERCENT = 35;
+
+    /** Saved-instance key for {@link #videoMuted}. */
+    private static final String STATE_VIDEO_MUTED = "watch_video_muted";
+
+    /**
      * Shown in place of the player when YouTube refuses the video on this device. Deliberately
      * phrased around "here", because the usual cause is error 101/150 — the owner disallowed
      * embedded playback — which is not a broken link and not something a retry fixes.
@@ -101,6 +122,17 @@ public class WatchTogetherActivity extends AppCompatActivity
     private Button    btnPlaybackRate;
     private View      controlsRow;
     private EditText  etUrl;
+    private Button    btnMuteVideo;
+
+    /**
+     * Whether the video's own audio is muted <em>on this device</em>.
+     *
+     * <p>Never written to the session document: unlike play/pause/seek/rate, which are shared
+     * intent, this is a personal listening choice. One participant muting the video must not
+     * mute it for the other. Survives recreation via {@link #onSaveInstanceState(Bundle)} so a
+     * rotation does not blast the video back to full volume mid-conversation.
+     */
+    private boolean videoMuted;
 
     // ── YouTube search (picker) views ──
     private View         searchPanel;
@@ -127,6 +159,12 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     /** Set while the Activity is editing {@link #etUrl} itself, to mute the TextWatcher. */
     private boolean suppressTextWatcher;
+
+    /**
+     * Intercepts Back while the search panel is up. Enabled/disabled from
+     * {@link #renderSearch()} so the framework owns Back whenever there is no panel to close.
+     */
+    private OnBackPressedCallback backCallback;
 
     /** The most recently applied state and the local monotonic time it was applied. */
     private WatchTogetherState appliedState;
@@ -181,8 +219,20 @@ public class WatchTogetherActivity extends AppCompatActivity
             return;
         }
 
+        if (savedInstanceState != null) {
+            videoMuted = savedInstanceState.getBoolean(STATE_VIDEO_MUTED, false);
+        }
+
         repo = new WatchTogetherRepository(this);
         bindViews();
+        registerBackHandler();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        // Local-only preference, but a rotation must not un-mute the video mid-call.
+        outState.putBoolean(STATE_VIDEO_MUTED, videoMuted);
     }
 
     @Override
@@ -242,9 +292,20 @@ public class WatchTogetherActivity extends AppCompatActivity
         heartbeatHandler.removeCallbacks(heartbeatRunnable);
     }
 
+    /**
+     * Tears everything down <strong>before</strong> delegating to {@code super}.
+     *
+     * <p>The order is the point. This previously called {@code super.onDestroy()} first and
+     * then {@code player.destroy()}, which destroys a WebView that is still attached to its
+     * parent and whose Activity has already begun releasing its window — documented undefined
+     * behaviour and a well-known crash/leak path. Everything this Activity owns is now
+     * released while the Activity is still in a valid state, and {@code super} runs last.
+     *
+     * <p>{@link WatchTogetherPlayerView#destroy()} performs the detach-then-destroy sequence
+     * the WebView contract requires; see its javadoc.
+     */
     @Override
     protected void onDestroy() {
-        super.onDestroy();
         if (stateListener != null) {
             stateListener.remove();
             stateListener = null;
@@ -253,31 +314,63 @@ public class WatchTogetherActivity extends AppCompatActivity
         // Drop any queued debounce so a pending search cannot fire against a dead Activity.
         searchHandler.removeCallbacksAndMessages(null);
         pendingSearch = null;
+
         if (player != null) {
             player.setListener(null);
             player.destroy();
             player = null;
         }
+
+        // The search cache is process-wide and holds what the user typed plus the titles and
+        // channels that came back — i.e. a record of what they searched for while on a call
+        // with someone. It is a call-scoped picker, not a browsing history, so it has no
+        // reason to outlive the session; leaving it in memory meant the next session (and, in
+        // a shared-device or post-sign-out scenario, potentially the next person) could be
+        // served results from someone else's search. Clearing here is the documented
+        // "when a Watch Together session ends" call site, which previously did not exist.
+        YouTubeSearchClient.clearCache();
+
+        super.onDestroy();
     }
 
     /**
      * Back dismisses the search panel first, so browsing results is escapable without
      * leaving the screen (and without ending the session for both participants).
+     *
+     * <p><strong>Why a callback and not {@code onBackPressed()}.</strong> This was an
+     * {@code onBackPressed()} override, which is deprecated as of API 33 and — more
+     * importantly — is simply not called at all once predictive back is in effect. The
+     * dismiss-panel-first behaviour would therefore silently stop working on modern devices:
+     * Back from the search panel would close the whole screen, which for the participant who
+     * started the session is indistinguishable from "I meant to stop browsing", except it
+     * also drops them out of Watch Together.
+     *
+     * <p>The callback is only {@code enabled} while the panel is actually up (kept in step by
+     * {@link #renderSearch()}). That matters for predictive back specifically: a permanently
+     * enabled callback tells the framework this screen always intercepts Back, which
+     * suppresses the OS's back-gesture preview animation even when there is nothing to
+     * intercept. Disabled, the framework handles Back itself and animates normally.
      */
-    @Override
-    public void onBackPressed() {
-        if (searchState.isPanelVisible()) {
-            cancelPendingSearch();
-            searchState.reset();
-            if (etUrl != null) {
-                suppressTextWatcher = true;
-                etUrl.setText("");
-                suppressTextWatcher = false;
+    private void registerBackHandler() {
+        backCallback = new OnBackPressedCallback(searchState.isPanelVisible()) {
+            @Override
+            public void handleOnBackPressed() {
+                dismissSearchPanel();
             }
-            renderSearch();
-            return;
+        };
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
+    }
+
+    /** The former {@code onBackPressed()} body, unchanged in behaviour. */
+    private void dismissSearchPanel() {
+        cancelPendingSearch();
+        searchState.reset();
+        if (etUrl != null) {
+            suppressTextWatcher = true;
+            etUrl.setText("");
+            suppressTextWatcher = false;
         }
-        super.onBackPressed();
+        renderSearch();
     }
 
     // ── View setup ────────────────────────────────────────────────────────────
@@ -290,6 +383,7 @@ public class WatchTogetherActivity extends AppCompatActivity
         btnPlaybackRate = findViewById(R.id.btnPlaybackRate);
         controlsRow     = findViewById(R.id.watchControls);
         etUrl           = findViewById(R.id.etWatchUrl);
+        btnMuteVideo    = findViewById(R.id.btnWatchMute);
 
         if (player != null) player.setListener(this);
 
@@ -335,6 +429,40 @@ public class WatchTogetherActivity extends AppCompatActivity
 
         View btnForward = findViewById(R.id.btnSeekForward);
         if (btnForward != null) btnForward.setOnClickListener(v -> seekBy(SEEK_STEP_MS));
+
+        // Local-only: no Firestore write, so it deliberately does NOT go through
+        // performLocalWrite() like every other control in this row.
+        if (btnMuteVideo != null) btnMuteVideo.setOnClickListener(v -> toggleVideoMute());
+        updateMuteButton();
+    }
+
+    // ── Video audio (local only) ──────────────────────────────────────────────
+
+    /**
+     * Pushes the current attenuation + mute choice into the player.
+     *
+     * <p>Called from {@link #onPlayerReady()} and after every cue/reload, because both replace
+     * the player's audio state: a freshly loaded video starts at YouTube's default volume, so
+     * without re-applying here a new video would jump to full loudness over the call.
+     */
+    private void applyVideoAudioSettings() {
+        if (player == null) return;
+        player.setVolume(CALL_DUCK_VOLUME_PERCENT);
+        player.setMuted(videoMuted);
+    }
+
+    private void toggleVideoMute() {
+        videoMuted = !videoMuted;
+        if (player != null) player.setMuted(videoMuted);
+        updateMuteButton();
+    }
+
+    private void updateMuteButton() {
+        if (btnMuteVideo == null) return;
+        btnMuteVideo.setText(videoMuted ? "Muted" : "Vol");
+        btnMuteVideo.setContentDescription(videoMuted
+                ? "Unmute the video on this device"
+                : "Mute the video on this device");
     }
 
     // ── Snapshot handling ───────────────────────────────────────────────────
@@ -405,6 +533,10 @@ public class WatchTogetherActivity extends AppCompatActivity
             suppressDriftUntilRealtime =
                     SystemClock.elapsedRealtime() + CUE_SETTLE_MS;
             player.cue(state.videoId, target, state.playing, state.playbackRate);
+            // A newly loaded video starts at the embed's default volume, so the attenuation
+            // and any local mute have to be re-asserted or every video change would blast
+            // over the call at full loudness.
+            applyVideoAudioSettings();
         } else if (WatchTogetherState.ACTION_HEARTBEAT.equals(state.lastAction)
                 && SystemClock.elapsedRealtime() < suppressDriftUntilRealtime) {
             // Still settling from a recent cue(), and this is only a heartbeat — i.e. inferred
@@ -559,7 +691,10 @@ public class WatchTogetherActivity extends AppCompatActivity
                     public void onError(int status, String message) {
                         if (isFinishing() || isDestroyed()) return;
                         Log.w(TAG, "YouTube search failed, status=" + status);
-                        if (searchState.onError(token, message)) renderSearch();
+                        // The status is carried into the state so renderSearch() can decide
+                        // whether a Retry button would be honest — a 400/413/not-configured
+                        // failure cannot be fixed by tapping again.
+                        if (searchState.onError(token, message, status)) renderSearch();
                     }
                 });
     }
@@ -622,6 +757,13 @@ public class WatchTogetherActivity extends AppCompatActivity
 
     /** Renders {@link #searchState}. The only place search view visibility is decided. */
     private void renderSearch() {
+        // The Back callback tracks panel visibility, and must do so even if the search views
+        // are somehow absent — otherwise a stale enabled callback would swallow Back with
+        // nothing to dismiss, trapping the user on the screen.
+        if (backCallback != null) {
+            backCallback.setEnabled(searchState.isPanelVisible());
+        }
+
         if (searchPanel == null) return;
 
         YouTubeSearchState.Phase phase = searchState.phase();
@@ -665,8 +807,14 @@ public class WatchTogetherActivity extends AppCompatActivity
             tvSearchMessage.setText(message);
         }
         if (btnSearchRetry != null) {
-            btnSearchRetry.setVisibility(phase == YouTubeSearchState.Phase.ERROR
-                    ? View.VISIBLE : View.GONE);
+            // Not every error is retryable. "Search isn't available in this build",
+            // "That search didn't work. Try different words." and "That search is too long"
+            // are all terminal for the identical query, so offering Retry there guaranteed a
+            // second identical failure — and sat directly under copy telling the user to do
+            // something else instead.
+            boolean offerRetry = phase == YouTubeSearchState.Phase.ERROR
+                    && searchState.isRetryable();
+            btnSearchRetry.setVisibility(offerRetry ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -878,7 +1026,14 @@ public class WatchTogetherActivity extends AppCompatActivity
     @Override
     public void onPlayerReady() {
         // If a session state arrived before the player finished constructing, the page
-        // buffers the initial cue itself; nothing more to do here.
+        // buffers the initial cue itself; nothing more to do about playback here.
+        //
+        // This IS, however, the earliest point at which the embed can be told how loud to
+        // be, and it is the one hook that fires for every way a player comes into existence:
+        // first construction, and reset()'s page reload after a session ends. Attenuating
+        // here means voices sit on top of the video from the very first frame rather than
+        // after a first-second blast of full-volume audio over the call.
+        applyVideoAudioSettings();
     }
 
     @Override
@@ -889,7 +1044,41 @@ public class WatchTogetherActivity extends AppCompatActivity
             updatePlayPauseIcon(true);
         } else if (ytState == WatchTogetherPlayerView.YT_STATE_ENDED) {
             updatePlayPauseIcon(false);
+            onVideoEnded(positionMs);
         }
+    }
+
+    /**
+     * Settles the shared session when the video runs out.
+     *
+     * <p>Previously ENDED only flipped the local icon, so the document stayed
+     * {@code playing = true} forever and the heartbeat kept republishing a position pinned at
+     * the end of the video every 10 seconds — a permanent trickle of writes describing playback
+     * that had already finished, and a state that told any device joining or returning that a
+     * finished video was still playing. Writing {@code playing = false} once, at the end
+     * position, closes it: {@link #maybeWriteHeartbeat()} already returns early when
+     * {@code !appliedState.playing}, so the heartbeat stops as a consequence rather than
+     * needing to be cancelled separately (and stays available for the next real action).
+     *
+     * <p><strong>Echo safety.</strong> ENDED fires on <em>both</em> devices — it is a property
+     * of the video, not of who pressed anything. Only the device that is currently
+     * {@code lastActionBy} writes, which is the same single-writer rule the heartbeat uses,
+     * so the two participants cannot both write and the peer's ENDED is inert. This preserves
+     * the "remote/echo-driven state changes never generate a write" invariant this method is
+     * built around: the follower's player reaching the end produces no Firestore op at all.
+     */
+    private void onVideoEnded(long positionMs) {
+        if (appliedState == null || !appliedState.isPlayable()) return;
+        // Already settled — a second ENDED (or one arriving after a pause) must not re-write.
+        if (!appliedState.playing) return;
+        // Single writer only. The peer's player also reaches the end; it must stay silent.
+        if (!myUid.equals(appliedState.lastActionBy)) return;
+
+        WatchTogetherState s = appliedState.copy();
+        s.playing = false;
+        // Pin at where playback actually stopped rather than projecting past the end.
+        s.positionMs = Math.max(0L, positionMs);
+        performLocalWrite(WatchTogetherState.ACTION_PAUSE, s);
     }
 
     @Override
