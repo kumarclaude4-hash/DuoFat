@@ -2,7 +2,11 @@ package com.duoshield.app.ui;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
@@ -27,8 +31,12 @@ import com.duoshield.app.call.TurnBandwidthTracker;
 import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.firestore.FirebaseFirestore;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
@@ -44,6 +52,14 @@ public class SettingsActivity extends BaseActivity {
     private TextView          tvProfileDisplayName;
 
     private ActivityResultLauncher<String> pickPhotoLauncher;
+
+    private static final String TAG = "Settings";
+    private static final String AVATAR_FILE = "own_avatar.jpg";
+    private static final int AVATAR_DIMENSION_PX = 1024;
+    private static final int MAX_SOURCE_DIMENSION_PX = 20_000;
+    private static final long MAX_SOURCE_PIXELS = 100_000_000L;
+    private static final int MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+    private static final int JPEG_QUALITY = 88;
 
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
@@ -279,13 +295,21 @@ public class SettingsActivity extends BaseActivity {
                 .show();
     }
 
-    private void propagatePhotoToConversations(String myUid, String photoUrl) {
-        FirebaseFirestore.getInstance()
-                .collection("chats")
-                .whereArrayContains("participants", myUid)
-                .get()
-                .addOnSuccessListener(snap -> {
-                    for (com.google.firebase.firestore.DocumentSnapshot doc : snap.getDocuments()) {
+    /** Publishes the user and denormalized chat references in one Firestore batch. */
+    private Task<Void> publishPhotoReferences(String myUid, String photoUrl) {
+        FirebaseFirestore db = FirebaseFirestore.getInstance();
+        return db.collection("chats").whereArrayContains("participants", myUid).get()
+                .continueWithTask(queryTask -> {
+                    if (!queryTask.isSuccessful()) {
+                        Exception error = queryTask.getException();
+                        throw error != null ? error : new Exception("Conversation query failed");
+                    }
+                    com.google.firebase.firestore.WriteBatch batch = db.batch();
+                    batch.set(db.collection("users").document(myUid),
+                            Collections.singletonMap("photoUrl", photoUrl),
+                            com.google.firebase.firestore.SetOptions.merge());
+                    for (com.google.firebase.firestore.DocumentSnapshot doc
+                            : queryTask.getResult().getDocuments()) {
                         java.util.List<String> participants =
                                 (java.util.List<String>) doc.get("participants");
                         if (participants == null) continue;
@@ -293,15 +317,13 @@ public class SettingsActivity extends BaseActivity {
                         for (String p : participants) {
                             if (p != null && !p.equals(myUid)) { partnerUid = p; break; }
                         }
-                        if (partnerUid == null) continue;
-                        doc.getReference()
-                           .update("partnerPhotoUrl_" + partnerUid, photoUrl)
-                           .addOnFailureListener(e ->
-                               android.util.Log.w("Settings", "propagatePhoto non-critical: " + e.getMessage()));
+                        if (partnerUid != null) {
+                            batch.update(doc.getReference(),
+                                    "partnerPhotoUrl_" + partnerUid, photoUrl);
+                        }
                     }
-                })
-                .addOnFailureListener(e ->
-                        android.util.Log.w("Settings", "propagatePhoto query failed (non-critical): " + e.getMessage()));
+                    return batch.commit();
+                });
     }
 
     private void propagateNameToConversations(String myName) {
@@ -352,94 +374,251 @@ public class SettingsActivity extends BaseActivity {
             Toast.makeText(this, "Not signed in.", Toast.LENGTH_SHORT).show();
             return;
         }
-        Toast.makeText(this, "Uploading photo…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Preparing photo…", Toast.LENGTH_SHORT).show();
         bgExecutor.execute(() -> {
             try {
-                byte[] plain = readUriBytes(uri);
-                if (plain == null || plain.length == 0) throw new Exception("Empty file");
-                String objectKey = "avatars/" + user.getUid() + "_" + System.currentTimeMillis() + ".jpg";
-                String b2Path = B2StorageHelper.uploadFile(plain, objectKey, "image/jpeg", null);
-                runOnUiThread(() -> onPhotoUploaded(b2Path, plain, user));
+                byte[] jpeg = normalizeAvatar(uri);
+                String objectKey = "avatars/" + user.getUid() + "_"
+                        + System.currentTimeMillis() + ".jpg";
+                String b2Path = B2StorageHelper.uploadFile(jpeg, objectKey, "image/jpeg", null);
+                runOnUiThread(() -> publishUploadedPhoto(b2Path, jpeg, user));
             } catch (Exception e) {
-                android.util.Log.e("Settings", "Photo upload failed", e);
-                runOnUiThread(() ->
-                        Toast.makeText(this, "Upload failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                android.util.Log.e(TAG, "Photo upload failed", e);
+                runOnUiThread(() -> Toast.makeText(this,
+                        "Upload failed: " + safeMessage(e), Toast.LENGTH_LONG).show());
             }
         });
     }
 
-    /** Loads the user's own profile photo: local disk cache → B2 download. */
+    /** Local-first display followed by an authoritative Firestore reconciliation. */
     private void loadProfilePhoto() {
         if (ivProfilePhoto == null) return;
-        // 1. Instant local load from disk cache (written on every successful upload).
-        java.io.File localAvatar = new java.io.File(getFilesDir(), "own_avatar.jpg");
-        if (localAvatar.exists()) {
-            // "own_avatar.jpg" is overwritten in place on every new upload, but Glide
-            // keys its memory/disk cache off the File path alone — it has no way to
-            // know the content changed, so a stale bitmap from a previous session kept
-            // being served ("profile picture not updating"). Signature on lastModified
-            // busts the cache whenever the file is rewritten, and skipping Glide's own
-            // cache layers is safe since the file itself already IS our persistent cache.
-            Glide.with(this).load(localAvatar)
-                    .signature(new ObjectKey(String.valueOf(localAvatar.lastModified())))
-                    .diskCacheStrategy(DiskCacheStrategy.NONE)
-                    .skipMemoryCache(true)
-                    .placeholder(R.drawable.ic_person)
-                    .error(R.drawable.ic_person)
-                    .transform(new CircleCrop())
-                    .into(ivProfilePhoto);
-            return;
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+
+        File localAvatar = new File(getFilesDir(), AVATAR_FILE);
+        String cachedUid = prefs.getString("own_avatar_uid", null);
+        if (localAvatar.exists() && user.getUid().equals(cachedUid)) {
+            displayLocalAvatar(localAvatar);
+        } else if (localAvatar.exists() && !localAvatar.delete()) {
+            android.util.Log.w(TAG, "Could not remove avatar belonging to another session");
         }
-        // 2. Fall back to authenticated B2 download (first launch after install).
-        String photoUrl = prefs.getString("my_photo_url", null);
-        if (photoUrl != null && !photoUrl.isEmpty()) {
-            com.duoshield.app.util.GlideHelper.loadAvatar(this, photoUrl, ivProfilePhoto);
-        }
+
+        FirebaseFirestore.getInstance().collection("users").document(user.getUid()).get()
+                .addOnSuccessListener(doc -> {
+                    String remotePath = doc.getString("photoUrl");
+                    if (!isOwnedAvatarPath(remotePath, user.getUid())) return;
+                    String cachedPath = prefs.getString("my_photo_url", null);
+                    boolean validLocal = localAvatar.exists() && localAvatar.length() > 0
+                            && user.getUid().equals(prefs.getString("own_avatar_uid", null));
+                    if (remotePath.equals(cachedPath) && validLocal) return;
+                    restoreAvatarFromB2(remotePath, user.getUid());
+                })
+                .addOnFailureListener(e ->
+                        android.util.Log.w(TAG, "Could not reconcile profile photo", e));
     }
 
-    /**
-     * Persists the uploaded avatar bytes to disk so loadProfilePhoto() can serve
-     * them instantly on every subsequent app open without a B2 round-trip.
-     */
-    private void saveOwnAvatarToDisk(byte[] bytes) {
-        bgExecutor.execute(() -> {
-            try {
-                java.io.File f = new java.io.File(getFilesDir(), "own_avatar.jpg");
-                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
-                    fos.write(bytes);
+    private void restoreAvatarFromB2(String b2Path, String uid) {
+        B2StorageHelper.loadAvatarBytes(b2Path, new B2StorageHelper.MediaCallback() {
+            @Override public void onLoaded(byte[] bytes) {
+                if (!isValidAvatarJpeg(bytes)) {
+                    android.util.Log.w(TAG, "Rejected invalid remote avatar bytes");
+                    return;
                 }
-            } catch (Exception e) {
-                android.util.Log.w("Settings", "Failed to cache own avatar to disk", e);
+                bgExecutor.execute(() -> {
+                    try {
+                        saveOwnAvatarToDisk(bytes);
+                        prefs.edit().putString("my_photo_url", b2Path)
+                                .putString("own_avatar_uid", uid).commit();
+                        runOnUiThread(() -> {
+                            if (!isFinishing() && !isDestroyed()) {
+                                displayLocalAvatar(new File(getFilesDir(), AVATAR_FILE));
+                            }
+                        });
+                    } catch (Exception e) {
+                        android.util.Log.w(TAG, "Failed to cache restored avatar", e);
+                    }
+                });
+            }
+            @Override public void onError(Exception e) {
+                android.util.Log.w(TAG, "Remote avatar restore failed", e);
             }
         });
     }
 
-    private void onPhotoUploaded(String b2Path, byte[] plainBytes, FirebaseUser user) {
-        prefs.edit().putString("my_photo_url", b2Path).apply();
-        FirebaseFirestore.getInstance()
-                .collection("users")
-                .document(user.getUid())
+    private void publishUploadedPhoto(String b2Path, byte[] jpeg, FirebaseUser user) {
+        String previousPath = prefs.getString("my_photo_url", null);
+        Task<Void> userWrite = FirebaseFirestore.getInstance()
+                .collection("users").document(user.getUid())
                 .set(Collections.singletonMap("photoUrl", b2Path),
                         com.google.firebase.firestore.SetOptions.merge());
-        propagatePhotoToConversations(user.getUid(), b2Path);
-        // Persist to disk so future app opens load without a B2 round-trip.
-        saveOwnAvatarToDisk(plainBytes);
+        Task<Void> propagation = propagatePhotoToConversations(user.getUid(), b2Path);
+        Tasks.whenAll(userWrite, propagation)
+                .addOnSuccessListener(ignored -> bgExecutor.execute(() -> {
+                    try {
+                        saveOwnAvatarToDisk(jpeg);
+                        prefs.edit().putString("my_photo_url", b2Path)
+                                .putString("own_avatar_uid", user.getUid()).commit();
+                        if (isOwnedAvatarPath(previousPath, user.getUid())
+                                && !previousPath.equals(b2Path)) {
+                            try { B2StorageHelper.deleteFile(previousPath); }
+                            catch (Exception e) {
+                                android.util.Log.w(TAG, "Old avatar cleanup failed", e);
+                            }
+                        }
+                        runOnUiThread(() -> finishPhotoPublication(jpeg));
+                    } catch (Exception e) {
+                        android.util.Log.e(TAG, "Local avatar commit failed", e);
+                        runOnUiThread(() -> Toast.makeText(this,
+                                "Photo published, but local cache failed.", Toast.LENGTH_LONG).show());
+                    }
+                }))
+                .addOnFailureListener(e -> {
+                    android.util.Log.e(TAG, "Photo publication failed", e);
+                    bgExecutor.execute(() -> {
+                        try { B2StorageHelper.deleteFile(b2Path); }
+                        catch (Exception cleanupError) {
+                            android.util.Log.w(TAG, "Orphan avatar cleanup failed", cleanupError);
+                        }
+                    });
+                    Toast.makeText(this, "Photo update failed: " + safeMessage(e),
+                            Toast.LENGTH_LONG).show();
+                });
+    }
+
+    private void finishPhotoPublication(byte[] jpeg) {
         if (ivProfilePhoto != null && !isDestroyed() && !isFinishing()) {
-            // Render straight from the bytes we just uploaded instead of re-fetching
-            // b2Path from B2 — a re-fetch immediately after upload could race the
-            // storage backend's read-after-write consistency (or a fronting CDN/cache)
-            // and silently fail or return the previous object, which is what made the
-            // new photo "update for other users" (who load it later, once it has
-            // settled) but never visibly refresh here in the uploader's own app.
-            Glide.with(this).load(plainBytes)
-                    .diskCacheStrategy(DiskCacheStrategy.NONE)
-                    .skipMemoryCache(true)
-                    .placeholder(R.drawable.ic_person)
-                    .error(R.drawable.ic_person)
-                    .transform(new CircleCrop())
-                    .into(ivProfilePhoto);
+            Glide.with(this).load(jpeg)
+                    .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
+                    .placeholder(R.drawable.ic_person).error(R.drawable.ic_person)
+                    .transform(new CircleCrop()).into(ivProfilePhoto);
         }
         Toast.makeText(this, "Photo updated!", Toast.LENGTH_SHORT).show();
+    }
+
+    private void displayLocalAvatar(File file) {
+        Glide.with(this).load(file)
+                .signature(new ObjectKey(String.valueOf(file.lastModified())))
+                .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
+                .placeholder(R.drawable.ic_person).error(R.drawable.ic_person)
+                .transform(new CircleCrop()).into(ivProfilePhoto);
+    }
+
+    private void saveOwnAvatarToDisk(byte[] bytes) throws Exception {
+        File destination = new File(getFilesDir(), AVATAR_FILE);
+        File temporary = new File(getFilesDir(), AVATAR_FILE + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(temporary)) {
+            out.write(bytes);
+            out.getFD().sync();
+        }
+        if (destination.exists() && !destination.delete()) {
+            throw new Exception("Could not replace local avatar");
+        }
+        if (!temporary.renameTo(destination)) {
+            temporary.delete();
+            throw new Exception("Could not commit local avatar");
+        }
+    }
+
+    private byte[] normalizeAvatar(Uri uri) throws Exception {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("Cannot open selected image");
+            BitmapFactory.decodeStream(in, null, bounds);
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0
+                || bounds.outWidth > MAX_SOURCE_DIMENSION_PX
+                || bounds.outHeight > MAX_SOURCE_DIMENSION_PX
+                || (long) bounds.outWidth * bounds.outHeight > MAX_SOURCE_PIXELS) {
+            throw new Exception("Image dimensions are invalid or too large");
+        }
+        int sample = 1;
+        while (Math.max(bounds.outWidth / sample, bounds.outHeight / sample)
+                > AVATAR_DIMENSION_PX * 2) sample *= 2;
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        Bitmap decoded;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("Cannot reopen selected image");
+            decoded = BitmapFactory.decodeStream(in, null, options);
+        }
+        if (decoded == null) throw new Exception("Unsupported or damaged image");
+
+        Bitmap oriented = applyExifOrientation(decoded, readExifOrientation(uri));
+        int side = Math.min(oriented.getWidth(), oriented.getHeight());
+        Bitmap square = Bitmap.createBitmap(oriented,
+                (oriented.getWidth() - side) / 2, (oriented.getHeight() - side) / 2,
+                side, side);
+        Bitmap output = square;
+        if (side > AVATAR_DIMENSION_PX) {
+            output = Bitmap.createScaledBitmap(square,
+                    AVATAR_DIMENSION_PX, AVATAR_DIMENSION_PX, true);
+        }
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        boolean compressed = output.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, encoded);
+        byte[] result = encoded.toByteArray();
+        if (output != square) output.recycle();
+        if (square != oriented) square.recycle();
+        if (oriented != decoded) oriented.recycle();
+        decoded.recycle();
+        if (!compressed || result.length == 0 || result.length > MAX_AVATAR_BYTES) {
+            throw new Exception("Processed photo is too large");
+        }
+        return result;
+    }
+
+    private int readExifOrientation(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return ExifInterface.ORIENTATION_NORMAL;
+            return new ExifInterface(in).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+        } catch (Exception e) {
+            android.util.Log.d(TAG, "No readable EXIF orientation", e);
+            return ExifInterface.ORIENTATION_NORMAL;
+        }
+    }
+
+    private Bitmap applyExifOrientation(Bitmap source, int orientation) {
+        Matrix matrix = new Matrix();
+        switch (orientation) {
+            case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: matrix.setScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_180: matrix.setRotate(180); break;
+            case ExifInterface.ORIENTATION_FLIP_VERTICAL: matrix.setScale(1, -1); break;
+            case ExifInterface.ORIENTATION_TRANSPOSE:
+                matrix.setRotate(90); matrix.postScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_90: matrix.setRotate(90); break;
+            case ExifInterface.ORIENTATION_TRANSVERSE:
+                matrix.setRotate(270); matrix.postScale(-1, 1); break;
+            case ExifInterface.ORIENTATION_ROTATE_270: matrix.setRotate(270); break;
+            default: return source;
+        }
+        return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
+    }
+
+    private boolean isValidAvatarJpeg(byte[] bytes) {
+        if (bytes == null || bytes.length == 0 || bytes.length > MAX_AVATAR_BYTES) return false;
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+        return "image/jpeg".equals(bounds.outMimeType)
+                && bounds.outWidth > 0 && bounds.outHeight > 0
+                && bounds.outWidth <= AVATAR_DIMENSION_PX
+                && bounds.outHeight <= AVATAR_DIMENSION_PX;
+    }
+
+    private boolean isOwnedAvatarPath(String path, String uid) {
+        if (path == null || uid == null) return false;
+        String prefix = "b2:avatars/" + uid + "_";
+        if (!path.startsWith(prefix) || !path.endsWith(".jpg")) return false;
+        String timestamp = path.substring(prefix.length(), path.length() - 4);
+        return timestamp.matches("[0-9]{10,17}");
+    }
+
+    private String safeMessage(Exception e) {
+        return e.getMessage() == null || e.getMessage().trim().isEmpty()
+                ? "Unknown error" : e.getMessage();
     }
 
     private void openProfilePhotoViewer() {
