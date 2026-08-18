@@ -141,6 +141,21 @@ public class WipeHelper {
             Log.e(TAG, "Failed to clear SeedPhraseHelper derivation cache during wipe", e);
         }
 
+        // Step 4b: Clear the in-memory YouTube search cache. Same class of problem as the
+        // derivation cache above — a static, process-lifetime map that no on-disk clear
+        // reaches. It holds the queries the user typed plus the titles and channels that came
+        // back, i.e. a record of what they searched for during a call. Leaving it resident
+        // means the next account on this device (and, on the duress path, whoever coerced the
+        // wipe) could be served results from the previous session's searches, which
+        // contradicts the fresh-install appearance every wipe path is meant to present.
+        // WatchTogetherActivity.onDestroy() also clears it at end-of-session; this is the
+        // second documented call site ("on sign-out, app wipe").
+        try {
+            YouTubeSearchClient.clearCache();
+        } catch (Exception e) {
+            Log.w(TAG, "YouTubeSearchClient.clearCache() failed during wipe (non-fatal)", e);
+        }
+
         // Step 5: Close the Room singleton BEFORE deleting the file, so the cached
         // instance cannot point at a deleted database on next access.
         try {
