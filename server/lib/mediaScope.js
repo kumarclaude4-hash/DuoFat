@@ -39,12 +39,89 @@ const SCOPE_DENY = {
   AMBIGUOUS: "scope-ambiguous",
   NOT_MEMBER: "not-a-member",
   MALFORMED_GROUP: "group-missing-creator",
+  NOT_OWNER: "not-avatar-owner",
 };
 
 const SCOPE_ALLOW = {
   CHAT: "chat-participant",
   GROUP: "group-member",
+  AVATAR_OWNER: "avatar-owner",
+  AVATAR_READER: "avatar-reader",
 };
+
+// ── Avatar keys ──────────────────────────────────────────────────────────────
+// Profile photos are stored as `avatars/<ownerUid>_<millis>.jpg` (see
+// SettingsActivity.uploadProfilePhoto). That is a TWO-segment key with an
+// `avatars` prefix, so it never matched the `<media|voice>/<scopeId>/<file>`
+// allow-list on either tier and every profile-photo upload died at
+// /mediaToken with `400 Invalid key format` — the user-visible
+// "Upload failed: mediaToken denied [400]: Invalid key format".
+//
+// Avatars are not conversation-scoped, so the chat/group membership test above
+// is the wrong question for them: the middle segment of an avatar key is a UID,
+// not a chatId, and asking "is the caller in chats/<uid>?" would deny the owner
+// of the photo. They get their own decision instead:
+//
+//   • write / delete — owner only. The UID is embedded in the key, so this is a
+//     direct comparison against the verified caller and an attacker cannot mint
+//     a token that overwrites or deletes somebody else's profile photo.
+//   • read — any authenticated user. This matches the existing exposure of the
+//     photo itself: `photoUrl` lives on `users/{uid}`, which firestore.rules
+//     makes readable by every signed-in user, and it is additionally propagated
+//     onto conversation documents. Restricting the bytes harder than the
+//     pointer would break partner avatars in chat lists without withholding
+//     anything, so read stays open to signed-in callers only — never anonymous.
+const AVATAR_KEY_FORMAT = /^avatars\/[A-Za-z0-9-]{8,64}_\d{10,17}\.jpg$/;
+
+/** Ops that mutate the stored object, and so require ownership. */
+const AVATAR_WRITE_OPS = new Set(["write", "delete"]);
+
+/**
+ * Extracts the owning UID from an avatar key, or null when `key` is not a
+ * well-formed avatar key. Splits on the LAST underscore so that the timestamp
+ * suffix is removed even though a UID may itself contain no underscore — the
+ * format regex already guarantees the tail is all digits.
+ */
+function avatarOwnerFromKey(key) {
+  if (typeof key !== "string" || !AVATAR_KEY_FORMAT.test(key)) return null;
+  const name = key.slice("avatars/".length, -".jpg".length);
+  const cut = name.lastIndexOf("_");
+  if (cut <= 0) return null;
+  return name.slice(0, cut);
+}
+
+/** True when `key` addresses a profile photo rather than conversation media. */
+function isAvatarKey(key) {
+  return typeof key === "string" && AVATAR_KEY_FORMAT.test(key);
+}
+
+/**
+ * Decides whether `uid` may mint a token for an avatar object.
+ *
+ * Pure like {@link decideScopeAccess} — no Firestore I/O — because ownership is
+ * fully determined by the key itself, which is exactly what makes this cheap
+ * enough to check without a lookup.
+ *
+ * @returns {{allowed: boolean, reason: string}}
+ */
+function decideAvatarAccess({ uid, key, op } = {}) {
+  if (typeof uid !== "string" || uid === "") {
+    return { allowed: false, reason: SCOPE_DENY.BAD_INPUT };
+  }
+  const owner = avatarOwnerFromKey(key);
+  if (!owner) return { allowed: false, reason: SCOPE_DENY.BAD_INPUT };
+
+  if (AVATAR_WRITE_OPS.has(op)) {
+    return owner === uid
+      ? { allowed: true, reason: SCOPE_ALLOW.AVATAR_OWNER }
+      : { allowed: false, reason: SCOPE_DENY.NOT_OWNER };
+  }
+  if (op === "read") {
+    return { allowed: true, reason: SCOPE_ALLOW.AVATAR_READER };
+  }
+  // Unknown verb: fail closed rather than defaulting to the permissive branch.
+  return { allowed: false, reason: SCOPE_DENY.BAD_INPUT };
+}
 
 /**
  * Decides whether `uid` may mint a media token for a scope, given the two
@@ -117,4 +194,12 @@ function readDoc(doc) {
   return data;
 }
 
-module.exports = { decideScopeAccess, SCOPE_ALLOW, SCOPE_DENY };
+module.exports = {
+  decideScopeAccess,
+  decideAvatarAccess,
+  avatarOwnerFromKey,
+  isAvatarKey,
+  AVATAR_KEY_FORMAT,
+  SCOPE_ALLOW,
+  SCOPE_DENY,
+};

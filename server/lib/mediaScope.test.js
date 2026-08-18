@@ -5,7 +5,14 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { decideScopeAccess, SCOPE_ALLOW, SCOPE_DENY } = require("./mediaScope");
+const {
+  decideScopeAccess,
+  decideAvatarAccess,
+  avatarOwnerFromKey,
+  isAvatarKey,
+  SCOPE_ALLOW,
+  SCOPE_DENY,
+} = require("./mediaScope");
 
 const VICTIM = "uid-victim";
 const PEER = "uid-peer";

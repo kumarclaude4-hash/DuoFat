@@ -54,6 +54,21 @@ function b2Url(env, key) {
 // Must stay byte-identical to MEDIA_KEY_FORMAT in server/index.js.
 const KEY_FORMAT = /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
 
+// Profile photos: avatars/<ownerUid>_<millis>.jpg (SettingsActivity). This is a
+// TWO-segment key, so it never matched KEY_FORMAT and every avatar PUT/GET was
+// rejected 400 here, exactly as /mediaToken rejected it upstream — the
+// user-visible "Upload failed: mediaToken denied [400]: Invalid key format".
+// Kept as its own anchored pattern rather than by loosening the prefix above,
+// so an avatar can only ever be a JPEG and media keys stay just as strict.
+// Must stay byte-identical to AVATAR_KEY_FORMAT in server/lib/mediaScope.js:
+// the two tiers accepting different key sets is what produced this bug.
+const AVATAR_KEY_FORMAT = /^avatars\/[A-Za-z0-9-]{8,64}_\d{10,17}\.jpg$/;
+
+/** Every key shape this Worker serves. Mirrors isAllowedMediaKey() on the server. */
+function isAllowedKey(key) {
+  return KEY_FORMAT.test(key) || AVATAR_KEY_FORMAT.test(key);
+}
+
 // ─── S03-M1: response Content-Type is derived from the key, never trusted ────
 // The key extension is already tightly allow-listed by KEY_FORMAT, but before
 // this fix the *declared* Content-Type header (fully attacker-controlled —
@@ -76,6 +91,12 @@ const CONTENT_TYPE_BY_EXT = {
 };
 
 function contentTypeForKey(key) {
+  // Derive the extension from the allow-listed pattern that actually matched.
+  // Reading KEY_FORMAT's capture group alone would return null for an avatar
+  // key and serve every profile photo as application/octet-stream, which Glide
+  // would refuse to decode — a silently broken image rather than an error.
+  // AVATAR_KEY_FORMAT permits only `.jpg`, so the type is fixed for that branch.
+  if (AVATAR_KEY_FORMAT.test(key)) return CONTENT_TYPE_BY_EXT.jpg;
   const match = KEY_FORMAT.exec(key);
   const ext = match?.[2];
   return CONTENT_TYPE_BY_EXT[ext] || 'application/octet-stream';
@@ -646,7 +667,7 @@ export default {
     // matching this shape (see B2StorageHelper / ChatMediaActivity / GroupChatActivity).
     // Rejecting anything else closes off path traversal ("../"), null bytes, and
     // arbitrary-prefix keys that the shared-secret auth alone does not constrain.
-    if (!KEY_FORMAT.test(key)) {
+    if (!isAllowedKey(key)) {
       return respond({ error: 'Invalid file key format' }, 400);
     }
 

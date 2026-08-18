@@ -4,7 +4,13 @@ const crypto = require("crypto");
 const pure = require("./lib/pure");
 const { createChallengeStore } = require("./lib/challengeStore");
 const { verifyMintTokenSignature } = require("./lib/identityVerify");
-const { decideScopeAccess, SCOPE_DENY } = require("./lib/mediaScope");
+const {
+  decideScopeAccess,
+  decideAvatarAccess,
+  isAvatarKey,
+  AVATAR_KEY_FORMAT,
+  SCOPE_DENY,
+} = require("./lib/mediaScope");
 const { sanitizeMigratedUserFields, isValidDisplayName } = require("./lib/profileSanitize");
 const { createAdminLockoutStore } = require("./lib/adminLockoutStore");
 const { createAdminSessionStore } = require("./lib/adminSessionStore");
@@ -626,6 +632,23 @@ const MEDIA_OPS = new Set(["read", "write", "delete"]);
 // Must stay byte-identical to KEY_FORMAT in worker/src/index.js.
 const MEDIA_KEY_FORMAT =
   /^(media|voice)\/[a-zA-Z0-9-]{16,80}\/[a-zA-Z0-9._-]{1,100}\.(jpg|mp4|m4a|3gp)$/;
+
+/**
+ * Every key shape the storage tier accepts: conversation media/voice, plus
+ * profile avatars (`avatars/<uid>_<millis>.jpg`).
+ *
+ * Avatars were missing from the allow-list entirely, so /mediaToken answered
+ * `400 Invalid key format` for every profile-photo upload while the client
+ * surfaced it verbatim as "Upload failed: mediaToken denied [400]". Keeping the
+ * two shapes as separate anchored patterns (rather than loosening the media
+ * pattern's prefix) means avatars cannot smuggle in a video extension and media
+ * keys are validated exactly as strictly as before.
+ *
+ * Must stay byte-identical to isAllowedKey() in worker/src/index.js.
+ */
+function isAllowedMediaKey(key) {
+  return MEDIA_KEY_FORMAT.test(key) || AVATAR_KEY_FORMAT.test(key);
+}
 
 function b64url(buf) {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -3288,22 +3311,38 @@ const server = http.createServer((req, res) => {
         }
         // Same allow-list the Worker enforces. Validating here too means a
         // malformed key never even gets a signature.
-        if (!MEDIA_KEY_FORMAT.test(key)) {
+        if (!isAllowedMediaKey(key)) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Invalid key format");
           return;
         }
 
-        // ── Authorization: caller must belong to the conversation ───────────
-        // Key shape is <media|voice>/<chatId|groupId>/<uuid>.<ext>, so the
-        // middle segment names the conversation the object belongs to.
-        const scopeId = key.split("/")[1];
-        const allowed = await callerMayAccessScope(uid, scopeId);
-        if (!allowed) {
-          console.warn(`mediaToken: denied uid=${uidTag(uid)} scope=${scopeId} op=${op}`);
-          res.writeHead(403, { "Content-Type": "text/plain" });
-          res.end("Not a participant of this conversation");
-          return;
+        // ── Authorization ───────────────────────────────────────────────────
+        // Two key families, two different questions.
+        if (isAvatarKey(key)) {
+          // Profile photos are owned by the UID embedded in the key, not scoped
+          // to a conversation — running them through callerMayAccessScope would
+          // look up chats/<uid>, find nothing, and deny the photo's own owner.
+          const decision = decideAvatarAccess({ uid, key, op });
+          if (!decision.allowed) {
+            console.warn(
+              `mediaToken: avatar denied uid=${uidTag(uid)} op=${op} reason=${decision.reason}`
+            );
+            res.writeHead(403, { "Content-Type": "text/plain" });
+            res.end("Not allowed for this profile photo");
+            return;
+          }
+        } else {
+          // Key shape is <media|voice>/<chatId|groupId>/<uuid>.<ext>, so the
+          // middle segment names the conversation the object belongs to.
+          const scopeId = key.split("/")[1];
+          const allowed = await callerMayAccessScope(uid, scopeId);
+          if (!allowed) {
+            console.warn(`mediaToken: denied uid=${uidTag(uid)} scope=${scopeId} op=${op}`);
+            res.writeHead(403, { "Content-Type": "text/plain" });
+            res.end("Not a participant of this conversation");
+            return;
+          }
         }
 
         const expiresAt = Date.now() + MEDIA_TOKEN_TTL_MS;
