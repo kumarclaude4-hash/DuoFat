@@ -265,17 +265,13 @@ public class WatchTogetherPlayerView extends WebView {
         loadPlayerPage();
     }
 
-    /** Latest raw sample of the local playback position, in ms, exactly as JS reported it. */
-    public long getLastKnownPositionMs() {
-        return lastKnownPositionMs;
-    }
-
     /**
      * Where the local player is <em>right now</em>: the last sample, advanced by the time
      * that has passed since it was taken.
      *
-     * <p>This, not {@link #getLastKnownPositionMs()}, is what may be compared against a
-     * target projected to the current instant. Positions arrive from JS only once per tick,
+     * <p>This is the only position accessor, deliberately. A raw
+     * {@code getLastKnownPositionMs()} existed alongside it and every caller used that one
+     * instead, which is what made playback drift: positions arrive from JS only once per tick,
      * so the raw sample is on average half a tick stale and always stale in the same
      * direction — it reads low while playing. Comparing that against a live target made
      * every drift measurement overstate how far behind this device was, so followers
@@ -297,9 +293,23 @@ public class WatchTogetherPlayerView extends WebView {
         return Math.max(0L, sample + (long) (age * rate));
     }
 
-    /** Whether the local player last reported that it was playing. */
-    public boolean isLocallyPlaying() {
-        return lastKnownPlaying;
+    /**
+     * Whether the local position is fresh enough to be published to the peer as authoritative.
+     *
+     * <p>Deliberately not just "is it playing": {@link #lastKnownPlaying} is only ever mutated
+     * by an incoming tick, so when the page stops ticking — backgrounded WebView, torn-down
+     * embed — it stays {@code true} indefinitely and describes a player that has long since
+     * stopped. Broadcasting the frozen sample behind it would drag a peer who is playing
+     * correctly back to a dead timestamp, which is precisely the failure this guards.
+     *
+     * <p>The freshness bound is the same {@link #MAX_PROJECTION_MS} used by
+     * {@link #getEstimatedPositionMs()}, so this returns true exactly when that method can
+     * genuinely project rather than fall back to a stale sample.
+     */
+    public boolean hasFreshPosition() {
+        if (!lastKnownPlaying || lastKnownPositionRealtime <= 0L) return false;
+        long age = SystemClock.elapsedRealtime() - lastKnownPositionRealtime;
+        return age <= MAX_PROJECTION_MS;
     }
 
     private static double safeRate(double rate) {

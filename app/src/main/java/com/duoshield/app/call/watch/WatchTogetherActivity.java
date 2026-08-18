@@ -405,9 +405,18 @@ public class WatchTogetherActivity extends AppCompatActivity
             suppressDriftUntilRealtime =
                     SystemClock.elapsedRealtime() + CUE_SETTLE_MS;
             player.cue(state.videoId, target, state.playing, state.playbackRate);
-        } else if (SystemClock.elapsedRealtime() < suppressDriftUntilRealtime) {
-            // Still settling from a recent cue(). Keep the rate and play/pause intent in
-            // sync — those are cheap and idempotent — but leave the position alone.
+        } else if (WatchTogetherState.ACTION_HEARTBEAT.equals(state.lastAction)
+                && SystemClock.elapsedRealtime() < suppressDriftUntilRealtime) {
+            // Still settling from a recent cue(), and this is only a heartbeat — i.e. inferred
+            // drift correction, not something a human asked for. Skip the position work but
+            // still track rate and play/pause intent, which are cheap and idempotent.
+            //
+            // The heartbeat test matters: the settle window must never swallow a deliberate
+            // position change. A seek/play/pause/rate carries a position the user actually
+            // chose, and reconcile() is the only path to the WebView, so suppressing those
+            // would drop the action outright — a ±10s tap within a few seconds of loading
+            // would do nothing at all, and a small seek would never be recovered by later
+            // drift correction either.
             player.setRate(state.playbackRate);
             if (state.playing) {
                 player.play();
@@ -742,10 +751,16 @@ public class WatchTogetherActivity extends AppCompatActivity
         // Only report a position we can still vouch for. If the local page has stopped
         // ticking (backgrounded WebView, torn-down embed), getEstimatedPositionMs() falls
         // back to a frozen sample; broadcasting that as authoritative would pull a peer who
-        // IS playing correctly back to a dead timestamp. Skipping the write instead lets the
-        // peer's own stall-takeover path (below) claim the writer role, which is exactly the
-        // handover this design already relies on.
-        if (!player.isLocallyPlaying()) return;
+        // IS playing correctly back to a dead timestamp. Skipping the write instead leaves
+        // `appliedReceiptRealtime` to go stale on the peer, so its `writerSeemsStalled`
+        // takeover above claims the writer role — exactly the handover this design already
+        // relies on. The guard deliberately sits after that decision, so a device whose own
+        // page has stalled never writes, whether or not it is the designated writer.
+        //
+        // This tests tick freshness, not the playing flag: that flag is only updated BY ticks,
+        // so a page that stopped ticking still claims to be playing and would sail past a
+        // naive check.
+        if (!player.hasFreshPosition()) return;
 
         WatchTogetherState s = appliedState.copy();
         s.positionMs = player.getEstimatedPositionMs();
