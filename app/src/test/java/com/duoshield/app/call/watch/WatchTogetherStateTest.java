@@ -359,6 +359,65 @@ public class WatchTogetherStateTest {
 
     // ── Rejoin scenario ───────────────────────────────────────────────────────
 
+    /**
+     * Regression test for the stale-sample drift bug.
+     *
+     * <p>Positions arrive from the player page only once per 500ms tick, so a raw sample is
+     * on average half a tick out of date and — while playing — always stale in the same
+     * direction: it reads low. Comparing that raw sample against a target projected to the
+     * current instant therefore reported a device that was perfectly in sync as being a tick
+     * behind, so a forward seek was issued on every reconcile pass. Both sides of the
+     * comparison must be projected to the same instant.
+     */
+    @Test
+    public void inSyncFollowerDoesNotSeekWhenBothSidesShareAnInstant() {
+        WatchTogetherState s = new WatchTogetherState();
+        s.active = true;
+        s.videoId = "dQw4w9WgXcQ";
+        s.playing = true;
+        s.positionMs = 30_000L;
+        s.playbackRate = 1.0d;
+
+        // 400ms after the snapshot the target has advanced to 30_400.
+        long target = WatchTogetherState.projectedPositionMs(s, 400L);
+        assertEquals(30_400L, target);
+
+        // The player last reported 30_000 at snapshot time and has not ticked since. Judged
+        // raw it looks 400ms behind; judged as an estimate advanced by its own 400ms age it
+        // is exactly on target. Neither crosses the 1500ms threshold on its own...
+        assertFalse(WatchTogetherState.shouldSeek(30_000L, target));
+        assertFalse(WatchTogetherState.shouldSeek(30_400L, target));
+
+        // ...but at 2x the same one-tick gap is twice as many ms of video, and the raw
+        // sample alone is what pushed it over the edge into a spurious seek.
+        s.playbackRate = 2.0d;
+        s.positionMs = 30_000L;
+        long fastTarget = WatchTogetherState.projectedPositionMs(s, 900L);
+        assertEquals(31_800L, fastTarget);
+        assertTrue("Raw sample overstates drift and triggers a needless seek",
+                WatchTogetherState.shouldSeek(30_000L, fastTarget));
+        assertFalse("An age-corrected estimate is correctly judged in sync",
+                WatchTogetherState.shouldSeek(31_800L, fastTarget));
+    }
+
+    /**
+     * A paused session is a fixed point: repeated reconciles must not accumulate drift, no
+     * matter how much local time passes between them. This is what makes it safe for
+     * {@code onResume()} to reconcile against an already-applied state.
+     */
+    @Test
+    public void repeatedProjectionOfPausedStateIsStable() {
+        WatchTogetherState s = new WatchTogetherState();
+        s.playing = false;
+        s.positionMs = 12_345L;
+
+        assertEquals(12_345L, WatchTogetherState.projectedPositionMs(s, 0L));
+        assertEquals(12_345L, WatchTogetherState.projectedPositionMs(s, 1_000L));
+        assertEquals(12_345L, WatchTogetherState.projectedPositionMs(s, 600_000L));
+        assertFalse("A paused player already at position must never seek",
+                WatchTogetherState.shouldSeek(12_345L, 12_345L));
+    }
+
     @Test
     public void rejoinProjectsForwardFromStoredState() {
         // A participant backgrounds the app, returns 20s later, and re-reads the doc.
