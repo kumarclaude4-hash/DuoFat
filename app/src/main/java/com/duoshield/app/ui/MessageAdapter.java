@@ -689,11 +689,20 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     // same frame, so the download would buy nothing but bandwidth and, on a
                     // 2 GB device, a very real OOM risk.
                     Glide.with(ctx).load(stamp).centerCrop().into(h.videoThumbnail);
-                } else if (com.duoshield.app.util.B2StorageHelper.getCached(vidRef) != null) {
+                } else if (com.duoshield.app.util.B2StorageHelper
+                        .isLocallyAvailable(ctx, vidRef)) {
                     // Legacy video with no inline thumb. Only extract a frame when the
-                    // decrypted bytes already sit in cache — i.e. the user has played it, so
-                    // the download is already paid for. Otherwise leave the dark placeholder
-                    // rather than pulling the whole object down during a scroll.
+                    // decrypted bytes are already available locally — i.e. the user has played
+                    // it, so the download is already paid for. Otherwise leave the dark
+                    // placeholder rather than pulling the whole object down during a scroll.
+                    //
+                    // Checks memory *or* disk rather than memory alone: large videos are now
+                    // deliberately kept out of the in-memory cache (they used to evict every
+                    // avatar to make room, then fail to fit anyway), so a getCached() != null
+                    // test would never fire for them even immediately after playback — the very
+                    // files most likely to be missing an inline thumb would be stranded on the
+                    // placeholder forever. Extraction itself no longer buffers the video in
+                    // heap, so reading it back from disk is cheap.
                     com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(ctx, vidRef, vidKey,
                             new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {
                         @Override public void onLoaded(byte[] jpegBytes) {
@@ -1116,9 +1125,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                             if (cachedThumb != null) {
                                 Glide.with(ctx).load(cachedThumb).centerCrop().into(slot);
                             } else if (slotStamp == null
-                                    && com.duoshield.app.util.B2StorageHelper.getCached(url) != null) {
+                                    && com.duoshield.app.util.B2StorageHelper
+                                            .isLocallyAvailable(ctx, url)) {
                                 // Legacy album video with no inline stamp — extract a frame only
-                                // when the decrypted bytes are already cached locally.
+                                // when the decrypted bytes are already cached locally (memory or
+                                // disk; see the single-video branch above for why disk counts).
                                 com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(
                                         ctx, url, key,
                                         new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {

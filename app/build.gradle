@@ -260,6 +260,23 @@ dependencies {
     // WorkManager for self-destruct scheduler
     implementation 'androidx.work:work-runtime:2.9.0'
 
+    // ProfileInstaller — consumes app/src/main/baseline-prof.txt.
+    //
+    // Without this artifact on the runtime classpath the baseline profile is packaged into the
+    // APK and then ignored: nothing triggers the ART compilation of it, so every startup runs
+    // the interpreter/JIT over the same cold paths. With it, the profile is installed shortly
+    // after first launch and those methods are AOT-compiled, which is where the startup win
+    // comes from.
+    //
+    // Pinned at 1.3.0 deliberately: that exact version is already present in
+    // gradle/verification-metadata.xml (it resolves transitively today), as are all three of
+    // its dependencies — androidx.annotation, androidx.concurrent:concurrent-futures and
+    // androidx.startup:startup-runtime. This build enforces Gradle dependency verification, so
+    // declaring any other version would fail :app:checkDebugAarMetadata against unverified
+    // artifacts. Bumping it means regenerating the verification metadata in the same change —
+    // see the androidx.activity note above for the same trap.
+    implementation 'androidx.profileinstaller:profileinstaller:1.3.0'
+
     // Material Design
     implementation 'com.google.android.material:material:1.11.0'
 
