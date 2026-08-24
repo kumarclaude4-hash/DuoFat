@@ -66,6 +66,7 @@ import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.util.EditMessageHelper;
 import com.duoshield.app.util.ForwardMessageHelper;
 import com.duoshield.app.util.B2StorageHelper;
+import com.duoshield.app.util.InlineThumb;
 
 import com.duoshield.app.util.PresenceThrottle;
 import com.duoshield.app.util.ButtonPressAnimator;
@@ -1665,6 +1666,9 @@ public class ChatMediaActivity extends BaseActivity {
                     if (mUrl == null) mUrl = dc.getDocument().getString("mediaUrl");
                     String mType = dc.getDocument().getString("mediaType");
                     String mKey  = dc.getDocument().getString("mediaKey");
+                    // Inline thumbnail — present only on media sent by clients that support
+                    // it. Null for legacy media, which still renders via the download path.
+                    String mThumb = dc.getDocument().getString("thumb");
                     String  rpId    = dc.getDocument().getString("replyToId");
                     String  rpPrv   = dc.getDocument().getString("replyPreview");
                     Long    expAt   = dc.getDocument().getLong("expiresAt");
@@ -1757,6 +1761,7 @@ public class ChatMediaActivity extends BaseActivity {
                             if (rpPrv != null) pending.setReplyPreview(rpPrv);
                             if (expAt != null) pending.setExpiresAt(expAt);
                             if (mKey  != null) pending.setMediaKey(mKey);
+                            if (mThumb != null) pending.setThumb(mThumb);
                             pending.forwarded = Boolean.TRUE.equals(fwdFlag);
                             String fsStatus = dc.getDocument().getString("status");
                             if (fsStatus != null) pending.setStatus(fsStatus);
@@ -1781,6 +1786,7 @@ public class ChatMediaActivity extends BaseActivity {
                     if (rpPrv     != null) m.setReplyPreview(rpPrv);
                     if (expAt     != null) m.setExpiresAt(expAt);
                     if (mKey      != null) m.setMediaKey(mKey);
+                    if (mThumb    != null) m.setThumb(mThumb);
                     if (statusFromFs != null) m.setStatus(statusFromFs);
                     m.forwarded = Boolean.TRUE.equals(fwdFlag);
                     // Read album + caption fields (never encrypted, safe to read directly)
@@ -2736,12 +2742,20 @@ public class ChatMediaActivity extends BaseActivity {
                 if (plain == null || plain.length == 0) throw new java.io.IOException("Empty file");
                 if ("image".equals(mediaType)) plain = compressImage(plain);
                 B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+
+                // One inline stamp per album item, sealed under that item's own key.
+                String itemThumb = "video".equals(mediaType)
+                        ? InlineThumb.sealedFromVideoUri(
+                                ChatMediaActivity.this, fileUri, enc.keyBase64)
+                        : InlineThumb.sealedFromImageBytes(plain, enc.keyBase64);
+
                 String storagePath = B2StorageHelper.uploadFile(enc.data, path, mime,
                     pct -> runOnUiThread(() -> {
                         if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
                     }));
                 synchronized (multiUploadLock) {
-                    pendingMultiItems.add(new String[]{ storagePath, mediaType, enc.keyBase64 });
+                    pendingMultiItems.add(new String[]{
+                            storagePath, mediaType, enc.keyBase64, itemThumb });
                 }
                 onAlbumItemComplete();
             } catch (Exception e) {
@@ -2801,6 +2815,11 @@ public class ChatMediaActivity extends BaseActivity {
                 obj.put("path", item[0]);
                 obj.put("type", item[1]);
                 obj.put("key",  item[2]);
+                // item[3] is the sealed inline thumbnail; absent on items whose
+                // generation failed, and on arrays built by older code paths.
+                if (item.length > 3 && item[3] != null && !item[3].isEmpty()) {
+                    obj.put("thumb", item[3]);
+                }
                 jsonArray.put(obj);
             } catch (org.json.JSONException ignored) {}
         }
@@ -2916,6 +2935,13 @@ public class ChatMediaActivity extends BaseActivity {
                         runOnUiThread(() -> {
                             if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
                         });
+                        // Extract the preview frame from the local file while the upload is
+                        // still in flight. This is the whole point of inline thumbnails for
+                        // video: the recipient gets a visible frame without downloading a
+                        // single byte of what may be a 500 MB object.
+                        final String sealedThumb = InlineThumb.sealedFromVideoUri(
+                                ChatMediaActivity.this, fileUri, mediaKey);
+
                         String storagePath = B2StorageHelper.uploadFileFromDisk(
                                 encTmp, path, mime,
                                 pct -> runOnUiThread(() -> {
@@ -2925,7 +2951,7 @@ public class ChatMediaActivity extends BaseActivity {
                         runOnUiThread(() -> {
                             if (isFinishing() || isDestroyed()) return;
                             hideUploadContainer();
-                            sendMediaMessage(storagePath, mediaType, finalMediaKey, null);
+                            sendMediaMessage(storagePath, mediaType, finalMediaKey, null, sealedThumb);
                         });
                     } finally {
                         //noinspection ResultOfMethodCallIgnored
@@ -2950,6 +2976,15 @@ public class ChatMediaActivity extends BaseActivity {
                         if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
                     });
                     B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+
+                    // Build the inline thumbnail from the bytes already in hand — for images
+                    // this is the post-compression buffer, so the stamp matches what the
+                    // recipient will eventually see. Costs a few ms and no network.
+                    final String sealedThumb = "video".equals(mediaType)
+                            ? InlineThumb.sealedFromVideoUri(
+                                    ChatMediaActivity.this, fileUri, enc.keyBase64)
+                            : InlineThumb.sealedFromImageBytes(plain, enc.keyBase64);
+
                     String storagePath = B2StorageHelper.uploadFile(
                             enc.data, path, mime,
                             pct -> runOnUiThread(() -> {
@@ -2963,7 +2998,7 @@ public class ChatMediaActivity extends BaseActivity {
                         if (isFinishing() || isDestroyed()) return;
                         hideUploadContainer();
                         // Caption goes in the same message bubble, not as a separate message
-                        sendMediaMessage(storagePath, mediaType, mediaKey, captionToSend);
+                        sendMediaMessage(storagePath, mediaType, mediaKey, captionToSend, sealedThumb);
                     });
                 }
             } catch (Exception e) {
@@ -3120,6 +3155,20 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     private void sendMediaMessage(String storagePath, String mediaType, String mediaKey, String caption) {
+        sendMediaMessage(storagePath, mediaType, mediaKey, caption, null);
+    }
+
+    /**
+     * Writes a media message, optionally carrying an inline thumbnail.
+     *
+     * <p>{@code sealedThumb} is a ~1.5 KB AES-GCM sealed JPEG produced by
+     * {@link com.duoshield.app.util.InlineThumb} from the local file before upload. It
+     * rides inside the message document, so the recipient's bubble can render the instant
+     * the snapshot arrives rather than after a full download and decrypt. Pass {@code null}
+     * when generation failed — the receiver falls back to the normal download path.
+     */
+    private void sendMediaMessage(String storagePath, String mediaType, String mediaKey,
+                                  String caption, String sealedThumb) {
         String msgId = UUID.randomUUID().toString(); 
         long now = System.currentTimeMillis();
         long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
@@ -3128,6 +3177,7 @@ public class ChatMediaActivity extends BaseActivity {
         Message m = new Message(msgId, conversationId, myUid, "", now, false, storagePath, mediaType);
         m.setExpiresAt(exp);
         m.setMediaKey(mediaKey);
+        m.setThumb(sealedThumb);
         if (caption != null && !caption.isEmpty()) m.setCaption(caption);
         m.setStatus("pending");
         adapter.appendMessage(m);
@@ -3148,6 +3198,10 @@ public class ChatMediaActivity extends BaseActivity {
         doc.put("timestamp", FieldValue.serverTimestamp());
         doc.put("status", "sent");
         if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
+        // Inline thumbnail: sealed under the same mediaKey, so it is exactly as private as
+        // the object it previews. Omitted entirely when absent — an empty string would
+        // cost bytes on every snapshot delivery for no benefit.
+        if (sealedThumb != null && !sealedThumb.isEmpty()) doc.put("thumb", sealedThumb);
 
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
@@ -3561,6 +3615,11 @@ public class ChatMediaActivity extends BaseActivity {
                     if (pending.getReplyPreview() != null) toSave.setReplyPreview(pending.getReplyPreview());
                     toSave.setExpiresAt(pending.getExpiresAt());
                     if (pending.getStatus() != null) toSave.setStatus(pending.getStatus());
+                    // Carry the media key and inline thumbnail across the rebuild. Dropping
+                    // them here would leave the persisted row unable to decrypt or preview
+                    // its own attachment after a restart.
+                    if (pending.getMediaKey() != null) toSave.setMediaKey(pending.getMediaKey());
+                    if (pending.getThumb()    != null) toSave.setThumb(pending.getThumb());
                     AppDatabase.getInstance(ChatMediaActivity.this).messageDao().insert(toSave);
                     BackupManager.backup(ChatMediaActivity.this, toSave);
                     Log.d(TAG, "retryPendingDecryption: OK msg=" + id + " sigType=" + sigType);
