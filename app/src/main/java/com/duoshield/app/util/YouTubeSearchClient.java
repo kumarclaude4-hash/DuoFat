@@ -193,7 +193,11 @@ public final class YouTubeSearchClient {
      * {@code maxResults} stops a 5-row answer being served to a 15-row request.
      */
     private static String cacheKey(String query, int maxResults) {
-        return query.toLowerCase() + '\u0000' + maxResults;
+        // Locale.ROOT, not the default locale: a device in a Turkish locale lowercases
+        // "I" to the dotless "ı", so the same query could hash to two different keys on
+        // two devices (or across a locale change), silently defeating the cache. Every
+        // other case-folding site in this codebase pins a locale for exactly this reason.
+        return query.toLowerCase(java.util.Locale.ROOT) + '\u0000' + maxResults;
     }
 
     private static List<YouTubeSearchResult> cacheGet(String key) {
