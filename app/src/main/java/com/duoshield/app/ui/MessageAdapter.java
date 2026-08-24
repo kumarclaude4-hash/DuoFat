@@ -715,10 +715,15 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         }
                     });
                 }
+                final boolean vidChunked = msg.isChunked();
                 h.videoContainer.setOnClickListener(v -> {
                     Intent i = new Intent(ctx, com.duoshield.app.MediaViewerActivity.class);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_URL, vidRef);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_MEDIA_KEY, vidKey);
+                    // Read off the message rather than probed from the object: the viewer has to
+                    // pick a decrypt path before it has seen a single byte, and this row is the
+                    // only place that knows which format the sender wrote.
+                    i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_CHUNKED, vidChunked);
                     ctx.startActivity(i);
                 });
 
@@ -901,7 +906,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             bindLinkPreview(h, msg, ctx);
         }
 
-        // ── Media caption (photo / video / album) ───────────────────
+        // ── Media caption (photo / video / album) ──────────���────────
         if (h.mediaCaptionText != null) {
             String cap = msg.getCaption();
             if (cap != null && !cap.isEmpty()) {
@@ -1181,6 +1186,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         intent = new Intent(ctx, com.duoshield.app.MediaViewerActivity.class);
                         intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_URL, finalUrl);
                         intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_MEDIA_KEY, finalKey);
+                        // No EXTRA_CHUNKED here, and that is correct rather than an omission:
+                        // album items carry no per-item format flag and the multi-media upload
+                        // path never writes the chunked format, so every item in this grid is
+                        // whole-blob. The viewer's false default is the accurate answer.
                     } else {
                         intent = new Intent(ctx, com.duoshield.app.FullScreenImageActivity.class);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, finalUrl);

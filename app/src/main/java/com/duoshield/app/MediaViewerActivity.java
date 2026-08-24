@@ -10,10 +10,14 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.Player;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.ui.PlayerView;
 
 import com.duoshield.app.util.B2StorageHelper;
+import com.duoshield.app.util.ChunkedMediaDataSource;
 
 
 import java.io.File;
@@ -27,12 +31,23 @@ public class MediaViewerActivity extends BaseActivity {
 
     public static final String EXTRA_URL       = "media_url";
     public static final String EXTRA_MEDIA_KEY = "media_key";
+    /**
+     * Whether the object named by {@link #EXTRA_URL} is stored in the chunked v2 format.
+     *
+     * <p>Carried as an intent extra rather than sniffed off the object's leading version byte:
+     * the byte is attacker-influenced, and letting it select the decrypt path would mean a
+     * remote party choosing which crypto code runs. The flag originates on the message document
+     * that named the object, so it is as trustworthy as the media key beside it. Defaults to
+     * false, which is the truth for every object written before this format existed.
+     */
+    public static final String EXTRA_CHUNKED  = "media_chunked";
 
     private ExoPlayer   player;
     private PlayerView  playerView;
     private ProgressBar progressBar;
     private String      mediaRef;
     private String      mediaKey;
+    private boolean     chunked;
     /**
      * Decrypted scratch file backing the player, deleted in {@link #onDestroy()}.
      *
@@ -54,6 +69,7 @@ public class MediaViewerActivity extends BaseActivity {
         progressBar = findViewById(R.id.progress);
         mediaRef    = getIntent().getStringExtra(EXTRA_URL);
         mediaKey    = getIntent().getStringExtra(EXTRA_MEDIA_KEY);
+        chunked     = getIntent().getBooleanExtra(EXTRA_CHUNKED, false);
 
         ImageButton btnClose    = findViewById(R.id.btn_close);
         ImageButton btnDownload = findViewById(R.id.btn_download);
@@ -78,6 +94,15 @@ public class MediaViewerActivity extends BaseActivity {
      * now flat regardless of file size.
      */
     private void loadAndPlay() {
+        if (B2StorageHelper.isB2Path(mediaRef) && chunked) {
+            // Chunked v2 object: hand ExoPlayer a DataSource that decrypts 1 MiB at a time and
+            // let it pull. Nothing is written to disk, so there is no playbackFile to clean up
+            // and the first frame renders after one header read plus one chunk rather than
+            // after the whole object has landed and been decrypted end to end.
+            showProgress(true);
+            initChunkedPlayer();
+            return;
+        }
         if (B2StorageHelper.isB2Path(mediaRef)) {
             showProgress(true);
             File dest;
@@ -119,6 +144,56 @@ public class MediaViewerActivity extends BaseActivity {
         player.play();
     }
 
+    /**
+     * Builds a player that streams straight out of the encrypted object.
+     *
+     * <p>{@link ProgressiveMediaSource} drives a {@link ChunkedMediaDataSource} through the
+     * standard extractor pipeline, so seeking needs no special handling here: the extractor
+     * reopens the source at the requested plaintext position and the data source turns that
+     * position into a chunk index arithmetically. The {@code duoshield-chunked://} URI is inert
+     * — the factory reads the B2 path and media key from its own constructor arguments, and the
+     * URI exists only because {@link MediaItem} requires one.
+     *
+     * <p>Marked {@code @UnstableApi} rather than opting in per call: {@code MediaSource},
+     * {@code ProgressiveMediaSource} and {@code setMediaSource} are all unstable in media3
+     * 1.3.1, and containing that to the one method that touches them keeps the rest of the
+     * activity on the stable surface.
+     */
+    @UnstableApi
+    private void initChunkedPlayer() {
+        if (isDestroyed() || isFinishing()) return;
+        player = new ExoPlayer.Builder(this).build();
+        if (playerView != null) playerView.setPlayer(player);
+        player.addListener(new Player.Listener() {
+            @Override public void onPlaybackStateChanged(int state) {
+                // The spinner has to be dismissed by playback state rather than by a download
+                // completing, because in streaming mode there is no download that completes.
+                if (state == Player.STATE_READY || state == Player.STATE_ENDED) {
+                    showProgress(false);
+                } else if (state == Player.STATE_BUFFERING) {
+                    showProgress(true);
+                }
+            }
+            @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                // A failed chunk tag surfaces here. The object is either tampered with or
+                // truncated; either way there is no partial playback to fall back to, because
+                // no chunk is ever exposed before its tag verifies.
+                showProgress(false);
+                if (isDestroyed() || isFinishing()) return;
+                Toast.makeText(MediaViewerActivity.this,
+                        "Failed to play video", Toast.LENGTH_SHORT).show();
+            }
+        });
+        // Opaque (scheme:ssp) rather than hierarchical, so the B2 path's own "b2:" prefix cannot
+        // be misread as an authority by anything that inspects the URI along the way.
+        MediaItem item = MediaItem.fromUri(
+                Uri.fromParts(ChunkedMediaDataSource.SCHEME, mediaRef, null));
+        player.setMediaSource(new ProgressiveMediaSource.Factory(
+                new ChunkedMediaDataSource.Factory(mediaRef, mediaKey)).createMediaSource(item));
+        player.prepare();
+        player.play();
+    }
+
     // ── Download to gallery ───────────────────────────────────────────────────
 
     /**
@@ -152,7 +227,11 @@ public class MediaViewerActivity extends BaseActivity {
             Toast.makeText(this, "Save failed", Toast.LENGTH_SHORT).show();
             return;
         }
-        B2StorageHelper.loadMediaToFile(this, mediaRef, mediaKey, scratch,
+        // Saving is the one operation that genuinely needs every byte, so it does a full
+        // download + decrypt even in streaming mode — there is no playback file to reuse
+        // because streaming never wrote one. The chunked flag still has to be threaded through
+        // so the decrypt loop matches the format the object is actually in.
+        B2StorageHelper.loadMediaToFile(this, mediaRef, mediaKey, scratch, chunked,
                 new B2StorageHelper.FileCallback() {
                     @Override public void onReady(File plainFile) {
                         Executors.newSingleThreadExecutor()
