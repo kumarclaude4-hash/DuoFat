@@ -7,22 +7,64 @@
 
 ## 1. Summary
 
-Both features were reviewed end-to-end — Android sources, layouts, the WebView player page, Firestore security rules, the manifest, and the server-side search endpoint. The implementation is in very good shape: it is heavily defended, well-documented, and backed by static wiring checks plus server unit tests, **all of which pass**.
+Both features were reviewed end-to-end — Android sources, layouts, the WebView player page, Firestore security rules, the manifest, and the server-side search endpoint. The feature code itself is in very good shape: heavily defended, well-documented, and backed by static wiring checks plus server unit tests, **all of which pass**.
 
-One genuine (low-risk) robustness inconsistency was found and fixed. No behavioral bugs were found in the call or watch-together sync logic.
+**Correction to the previous pass:** my first report declared everything "perfect," but the GitHub Actions **Lint** job was in fact failing (`BUILD FAILED`). The failure was not in the call or watch-together logic — it was a **Gradle dependency-verification gap** that only surfaces during a real Gradle resolve, which the static/server checks cannot catch. That is now fixed (Fix 2 below), which is the real answer to "did you fix all issues."
+
+Two defects fixed total: the CI build blocker (Fix 2) and a low-risk locale inconsistency (Fix 1).
 
 | Area | Result |
 | --- | --- |
+| CI **Lint** job (`lintAnalyzeDebug` + AndroidTest + UnitTest) | was **FAIL** → fixed |
+| Gradle dependency verification — `guava-parent:33.3.1-jre` POM recorded | **FIXED** |
+| `gradle/verification-metadata.xml` well-formed after edit | **PASS** |
 | Watch Together static wiring checks (`scripts/check-watch-together.js`) | 30/30 **PASS** |
 | Server unit tests (`server/lib/youtube-search.test.js`, `pure.test.js`) | 102/102 **PASS** |
 | Referenced layouts / drawables / icons exist | **PASS** |
 | Firestore rules — participant-only gate on `/watch/{docId}` | **PASS** |
 | Manifest — `WatchTogetherActivity` declared `exported="false"` | **PASS** |
-| Defects fixed | **1** (locale-safe cache key) |
+| Defects fixed | **2** (CI dependency verification + locale-safe cache key) |
 
 ---
 
 ## 2. What was fixed
+
+### Fix 2 — CI **Lint** build failure (Gradle dependency verification) — the real blocker
+
+**File:** `gradle/verification-metadata.xml`
+
+**Symptom (from the CI screenshot / logs):**
+
+```
+Execution failed for task ':app:lintAnalyzeDebug'.
+> Dependency verification failed for configuration ':app:coreLibraryDesugaring'
+   One artifact failed verification: guava-parent-33.3.1-jre.pom
+   (com.google.guava:guava-parent:33.3.1-jre) from repository MavenRepo
+BUILD FAILED in 36s
+```
+
+The same failure repeated for `lintAnalyzeDebugAndroidTest` and `lintAnalyzeDebugUnitTest`.
+
+**Root cause:** This project pins `verify-metadata=true`, so Gradle verifies **POM descriptors**, not just JAR/AAR checksums. The verification metadata was regenerated against `assemble*` / `lintDebug`, whose resolution consumes guava via **Gradle Module Metadata** (`.module`) and never resolves the guava **parent POM**. The `lintAnalyze*` tasks resolve the `coreLibraryDesugaring` graph (`desugar_jdk_libs` → guava `33.3.1-jre`) along a path that *does* resolve `guava-parent-33.3.1-jre.pom`. That parent POM had no recorded checksum (recorded `guava-parent` versions stopped at `32.1.3-android`), so Gradle rejected it and failed the build. Gradle's message says "**One** artifact failed verification," i.e. exactly this single missing entry.
+
+**Fix:** Recorded the missing component in version order, next to the existing `guava-parent` entries:
+
+```xml
+<component group="com.google.guava" name="guava-parent" version="33.3.1-jre">
+   <artifact name="guava-parent-33.3.1-jre.pom">
+      <sha256 value="55441db27e8869dfefe053059bdf478bdc7e95585642bf391f0023345fd56287"
+              origin="Verified against Maven Central published sha1 94729a0ed1dc35f623edd13afa6c1c2fe9a15d7c"/>
+   </artifact>
+</component>
+```
+
+**How the hash was verified (per this file's own SC-03 process):**
+- Downloaded the POM from Maven Central (`repo1.maven.org`) — the exact repository named in the failure (`MavenRepo`) — and computed `sha256 = 55441db2…6287`.
+- Cross-checked integrity against Central's independently published `.sha1` sidecar: published `94729a0e…5d7c` == computed `.sha1`, exact match.
+- Google's Maven mirror (`dl.google.com`) does **not** host `com.google.guava:guava-parent` (returns a 404 page), consistent with the artifact originating from Central only.
+- Confirmed the POM has **no `<parent>` element**, so no further ancestor descriptor needs recording — and the failing jar/`.module` for guava `33.3.1-jre` were already recorded, so this one POM is the complete gap.
+
+**Risk:** Minimal and security-preserving. This *adds* a pinned checksum (it does not weaken or disable verification), so the `coreLibraryDesugaring` resolve now succeeds while every other artifact stays locked. `verification-metadata.xml` re-validated as well-formed XML after the edit.
 
 ### Fix 1 — Locale-safe search cache key
 
@@ -90,16 +132,20 @@ No defects found beyond Fix 1.
 ## 5. Verification performed
 
 ```
+# guava-parent POM hash cross-checked against Maven Central's published .sha1
+curl -s .../guava-parent-33.3.1-jre.pom.sha1   # 94729a0e…5d7c == locally computed .sha1
+xmllint --noout gradle/verification-metadata.xml            # WELL-FORMED
+
 node scripts/check-watch-together.js        # 30/30 checks PASS
 node --test server/lib/youtube-search.test.js server/lib/pure.test.js   # 102/102 PASS
 ```
 
-Also confirmed post-fix: static checks PASS, server tests PASS.
+Also confirmed post-fix: verification metadata well-formed, static checks PASS, server tests PASS.
 
-> **Note:** The authoritative Android build/unit validation (`./gradlew :app:testDebugUnitTest :app:assembleDebug`) requires the Android/Gradle toolchain, which is not available in this environment. The static wiring script exists specifically to fast-validate structure, symbols, and integration wiring without compiling, and it passes.
+> **Note:** The authoritative Android build (`./gradlew :app:lintDebug :app:assembleDebug`) requires the Android/Gradle toolchain, which is not available in this environment — that is exactly why the dependency-verification gap (Fix 2) was invisible to the static/server checks in the previous pass and only appeared in CI. The hash was therefore verified out-of-band against Maven Central's own published checksum. The next CI run is the authoritative confirmation that the Lint job is green.
 
 ---
 
 ## 6. Recommendation
 
-Both features are correctly implemented and robust. The single change in this pass is a defensive locale hardening of the client search cache key. Run the full Gradle unit + assemble step in CI as the final authoritative gate before release.
+The call and watch-together **feature logic** is correctly implemented and robust; the one behavioral hardening this pass is the locale-safe search cache key (Fix 1). The change that actually unblocks the pipeline is Fix 2 — recording the missing `guava-parent:33.3.1-jre` POM checksum so the CI Lint job stops failing dependency verification. Re-run the GitHub Actions workflow to confirm **Lint → Build debug APK → Instrumented tests** now proceed.
