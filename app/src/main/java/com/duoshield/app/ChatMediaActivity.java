@@ -1669,6 +1669,10 @@ public class ChatMediaActivity extends BaseActivity {
                     // Inline thumbnail — present only on media sent by clients that support
                     // it. Null for legacy media, which still renders via the download path.
                     String mThumb = dc.getDocument().getString("thumb");
+                    // Chunked v2 media flag. Absent on every legacy message and on all
+                    // non-large-video media, and absent is the same as false here — the sender
+                    // only writes the field when it is true.
+                    Boolean mChunked = dc.getDocument().getBoolean("chunked");
                     String  rpId    = dc.getDocument().getString("replyToId");
                     String  rpPrv   = dc.getDocument().getString("replyPreview");
                     Long    expAt   = dc.getDocument().getLong("expiresAt");
@@ -1762,6 +1766,7 @@ public class ChatMediaActivity extends BaseActivity {
                             if (expAt != null) pending.setExpiresAt(expAt);
                             if (mKey  != null) pending.setMediaKey(mKey);
                             if (mThumb != null) pending.setThumb(mThumb);
+                            pending.setChunked(Boolean.TRUE.equals(mChunked));
                             pending.forwarded = Boolean.TRUE.equals(fwdFlag);
                             String fsStatus = dc.getDocument().getString("status");
                             if (fsStatus != null) pending.setStatus(fsStatus);
@@ -1787,6 +1792,7 @@ public class ChatMediaActivity extends BaseActivity {
                     if (expAt     != null) m.setExpiresAt(expAt);
                     if (mKey      != null) m.setMediaKey(mKey);
                     if (mThumb    != null) m.setThumb(mThumb);
+                    m.setChunked(Boolean.TRUE.equals(mChunked));
                     if (statusFromFs != null) m.setStatus(statusFromFs);
                     m.forwarded = Boolean.TRUE.equals(fwdFlag);
                     // Read album + caption fields (never encrypted, safe to read directly)
@@ -2035,7 +2041,7 @@ public class ChatMediaActivity extends BaseActivity {
         return false;
     }
 
-    // ═══════════════════════════������═════════════════════════════════
+    // ═══════════════════════════��������═════════════════════════════════
     // MESSAGE ACTION DIALOG
     // ══════════════════════════════════════════════════════════════
 
@@ -2063,7 +2069,7 @@ public class ChatMediaActivity extends BaseActivity {
 
         // ── Quick reactions row ────────────────────────────────────────────────
         android.widget.LinearLayout reactionRow = root.findViewById(R.id.reactionRow);
-        String[] quickEmojis = {"👍", "❤️", "😂", "😮", "😢", "🙏"};
+        String[] quickEmojis = {"👍", "❤️", "😂", "😮", "😢", "��"};
         for (String emoji : quickEmojis) {
             android.widget.TextView tv = new android.widget.TextView(this);
             android.widget.LinearLayout.LayoutParams lp =
@@ -2223,7 +2229,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // SCROLL AFFORDANCES — unread badge + sticky date pill
-    // ══════════════════════════════════════════════════════════════
+    // ══════════════════��═══════════════════════════════════════════
 
     /**
      * Sets the "arrived while you were scrolled up" count and syncs the badge.
@@ -2958,7 +2964,11 @@ public class ChatMediaActivity extends BaseActivity {
                         runOnUiThread(() -> {
                             if (isFinishing() || isDestroyed()) return;
                             hideUploadContainer();
-                            sendMediaMessage(storagePath, mediaType, finalMediaKey, null, sealedThumb);
+                            // chunked = true: this is the branch that called
+                            // encryptUriToChunkedFile above, so the flag and the bytes on the
+                            // wire are decided in the same place and cannot drift apart.
+                            sendMediaMessage(storagePath, mediaType, finalMediaKey, null,
+                                    sealedThumb, true);
                         });
                     } finally {
                         //noinspection ResultOfMethodCallIgnored
@@ -3005,7 +3015,8 @@ public class ChatMediaActivity extends BaseActivity {
                         if (isFinishing() || isDestroyed()) return;
                         hideUploadContainer();
                         // Caption goes in the same message bubble, not as a separate message
-                        sendMediaMessage(storagePath, mediaType, mediaKey, captionToSend, sealedThumb);
+                        sendMediaMessage(storagePath, mediaType, mediaKey, captionToSend,
+                                sealedThumb, false);
                     });
                 }
             } catch (Exception e) {
@@ -3169,9 +3180,15 @@ public class ChatMediaActivity extends BaseActivity {
      * rides inside the message document, so the recipient's bubble can render the instant
      * the snapshot arrives rather than after a full download and decrypt. Pass {@code null}
      * when generation failed — the receiver falls back to the normal download path.
+     *
+     * <p>{@code chunked} records which on-wire format the uploaded object is in. It is written
+     * to the message document because the recipient must choose a decrypt path before reading
+     * any of the object's bytes, and the alternative — sniffing the leading version byte — would
+     * let a remote party's byte select which crypto code runs. Only the large-video branch
+     * passes true today.
      */
     private void sendMediaMessage(String storagePath, String mediaType, String mediaKey,
-                                  String caption, String sealedThumb) {
+                                  String caption, String sealedThumb, boolean chunked) {
         String msgId = UUID.randomUUID().toString(); 
         long now = System.currentTimeMillis();
         long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
@@ -3181,6 +3198,7 @@ public class ChatMediaActivity extends BaseActivity {
         m.setExpiresAt(exp);
         m.setMediaKey(mediaKey);
         m.setThumb(sealedThumb);
+        m.setChunked(chunked);
         if (caption != null && !caption.isEmpty()) m.setCaption(caption);
         m.setStatus("pending");
         adapter.appendMessage(m);
@@ -3205,6 +3223,11 @@ public class ChatMediaActivity extends BaseActivity {
         // the object it previews. Omitted entirely when absent — an empty string would
         // cost bytes on every snapshot delivery for no benefit.
         if (sealedThumb != null && !sealedThumb.isEmpty()) doc.put("thumb", sealedThumb);
+        // Written only when true. Absent and false mean the same thing to every reader — the
+        // legacy whole-blob format — so an explicit false would add a field to the majority of
+        // message documents to say nothing, and readers already have to handle its absence for
+        // every message that predates the format.
+        if (chunked) doc.put("chunked", true);
 
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
@@ -3306,8 +3329,13 @@ public class ChatMediaActivity extends BaseActivity {
                 // so the stamp is still valid under the same mediaKey — regenerating it is
                 // impossible here (the source Uri is long gone) and dropping it would
                 // silently downgrade the resend to the old empty-bubble behaviour.
+                // The format flag has to ride across the retry for the same reason the thumb
+                // does: the object was already uploaded in whatever format it was written in,
+                // and re-deriving the flag here is impossible because the source Uri is gone.
+                // Losing it would leave a chunked object described as whole-blob, which fails
+                // its tag check on playback instead of failing loudly here.
                 sendMediaMessage(msg.getMediaUrl(), msg.getMediaType(), msg.getMediaKey(),
-                        msg.getCaption(), msg.getThumb());
+                        msg.getCaption(), msg.getThumb(), msg.isChunked());
             } else {
                 Toast.makeText(this, "Please re-select the media to retry.", Toast.LENGTH_LONG).show();
             }
@@ -3628,6 +3656,10 @@ public class ChatMediaActivity extends BaseActivity {
                     // its own attachment after a restart.
                     if (pending.getMediaKey() != null) toSave.setMediaKey(pending.getMediaKey());
                     if (pending.getThumb()    != null) toSave.setThumb(pending.getThumb());
+                    // Same reasoning as the media key: a persisted row that forgot its format
+                    // would come back after a restart claiming whole-blob media and route
+                    // playback into the wrong decrypt path.
+                    toSave.setChunked(pending.isChunked());
                     AppDatabase.getInstance(ChatMediaActivity.this).messageDao().insert(toSave);
                     BackupManager.backup(ChatMediaActivity.this, toSave);
                     Log.d(TAG, "retryPendingDecryption: OK msg=" + id + " sigType=" + sigType);
