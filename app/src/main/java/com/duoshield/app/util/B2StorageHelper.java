@@ -461,6 +461,30 @@ public final class B2StorageHelper {
         return new EncryptedMedia(data, Base64.encodeToString(key.getEncoded(), Base64.NO_WRAP));
     }
 
+    /**
+     * AES-256-GCM encrypts {@code plain} with an <em>existing</em> key.
+     *
+     * <p>Used for inline thumbnails: the thumbnail must be sealed under the exact same
+     * key as the full-size media it previews, otherwise the tiny preview would be
+     * readable by anyone who can read the Firestore document even when the media
+     * itself is not. Same wire format as {@link #encryptForUpload} so
+     * {@link #decryptAfterDownload} decrypts it unchanged.
+     */
+    public static byte[] encryptWithKey(byte[] plain, String keyBase64) throws Exception {
+        if (keyBase64 == null || keyBase64.isEmpty()) return plain;
+        byte[] decodedKey = Base64.decode(keyBase64, Base64.NO_WRAP);
+        SecretKey key = new SecretKeySpec(decodedKey, "AES");
+        byte[] iv = new byte[GCM_IV_LEN];
+        new SecureRandom().nextBytes(iv);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LEN, iv));
+        byte[] ct = cipher.doFinal(plain);
+        byte[] out = new byte[GCM_IV_LEN + ct.length];
+        System.arraycopy(iv, 0, out, 0, GCM_IV_LEN);
+        System.arraycopy(ct, 0, out, GCM_IV_LEN, ct.length);
+        return out;
+    }
+
     /** AES-256-GCM decrypts bytes received from B2. Inverse of {@link #encryptForUpload}. */
     public static byte[] decryptAfterDownload(byte[] data, String keyBase64) throws Exception {
         if (keyBase64 == null || keyBase64.isEmpty()) return data;

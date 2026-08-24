@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 22
+    version = 23
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -124,7 +124,8 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
+                MIGRATION_22_23)
             .build();
     }
 
@@ -310,6 +311,23 @@ public abstract class AppDatabase extends RoomDatabase {
                     "startedAt INTEGER NOT NULL, " +
                     "durationSeconds INTEGER NOT NULL DEFAULT 0)");
             db.execSQL("CREATE INDEX IF NOT EXISTS index_call_history_startedAt ON call_history (startedAt)");
+        }
+    };
+
+    /**
+     * v23: Add the {@code thumb} column — a base64, AES-GCM sealed ~1.5 KB JPEG preview
+     * carried inside the message row so a photo or video bubble can paint immediately
+     * instead of waiting on a full B2 download and decrypt.
+     *
+     * <p>Nullable with no default on purpose. Rows written before this version genuinely
+     * have no thumbnail, and a sentinel like {@code ''} would be indistinguishable from
+     * "generation failed" at the render site. NULL lets the adapter fall through to the
+     * existing download path without ambiguity, so the upgrade is non-destructive and
+     * old media keeps working exactly as before.
+     */
+    static final Migration MIGRATION_22_23 = new Migration(22, 23) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN thumb TEXT");
         }
     };
 

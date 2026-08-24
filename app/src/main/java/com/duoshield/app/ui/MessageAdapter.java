@@ -677,9 +677,23 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 h.videoThumbnail.setImageDrawable(null);
                 h.videoThumbnail.setBackgroundColor(0xFF0D1825);
                 byte[] cachedThumb = com.duoshield.app.util.B2StorageHelper.getCachedThumb(vidRef);
+                byte[] stamp = com.duoshield.app.util.InlineThumb.decode(msg.getThumb(), vidKey);
                 if (cachedThumb != null) {
                     Glide.with(ctx).load(cachedThumb).centerCrop().into(h.videoThumbnail);
-                } else {
+                } else if (stamp != null) {
+                    // The sender extracted this frame from the local file before uploading, so
+                    // it ships inside the message document. Rendering it here replaces what
+                    // used to be a full download + decrypt of the entire video — potentially
+                    // hundreds of megabytes — with ~1.5 KB already in hand. Deliberately do
+                    // NOT kick off loadVideoThumbnail as a follow-up: the inline frame is the
+                    // same frame, so the download would buy nothing but bandwidth and, on a
+                    // 2 GB device, a very real OOM risk.
+                    Glide.with(ctx).load(stamp).centerCrop().into(h.videoThumbnail);
+                } else if (com.duoshield.app.util.B2StorageHelper.getCached(vidRef) != null) {
+                    // Legacy video with no inline thumb. Only extract a frame when the
+                    // decrypted bytes already sit in cache — i.e. the user has played it, so
+                    // the download is already paid for. Otherwise leave the dark placeholder
+                    // rather than pulling the whole object down during a scroll.
                     com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(ctx, vidRef, vidKey,
                             new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {
                         @Override public void onLoaded(byte[] jpegBytes) {
@@ -834,7 +848,17 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 if (cached != null) {
                     Glide.with(ctx).load(cached).centerCrop().into(h.imageView);
                 } else {
-                    Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(h.imageView);
+                    // Inline thumbnail first: a ~1.5 KB stamp that arrived with the message
+                    // document, so the bubble shows the actual photo — blurry but correctly
+                    // coloured and composed — with zero network work. Falling back to the
+                    // generic ic_image glyph only when there is no thumb at all (legacy media).
+                    byte[] stamp = com.duoshield.app.util.InlineThumb.decode(
+                            msg.getThumb(), imgKey);
+                    if (stamp != null) {
+                        Glide.with(ctx).load(stamp).centerCrop().into(h.imageView);
+                    } else {
+                        Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(h.imageView);
+                    }
                     com.duoshield.app.util.B2StorageHelper.loadMedia(ctx, imgRef, imgKey,
                             new com.duoshield.app.util.B2StorageHelper.MediaCallback() {
                         @Override public void onLoaded(byte[] plainBytes) {
@@ -843,7 +867,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                             }
                         }
                         @Override public void onError(Exception e) {
-                            if (imgRef.equals(h.imageView.getTag())) {
+                            // Keep the inline stamp on failure — a recognisable low-res
+                            // preview beats replacing it with an error glyph.
+                            if (stamp == null && imgRef.equals(h.imageView.getTag())) {
                                 Glide.with(ctx).load(android.R.drawable.ic_dialog_alert)
                                      .into(h.imageView);
                             }
@@ -1056,6 +1082,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 if (url == null || url.isEmpty()) url = item.optString("path", null);
                 String key  = item.optString("key", null);
                 String itemType = item.optString("type", "image");
+                // Per-item inline thumbnail, sealed under that item's own key.
+                String itemThumb = item.optString("thumb", null);
                 final ImageView slot = slots[i];
                 slot.setTag(url);
 
@@ -1070,7 +1098,16 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     if (cached != null) {
                         Glide.with(ctx).load(cached).centerCrop().into(slot);
                     } else {
-                        Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(slot);
+                        // Paint the inline stamp before anything else. An album grid is the
+                        // worst case for the old behaviour: four video slots meant four full
+                        // object downloads kicked off during a single scroll pass.
+                        byte[] slotStamp =
+                                com.duoshield.app.util.InlineThumb.decode(itemThumb, key);
+                        if (slotStamp != null) {
+                            Glide.with(ctx).load(slotStamp).centerCrop().into(slot);
+                        } else {
+                            Glide.with(ctx).load(R.drawable.ic_image).centerCrop().into(slot);
+                        }
                         final String finalUrl = url;
                         final String finalKey = key;
                         if ("video".equals(itemType)) {
@@ -1078,7 +1115,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                                     com.duoshield.app.util.B2StorageHelper.getCachedThumb(url);
                             if (cachedThumb != null) {
                                 Glide.with(ctx).load(cachedThumb).centerCrop().into(slot);
-                            } else {
+                            } else if (slotStamp == null
+                                    && com.duoshield.app.util.B2StorageHelper.getCached(url) != null) {
+                                // Legacy album video with no inline stamp — extract a frame only
+                                // when the decrypted bytes are already cached locally.
                                 com.duoshield.app.util.B2StorageHelper.loadVideoThumbnail(
                                         ctx, url, key,
                                         new com.duoshield.app.util.B2StorageHelper.ThumbnailCallback() {

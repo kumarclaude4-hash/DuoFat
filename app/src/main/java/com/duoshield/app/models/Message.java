@@ -52,6 +52,26 @@ public class Message {
     public void   setMediaItems(String v) { mediaItems = v; }
 
     /**
+     * Inline thumbnail — a ~1.5 KB JPEG postage stamp of the photo or video, AES-GCM
+     * sealed under {@link #mediaKey} and base64-encoded, carried inside the message
+     * document itself rather than fetched separately.
+     *
+     * <p>This is what lets a media bubble paint the moment the Firestore snapshot lands.
+     * Without it the bubble has only {@code mediaUrl} + {@code mediaKey}, so it must wait
+     * on a full B2 download and decrypt before it can show anything — and for video that
+     * meant pulling the entire object down purely to extract one frame.
+     *
+     * <p>Null for text messages, for voice notes, and for media sent by older clients
+     * that predate this field. Every consumer therefore has to treat it as optional and
+     * fall back to the existing download path.
+     *
+     * @see com.duoshield.app.util.InlineThumb
+     */
+    @ColumnInfo(name = "thumb")  public String thumb;
+    public String getThumb()     { return thumb; }
+    public void   setThumb(String v) { thumb = v; }
+
+    /**
      * Total voice-note duration in milliseconds, known at record time and stored
      * so the bubble can show the real length at rest (before playback starts)
      * instead of a static placeholder.
