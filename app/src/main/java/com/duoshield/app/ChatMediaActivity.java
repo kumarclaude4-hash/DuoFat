@@ -1508,7 +1508,7 @@ public class ChatMediaActivity extends BaseActivity {
                   }
               }
 
-              // ── Blue-tick retroactive update ──────────────────────────────────
+              // ── Blue-tick retroactive update ───────────────────────��──────────
               // DeliveryReceiptHelper.markRead() writes "last_read_<partnerUid>"
               // to this doc when the partner reads messages. Because our Firestore
               // message listener uses startAfter(latestKnownTimestamp), MODIFIED
@@ -2035,7 +2035,7 @@ public class ChatMediaActivity extends BaseActivity {
         return false;
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // ════════════════════════════���═════════════════════════════════
     // MESSAGE ACTION DIALOG
     // ══════════════════════════════════════════════════════════════
 
@@ -2551,7 +2551,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // BADGE
-    // ══════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════��════════════════
 
     private void clearBadge() {
         NotificationManagerCompat.from(this).cancelAll();
@@ -3154,10 +3154,6 @@ public class ChatMediaActivity extends BaseActivity {
         }
     }
 
-    private void sendMediaMessage(String storagePath, String mediaType, String mediaKey, String caption) {
-        sendMediaMessage(storagePath, mediaType, mediaKey, caption, null);
-    }
-
     /**
      * Writes a media message, optionally carrying an inline thumbnail.
      *
@@ -3299,7 +3295,12 @@ public class ChatMediaActivity extends BaseActivity {
         if ("image".equals(msg.getMediaType()) || "video".equals(msg.getMediaType())) {
             // If it failed at the Firestore step, we still have the B2 path.
             if (msg.getMediaUrl() != null && !msg.getMediaUrl().isEmpty()) {
-                sendMediaMessage(msg.getMediaUrl(), msg.getMediaType(), msg.getMediaKey(), msg.getCaption());
+                // Carry the inline thumb across the retry. The upload already succeeded,
+                // so the stamp is still valid under the same mediaKey — regenerating it is
+                // impossible here (the source Uri is long gone) and dropping it would
+                // silently downgrade the resend to the old empty-bubble behaviour.
+                sendMediaMessage(msg.getMediaUrl(), msg.getMediaType(), msg.getMediaKey(),
+                        msg.getCaption(), msg.getThumb());
             } else {
                 Toast.makeText(this, "Please re-select the media to retry.", Toast.LENGTH_LONG).show();
             }
