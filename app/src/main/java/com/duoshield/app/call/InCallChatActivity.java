@@ -65,6 +65,30 @@ public class InCallChatActivity extends AppCompatActivity {
     private int listenAttempts = 0;
     private static final int MAX_LISTEN_ATTEMPTS = 8;
 
+    /**
+     * Closes this screen the moment the call it belongs to ends.
+     *
+     * <p>This chat is launched on top of {@link CallActivity} and outlives it: when the call
+     * ended, {@code CallActivity} finished itself and this screen stayed in the foreground on
+     * top of a call that no longer existed — still showing a live-looking composer, and still
+     * listening to {@code calls/{callId}/chat}, a subcollection that is about to be swept.
+     * Anything typed after that point would be written into a dying document and never
+     * delivered, with no indication to the user that the call was over.
+     *
+     * <p>{@link CallActivity#broadcastCallEnded()} is the single sender, and it fires from every
+     * terminal path (hangup, decline, timeout, remote hangup, ICE failure). Package-scoped, so
+     * it cannot be spoofed by another app.
+     */
+    private final BroadcastReceiver callEndedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (isFinishing()) return;
+            Toast.makeText(InCallChatActivity.this,
+                    "Call ended — chat closed", Toast.LENGTH_SHORT).show();
+            finish();
+        }
+    };
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     @Override

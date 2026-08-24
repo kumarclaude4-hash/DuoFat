@@ -57,6 +57,25 @@ public class CallForegroundService extends Service {
     /** Broadcast sent to {@link CallActivity} when the notification "Mute" button is tapped. */
     public static final String BROADCAST_TOGGLE_MUTE = "com.duoshield.action.TOGGLE_MUTE";
 
+    /**
+     * Broadcast sent <em>by</em> {@link CallActivity} — the only one in this class that travels
+     * outwards — the moment the call is definitively over (hangup, decline, remote hangup,
+     * no-answer timeout, or ICE failure).
+     *
+     * <p>It exists because the call screen is not the only screen a call owns. The in-call chat
+     * and Watch Together are started on top of {@code CallActivity}, so when the call ended
+     * {@code CallActivity.finish()} tore down only itself and left whichever of those screens
+     * was on top sitting in the foreground: a chat thread writing into a deleted call document,
+     * or — much worse — a Watch Together session still playing video and still driving Firestore
+     * control writes for a call that no longer exists. The partner hanging up simply did not
+     * reach the user, who had to press Back to discover the call was gone.
+     *
+     * <p>Delivered as a package-scoped broadcast rather than through Firestore: the call is
+     * already known to be over locally, so this costs nothing and cannot be defeated by the read
+     * budget or by the call document having already been deleted.
+     */
+    public static final String BROADCAST_CALL_ENDED  = "com.duoshield.action.CALL_ENDED";
+
     private static final int NOTIFICATION_ID = 9001;
 
     // ─────────────────────────────────────────────────────────────────────────

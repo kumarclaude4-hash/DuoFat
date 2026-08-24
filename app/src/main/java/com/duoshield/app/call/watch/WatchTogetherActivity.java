@@ -1,6 +1,9 @@
 package com.duoshield.app.call.watch;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -20,10 +23,12 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.duoshield.app.R;
+import com.duoshield.app.call.CallForegroundService;
 import com.duoshield.app.util.YouTubeSearchClient;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
@@ -192,6 +197,29 @@ public class WatchTogetherActivity extends AppCompatActivity
      */
     private String erroredVideoId;
 
+    /**
+     * Closes this screen the moment the call it belongs to ends.
+     *
+     * <p>Watch Together is launched on top of {@code CallActivity} and outlives it: when the
+     * call ended — the partner hung up, the network failed, or End was tapped in the
+     * notification — {@code CallActivity} finished itself and this screen stayed in the
+     * foreground, still playing video and still writing control state into a call document
+     * that had just been deleted. The user got no indication the call was over at all.
+     *
+     * <p>Deliberately does <em>not</em> write {@code endSession}: the call document (and this
+     * session with it) is already being torn down by the side that ended the call, so a write
+     * here would spend budget on a document that is going away.
+     */
+    private final BroadcastReceiver callEndedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (isFinishing()) return;
+            Toast.makeText(WatchTogetherActivity.this,
+                    "Call ended — Watch Together closed", Toast.LENGTH_SHORT).show();
+            finish();
+        }
+    };
+
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
     private final Runnable heartbeatRunnable = new Runnable() {
         @Override
@@ -226,6 +254,13 @@ public class WatchTogetherActivity extends AppCompatActivity
         repo = new WatchTogetherRepository(this);
         bindViews();
         registerBackHandler();
+
+        // Registered for the whole lifetime of the Activity, not just while visible: the call
+        // can end while this screen is stopped (the user tabbed away mid-session), and it still
+        // must not be left behind on the back stack for a call that no longer exists.
+        ContextCompat.registerReceiver(this, callEndedReceiver,
+                new IntentFilter(CallForegroundService.BROADCAST_CALL_ENDED),
+                ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     @Override
@@ -306,6 +341,8 @@ public class WatchTogetherActivity extends AppCompatActivity
      */
     @Override
     protected void onDestroy() {
+        try { unregisterReceiver(callEndedReceiver); } catch (Exception ignored) {}
+
         if (stateListener != null) {
             stateListener.remove();
             stateListener = null;

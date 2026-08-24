@@ -108,7 +108,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private ImageView           btnEndCall;
     private ImageView           btnSpeaker;
     private ImageView           btnFlipCamera;     // inside PiP
-    private View                btnFlipLayout;
     private View                btnBack;
     private ImageView           btnChat;
     private ImageView           btnWatch;
@@ -450,6 +449,16 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             pendingBannerPreview = null;
             showNewMessageBanner(preview);
         }
+        // Re-check whether a Watch Together session is live.
+        //
+        // bindViews() runs this once, but for the *caller* callId is still null at that point
+        // (it is only assigned when the call document is created), so the hint never applied to
+        // the side that placed the call. And for either side it goes stale the moment the
+        // session changes: the partner starting or ending a session while this screen is on top
+        // left the button reading "Watch Together" when a tap would actually rejoin, or
+        // "Rejoin" after the session was already over. onResume is the right hook — it also
+        // covers coming back from the Watch Together screen itself.
+        if (isVideo) refreshWatchTogetherAwareness();
     }
 
     @Override
@@ -458,10 +467,19 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         isActivityVisible = false;
     }
 
+    /**
+     * Releases everything this Activity owns <strong>before</strong> delegating to
+     * {@code super}, matching the ordering
+     * {@link com.duoshield.app.call.watch.WatchTogetherActivity#onDestroy()} documents.
+     *
+     * <p>This used to call {@code super.onDestroy()} first and then release the
+     * SurfaceViewRenderers and the PeerConnection. That is the same undefined-behaviour path:
+     * {@code SurfaceViewRenderer.release()} tears down a GL surface whose Activity window is
+     * already being released, while libwebrtc may still be delivering frames to it on the
+     * capture thread. Everything is now freed while the Activity is still in a valid state.
+     */
     @Override
     protected void onDestroy() {
-        super.onDestroy();
-
         // Stop the foreground service (removes the ongoing notification).
         stopForegroundCallService();
 
@@ -526,7 +544,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnEndCall          = findViewById(R.id.btnEndCall);
         btnSpeaker          = findViewById(R.id.btnSpeaker);
         btnFlipCamera         = findViewById(R.id.btnFlipCamera);
-        btnFlipLayout         = findViewById(R.id.btnFlipLayout);
         btnBack               = findViewById(R.id.btnBack);
         btnChat               = findViewById(R.id.btnChat);
         btnWatch              = findViewById(R.id.btnWatch);
@@ -562,7 +579,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             if (btnChatLayout          != null) btnChatLayout.setVisibility(View.VISIBLE);
             if (btnWatchLayout         != null) btnWatchLayout.setVisibility(View.VISIBLE);
             refreshWatchTogetherAwareness();
-            // btnFlipLayout lives inside localVideoPip; visible once PiP appears
+            // Flip-camera lives inside localVideoPip, so it appears with the PiP itself.
         }
     }
 
@@ -1283,12 +1300,14 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 durationHandler.removeCallbacksAndMessages(null);
                 // callStartMs > 0 means CONNECTED was reached at least once.
                 saveCallRecord(callStartMs > 0 ? CallRecord.OUTCOME_ANSWERED : CallRecord.OUTCOME_MISSED);
+                broadcastCallEnded();
                 finish();
                 return;
             case FAILED:
                 statusText = "Call failed — network unavailable";
                 durationHandler.removeCallbacksAndMessages(null);
                 saveCallRecord(CallRecord.OUTCOME_FAILED);
+                broadcastCallEnded();
                 Toast.makeText(this, "Call failed — check your network", Toast.LENGTH_LONG).show();
                 new Handler(Looper.getMainLooper()).postDelayed(this::finish, 2000);
                 break;
@@ -1299,6 +1318,26 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             tvCallStatusOverlay.setText(statusText);
             tvCallStatusOverlay.setVisibility(statusText.isEmpty() ? View.GONE : View.VISIBLE);
         }
+    }
+
+    /**
+     * Tells every other screen this call owns that the call is over.
+     *
+     * <p>{@link InCallChatActivity} and {@link com.duoshield.app.call.watch.WatchTogetherActivity}
+     * are launched on top of this Activity, so {@link #finish()} on its own leaves whichever of
+     * them is in the foreground alive after the call has gone: the user never sees "Call ended",
+     * and a Watch Together session keeps playing and keeps writing control state for a call
+     * document that has already been deleted. Both screens listen for
+     * {@link CallForegroundService#BROADCAST_CALL_ENDED} and close themselves.
+     *
+     * <p>Sent from the two terminal branches of {@link #updateStatusUi} only, which every end
+     * path funnels through ({@code hangup()}, decline, timeout and remote hangup all reach
+     * {@code ENDED}; ICE failure reaches {@code FAILED}). Package-scoped so it cannot leak to
+     * other apps, and idempotent — a duplicate is a no-op because the receivers finish.
+     */
+    private void broadcastCallEnded() {
+        sendBroadcast(new Intent(CallForegroundService.BROADCAST_CALL_ENDED)
+                .setPackage(getPackageName()));
     }
 
     // ── Call history ──────────────────────────────────────────────────────────
