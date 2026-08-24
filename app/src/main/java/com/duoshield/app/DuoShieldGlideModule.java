@@ -1,6 +1,5 @@
 package com.duoshield.app;
 
-import android.app.ActivityManager;
 import android.content.Context;
 import androidx.annotation.NonNull;
 import com.bumptech.glide.GlideBuilder;
@@ -9,8 +8,10 @@ import com.bumptech.glide.load.engine.cache.DiskLruCacheFactory;
 import com.bumptech.glide.load.engine.cache.LruResourceCache;
 import com.bumptech.glide.load.engine.bitmap_recycle.LruBitmapPool;
 import com.bumptech.glide.load.DecodeFormat;
+import com.bumptech.glide.load.resource.bitmap.DownsampleStrategy;
 import com.bumptech.glide.module.AppGlideModule;
 import com.bumptech.glide.request.RequestOptions;
+import com.duoshield.app.util.DevicePerformanceTier;
 
 /**
  * Custom Glide configuration that scales cache sizes to available device RAM.
@@ -20,11 +21,13 @@ import com.bumptech.glide.request.RequestOptions;
  * is ~192 MB; leaving 48 MB just for Glide crowds out Signal crypto,
  * SQLCipher, ExoPlayer, and the RecyclerView pool.
  *
- * <p>We apply a two-tier limit:
+ * <p>We apply a two-tier limit, selected by {@link DevicePerformanceTier}:
  * <ul>
- *   <li><b>Low RAM (memoryClass ≤ 128 MB)</b>: 16 MB bitmap pool + 8 MB cache = 24 MB total.
- *       Fits ~120–250 decoded thumbnails — ample for a chat scroll session.</li>
- *   <li><b>Standard RAM (memoryClass &gt; 128 MB)</b>: 32 MB bitmap pool + 16 MB cache = 48 MB.</li>
+ *   <li><b>{@link DevicePerformanceTier#LOW}</b>: 16 MB bitmap pool + 8 MB cache = 24 MB total,
+ *       RGB_565 decoding and {@code AT_MOST} downsampling. Fits ~120–250 decoded thumbnails —
+ *       ample for a chat scroll session.</li>
+ *   <li><b>{@link DevicePerformanceTier#MID} / {@link DevicePerformanceTier#HIGH}</b>:
+ *       32 MB bitmap pool + 16 MB cache = 48 MB, ARGB_8888.</li>
  * </ul>
  *
  * <p>Disk cache: Glide's default is 250 MB. We cap at 150 MB (low-RAM: 75 MB) to leave
@@ -33,9 +36,6 @@ import com.bumptech.glide.request.RequestOptions;
  */
 @GlideModule
 public class DuoShieldGlideModule extends AppGlideModule {
-
-    /** memoryClass threshold below which we use the low-RAM Glide budget. */
-    private static final int LOW_RAM_MEMORY_CLASS_MB = 128;
 
     private static final int BITMAP_POOL_MB_NORMAL  = 32;
     private static final int MEMORY_CACHE_MB_NORMAL = 16;
@@ -47,8 +47,12 @@ public class DuoShieldGlideModule extends AppGlideModule {
 
     @Override
     public void applyOptions(@NonNull Context context, @NonNull GlideBuilder builder) {
-        ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        boolean lowRam = am != null && am.getMemoryClass() <= LOW_RAM_MEMORY_CLASS_MB;
+        // Keyed on DevicePerformanceTier rather than getMemoryClass() alone. The old
+        // `getMemoryClass() <= 128` test never fired on a 3–4 GB budget phone — a Helio P35
+        // reports 192–256 MB — so exactly the devices that need the small budget were handed
+        // the 48 MB one plus ARGB_8888 decoding. On an in-order Cortex-A53 the resulting GC
+        // pressure from oversized chat thumbnails is the single biggest cause of scroll jank.
+        boolean lowRam = DevicePerformanceTier.get(context) == DevicePerformanceTier.LOW;
 
         int bitmapPoolMb  = lowRam ? BITMAP_POOL_MB_LOWRAM  : BITMAP_POOL_MB_NORMAL;
         int memoryCacheMb = lowRam ? MEMORY_CACHE_MB_LOWRAM : MEMORY_CACHE_MB_NORMAL;
@@ -68,8 +72,15 @@ public class DuoShieldGlideModule extends AppGlideModule {
             // transparency, so there is no visible quality loss for images.
             // Voice-note waveforms and avatars are drawn programmatically and are
             // unaffected by decode format.
+            //
+            // AT_MOST additionally guarantees no bitmap is ever decoded larger than the view
+            // it lands in: without it a 4000x3000 camera photo is decoded at a scale Glide
+            // picks for quality, which on a 720p screen is pure waste both in decode time on
+            // an A53 and in pool residency afterwards.
             builder.setDefaultRequestOptions(
-                    new RequestOptions().format(DecodeFormat.PREFER_RGB_565));
+                    new RequestOptions()
+                            .format(DecodeFormat.PREFER_RGB_565)
+                            .downsample(DownsampleStrategy.AT_MOST));
         }
     }
 

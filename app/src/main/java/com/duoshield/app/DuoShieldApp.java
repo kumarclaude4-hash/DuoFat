@@ -1,15 +1,15 @@
 package com.duoshield.app;
 
-import android.app.ActivityManager;
 import android.app.Application;
 import android.content.ComponentCallbacks2;
-import android.content.Context;
+import android.os.Looper;
 import android.util.Log;
 import com.bumptech.glide.Glide;
 import androidx.work.Configuration;
 import com.duoshield.app.crypto.signal.SignedPreKeyScheduler;
 import com.duoshield.app.notifications.NotificationStyler;
 import com.duoshield.app.util.AppLockManager;
+import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.StorageCleanupWorker;
 import com.duoshield.app.util.TempFileCleaner;
 import androidx.work.ExistingPeriodicWorkPolicy;
@@ -119,17 +119,21 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
                     + "device ABI is one of arm64-v8a / armeabi-v7a / x86_64 / x86.", e);
         }
 
-        // Firestore offline cache: 100 MB on normal devices, 50 MB on low-RAM devices
-        // (e.g. POCO C51, 2 GB RAM — ActivityManager.getMemoryClass() ≤ 128 MB).
-        // Reducing the cache on low-RAM frees ~50 MB of internal storage that is
-        // more valuable for SQLCipher WAL files and B2 media cache.
+        // Firestore offline cache, sized by DevicePerformanceTier rather than by
+        // getMemoryClass() alone.
+        //
+        // The old check was `isLowRamDevice() || getMemoryClass() <= 128`, which a 3–4 GB
+        // budget phone never trips: a Helio P35 (MT6765, 8x Cortex-A53) reports a
+        // memoryClass of 192–256 MB, so it took the 100 MB "well-provisioned" path even
+        // though its storage and CPU are firmly budget class. DevicePerformanceTier keys off
+        // CPU microarchitecture first, so that device now correctly lands on the smaller
+        // cache, freeing ~50 MB of internal storage that is worth far more to SQLCipher WAL
+        // files and the B2 media cache.
         try {
-            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-            boolean isLowRam = am != null
-                    && (am.isLowRamDevice() || am.getMemoryClass() <= 128);
-            long firestoreCacheBytes = isLowRam
-                    ? 50L * 1024 * 1024   // 50 MB for POCO C51 / 2–3 GB class
-                    : 100L * 1024 * 1024; // 100 MB for well-provisioned devices
+            DevicePerformanceTier tier = DevicePerformanceTier.get(this);
+            long firestoreCacheBytes = tier == DevicePerformanceTier.LOW
+                    ? 50L * 1024 * 1024   // 50 MB for Helio P35 / G36 / 2–4 GB class
+                    : 100L * 1024 * 1024; // 100 MB for MID and HIGH
             FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
                     .setLocalCacheSettings(
                         PersistentCacheSettings.newBuilder()
@@ -140,10 +144,6 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
         } catch (Exception e) {
             Log.w(TAG, "Firestore persistence setup failed (may already be configured): " + e.getMessage());
         }
-
-        // Pre-warm the TCP + TLS connection to B2 so the first upload/download
-        // reuses a pooled socket instead of paying the full ~900-1400 ms handshake.
-        B2StorageHelper.warmConnection();
 
         // Warm up Room/SQLCipher and run the libsignal JNI diagnostic on a single
         // background thread so the first chat open does not block the main thread.
@@ -183,25 +183,64 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
             }
         }, "startup-warmup").start();
 
+        // Notification channels and the app-lock lifecycle observer must exist before the
+        // first Activity or an inbound FCM notification can reach either of them, so they
+        // stay on the critical path.
         NotificationStyler.createChannels(this);
         AppLockManager.init(this);
 
-        // Delete decrypted temp media files (voice_*.3gp, vid_*.mp4) older than 5 min.
-        // Runs every 15 minutes in the background; KEEP policy avoids re-queuing on each launch.
-        TempFileCleaner.schedule(this);
+        scheduleDeferredStartupWork();
+    }
 
-        // Trim the app cache to 50 MB once per day (Bug 16 — was never scheduled).
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "StorageCleanup",
-            ExistingPeriodicWorkPolicy.KEEP,
-            new PeriodicWorkRequest.Builder(StorageCleanupWorker.class, 1, TimeUnit.DAYS).build());
+    /**
+     * Runs the startup work that is not needed to render the first frame once the main thread
+     * goes idle.
+     *
+     * <p>Everything below used to execute inline in {@link #onCreate()}: a B2 connection
+     * warm-up, three {@link WorkManager} periodic-work enqueues and a pre-key scheduler check.
+     * Each one is individually cheap on an out-of-order CPU and individually expensive on an
+     * in-order Cortex-A53 — WorkManager's first {@code getInstance()} alone initialises a Room
+     * database on the calling thread. Together they measurably delay the launch activity on
+     * budget hardware, and none of them has to happen before the user sees the app.
+     *
+     * <p>An idle handler is used rather than a delayed post because it is defined relative to
+     * actual main-thread quiescence: the work runs after the first frame has been drawn, not
+     * after an arbitrary timeout that may land in the middle of inflation. Returning
+     * {@code false} removes the handler so this runs exactly once per process.
+     */
+    private void scheduleDeferredStartupWork() {
+        Looper.myQueue().addIdleHandler(() -> {
+            try {
+                // Pre-warm the TCP + TLS connection to B2 so the first upload/download
+                // reuses a pooled socket instead of paying the full ~900-1400 ms handshake.
+                B2StorageHelper.warmConnection();
 
-        // Rotate Signal signed pre-key when it is older than 7 days (checked daily).
-        SignedPreKeyScheduler.schedule(this);
+                // Delete decrypted temp media files (voice_*.3gp, vid_*.mp4) older than 5 min.
+                // Runs every 15 minutes in the background; KEEP policy avoids re-queuing on
+                // each launch.
+                TempFileCleaner.schedule(this);
 
-        // Purge stale call docs (ringing/missed/timeout older than 24 h) every 12 h.
-        com.duoshield.app.call.CallCleanupWorker.scheduleIfNeeded(this);
+                // Trim the app cache to 50 MB once per day (Bug 16 — was never scheduled).
+                WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                        "StorageCleanup",
+                        ExistingPeriodicWorkPolicy.KEEP,
+                        new PeriodicWorkRequest.Builder(
+                                StorageCleanupWorker.class, 1, TimeUnit.DAYS).build());
 
+                // Rotate Signal signed pre-key when it is older than 7 days (checked daily).
+                SignedPreKeyScheduler.schedule(this);
+
+                // Purge stale call docs (ringing/missed/timeout older than 24 h) every 12 h.
+                com.duoshield.app.call.CallCleanupWorker.scheduleIfNeeded(this);
+
+                Log.i(TAG, "Deferred startup work scheduled.");
+            } catch (Exception e) {
+                // Housekeeping only: a failure here must never take down the process, and the
+                // work is all periodic so the next launch retries it.
+                Log.w(TAG, "Deferred startup work failed (non-fatal): " + e.getMessage());
+            }
+            return false; // one-shot
+        });
     }
 
     /**
