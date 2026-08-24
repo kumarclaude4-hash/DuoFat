@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 23
+    version = 24
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -125,7 +125,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23)
+                MIGRATION_22_23, MIGRATION_23_24)
             .build();
     }
 
@@ -328,6 +328,25 @@ public abstract class AppDatabase extends RoomDatabase {
     static final Migration MIGRATION_22_23 = new Migration(22, 23) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN thumb TEXT");
+        }
+    };
+
+    /**
+     * v24: Add the {@code chunked} flag — whether this message's media is stored in the
+     * chunked, range-addressable v2 format (1 MiB independently authenticated chunks, so a
+     * video can start playing and seek while still downloading) or the original whole-blob
+     * AES-GCM layout.
+     *
+     * <p>NOT NULL DEFAULT 0 rather than nullable, which is the opposite of
+     * {@link #MIGRATION_22_23}'s reasoning and deliberately so: {@code thumb} needed NULL
+     * because "no thumbnail" and "generation failed" are different states a renderer has to
+     * tell apart, whereas here every pre-existing row genuinely holds whole-blob media. The
+     * default is the truth for old rows, not a sentinel standing in for one, so the upgrade is
+     * non-destructive and existing media keeps decrypting through the unchanged legacy path.
+     */
+    static final Migration MIGRATION_23_24 = new Migration(23, 24) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN chunked INTEGER NOT NULL DEFAULT 0");
         }
     };
 

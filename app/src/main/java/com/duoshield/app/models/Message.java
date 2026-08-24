@@ -72,6 +72,25 @@ public class Message {
     public void   setThumb(String v) { thumb = v; }
 
     /**
+     * True when this message's media is stored in the chunked, range-addressable v2 format
+     * rather than the original single whole-blob AES-GCM layout.
+     *
+     * <p>The two formats are not distinguishable from the object's own bytes at the point where
+     * playback has to choose a decrypt path, and sniffing a leading version byte would mean
+     * letting an attacker-influenced byte pick which code path runs. So the format is recorded
+     * on the message that names the object and carried explicitly — see
+     * {@link com.duoshield.app.util.B2StorageHelper#CHUNKED_FORMAT_VERSION}.
+     *
+     * <p>Unlike {@link #thumb} this is a non-null boolean defaulting to false, and that default
+     * is meaningful rather than a placeholder: every row written before this field existed
+     * genuinely holds whole-blob media, so "absent" and "false" describe the same reality. A
+     * nullable tri-state would add an "unknown" case that no reader could act on.
+     */
+    @ColumnInfo(name = "chunked", defaultValue = "0")  public boolean chunked;
+    public boolean isChunked()      { return chunked; }
+    public void    setChunked(boolean v) { chunked = v; }
+
+    /**
      * Total voice-note duration in milliseconds, known at record time and stored
      * so the bubble can show the real length at rest (before playback starts)
      * instead of a static placeholder.
