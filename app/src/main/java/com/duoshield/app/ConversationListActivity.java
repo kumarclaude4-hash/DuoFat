@@ -32,6 +32,7 @@ import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.backup.BackupScheduler;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.ContactBackupHelper;
+import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -171,7 +172,10 @@ public class ConversationListActivity extends BaseActivity {
         convLlm.setInitialPrefetchItemCount(8);
         recyclerView.setLayoutManager(convLlm);
         recyclerView.setHasFixedSize(true);
-        recyclerView.setItemViewCacheSize(20);
+        // Smaller off-screen view cache on LOW so cached rows do not pin decoded avatars
+        // against the reduced Glide bitmap pool. See ChatMediaActivity for the reasoning.
+        recyclerView.setItemViewCacheSize(
+                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
         recyclerView.setAdapter(adapter);
         db = FirebaseFirestore.getInstance();
 

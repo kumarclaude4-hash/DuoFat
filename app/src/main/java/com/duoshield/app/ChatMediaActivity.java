@@ -49,6 +49,7 @@ import com.duoshield.app.ui.WaveformView;
 import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.ConversationMetaUpdater;
 import com.duoshield.app.util.DeliveryReceiptHelper;
+import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.duoshield.app.util.SecurePrefs;
 import com.duoshield.app.util.VoiceMessagePlayer;
@@ -515,7 +516,14 @@ public class ChatMediaActivity extends BaseActivity {
         // This skips requestLayout() on every data-set change — measurable on
         // slow CPUs (Helio G36) with large chat histories (200+ messages).
         recyclerView.setHasFixedSize(true);
-        recyclerView.setItemViewCacheSize(20);
+        // The view cache holds fully-bound off-screen rows, each keeping its decoded
+        // thumbnail reachable. 20 rows is a fine trade when memory is cheap, but on a LOW
+        // tier device it works against the smaller Glide budget set in DuoShieldGlideModule:
+        // the cache pins bitmaps the pool is simultaneously trying to reclaim, so we pay in
+        // GC pauses to avoid re-binds that cost far less. Views evicted from the cache still
+        // land in the RecycledViewPool, so this costs a rebind, never an inflate.
+        recyclerView.setItemViewCacheSize(
+                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
         recyclerView.setAdapter(adapter);
         if (recyclerView.getItemAnimator() != null) {
             recyclerView.getItemAnimator().setChangeDuration(0);
@@ -2223,7 +2231,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // TYPING
-    // ══════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════���═══════════════════════
 
     // Typing indicator is now handled by typingThrottle.setTyping(true) in TextWatcher
 

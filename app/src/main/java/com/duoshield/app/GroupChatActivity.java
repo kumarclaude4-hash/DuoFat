@@ -34,6 +34,7 @@ import com.duoshield.app.models.Message;
 import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.ChatThemeHelper;
+import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.FirebaseCostGuard;
 import com.duoshield.app.util.InlineThumb;
 import com.google.firebase.firestore.DocumentChange;
@@ -268,7 +269,10 @@ public class GroupChatActivity extends BaseActivity {
         groupLlm.setInitialPrefetchItemCount(12);
         recyclerView.setLayoutManager(groupLlm);
         recyclerView.setHasFixedSize(true);
-        recyclerView.setItemViewCacheSize(20);
+        // Smaller off-screen view cache on LOW so cached rows do not pin decoded thumbnails
+        // against the reduced Glide bitmap pool. See ChatMediaActivity for the reasoning.
+        recyclerView.setItemViewCacheSize(
+                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
         recyclerView.setAdapter(adapter);
         ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
 

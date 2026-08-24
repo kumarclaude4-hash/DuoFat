@@ -12,12 +12,16 @@ import android.widget.Toast;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.ui.PlayerView;
 
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.ChunkedMediaDataSource;
+import com.duoshield.app.util.DevicePerformanceTier;
 
 
 import java.io.File;
@@ -135,9 +139,58 @@ public class MediaViewerActivity extends BaseActivity {
         }
     }
 
+    /**
+     * Builds an {@link ExoPlayer} configured for this device's {@link DevicePerformanceTier}.
+     *
+     * <p>Both call sites previously used a bare {@code new ExoPlayer.Builder(this).build()},
+     * which asks a budget SoC to do whatever the file demands. Three things are set here:
+     *
+     * <ul>
+     *   <li><b>Track constraints on {@link DevicePerformanceTier#LOW}</b> — capped at 854x480 /
+     *       30 fps. A PowerVR GE8320 (Helio P35) cannot sustain 1080p decode; handed a 1080p
+     *       clip it drops frames and heats up rather than failing outright, which is worse
+     *       than simply refusing the resolution. On a 720p-class screen the cap is not
+     *       visible. MID and HIGH stay unconstrained.</li>
+     *   <li><b>Decoder fallback, all tiers</b> — MT6765 OMX decoders reject some otherwise
+     *       valid H.264 profiles. Without fallback that surfaces to the user as a hard
+     *       "Failed to play video"; with it, playback drops to the software decoder.</li>
+     *   <li><b>Tighter buffers on LOW</b> — 15 s/30 s instead of the 50 s default, so a long
+     *       video does not hold tens of MB of sample data in a heap that is already tight.</li>
+     * </ul>
+     */
+    @UnstableApi
+    private ExoPlayer buildPlayer() {
+        boolean low = DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW;
+
+        DefaultTrackSelector trackSelector = new DefaultTrackSelector(this);
+        if (low) {
+            trackSelector.setParameters(trackSelector.buildUponParameters()
+                    .setMaxVideoSize(854, 480)
+                    .setMaxVideoFrameRate(30));
+        }
+
+        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                .setEnableDecoderFallback(true);
+
+        ExoPlayer.Builder builder = new ExoPlayer.Builder(this, renderersFactory)
+                .setTrackSelector(trackSelector);
+
+        if (low) {
+            builder.setLoadControl(new DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                            15_000,  // minBufferMs
+                            30_000,  // maxBufferMs
+                            1_000,   // bufferForPlaybackMs
+                            2_000)   // bufferForPlaybackAfterRebufferMs
+                    .build());
+        }
+        return builder.build();
+    }
+
+    @UnstableApi
     private void initPlayer(Uri uri) {
         if (isDestroyed() || isFinishing()) return;
-        player = new ExoPlayer.Builder(this).build();
+        player = buildPlayer();
         if (playerView != null) playerView.setPlayer(player);
         player.setMediaItem(MediaItem.fromUri(uri));
         player.prepare();
@@ -162,7 +215,7 @@ public class MediaViewerActivity extends BaseActivity {
     @UnstableApi
     private void initChunkedPlayer() {
         if (isDestroyed() || isFinishing()) return;
-        player = new ExoPlayer.Builder(this).build();
+        player = buildPlayer();
         if (playerView != null) playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
