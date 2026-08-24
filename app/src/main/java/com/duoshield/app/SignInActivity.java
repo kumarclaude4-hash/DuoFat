@@ -62,8 +62,20 @@ public class SignInActivity extends AppCompatActivity {
 
         // F30 fix: If a duress wipe is in progress, treat the session as signed-out
         // regardless of what FirebaseAuth reports.
+        //
+        // S06-M5: this MUST read DuressManager.isResetPending(), not the legacy
+        // plaintext "duress_wipe_in_progress" key. performLogout() stopped writing
+        // that key when the marker moved into the wipe-surviving PendingLockStore,
+        // so this guard silently read false forever — and because performLogout()
+        // launches this Activity *before* the wipe thread has torn down Firebase
+        // auth and the Signal keys, `user != null && signalInit` was still true and
+        // route() sent the user straight to ConversationListActivity. The wipe then
+        // destroyed the DB underneath it, which is why the secondary PIN landed on
+        // an empty conversation list instead of this Welcome screen.
+        // SplashActivity and MainActivity already use isResetPending(); this was the
+        // last straggler, hence the bug only reproduced on the direct in-app trigger.
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
-        boolean wipeInProgress  = prefs.getBoolean("duress_wipe_in_progress", false);
+        boolean wipeInProgress  = DuressManager.isResetPending(this);
         boolean signalInit      = SignalKeyManager.isInitialized(this);
 
         Log.i(TAG, "onCreate: firebaseUser=" + (user != null ? user.getUid() : "null")
@@ -90,6 +102,19 @@ public class SignInActivity extends AppCompatActivity {
         // them. Skipped for devices that already show signs of a pre-existing
         // account (my_uid or an existing account-scoped PIN hash) so this
         // isn't retroactively forced on installs that predate the feature.
+        //
+        // Exception for the duress teardown: performLogout() has just promoted the
+        // code the user typed into the device gate, so hasDevicePinSet() is now true
+        // and this block would immediately bounce them to DevicePinGateActivity to
+        // re-type the code they entered seconds ago — under duress, in front of
+        // whoever compelled it. They have already authenticated with that exact
+        // secret, so treat the gate as satisfied for this process only. Nothing is
+        // persisted: the very next cold start gates normally.
+        if (wipeInProgress && !PinManager.deviceGateSatisfiedThisProcess) {
+            Log.i(TAG, "onCreate: reset pending — device gate satisfied for this process");
+            PinManager.deviceGateSatisfiedThisProcess = true;
+        }
+
         if (!PinManager.deviceGateSatisfiedThisProcess) {
             if (PinManager.hasDevicePinSet(this) || !PinManager.looksLikePreExistingDevice(this)) {
                 Log.i(TAG, "onCreate: device PIN gate not yet satisfied — routing to DevicePinGateActivity");
@@ -155,8 +180,11 @@ public class SignInActivity extends AppCompatActivity {
         // This is now just a safety check for edge cases.
         if (mAuth == null) mAuth = FirebaseAuth.getInstance();
         FirebaseUser user = mAuth.getCurrentUser();
-        boolean wipeInProgress = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                .getBoolean("duress_wipe_in_progress", false);
+        // Same S06-M5 correction as onCreate(): the legacy plaintext key is never
+        // written any more, so this must consult the wipe-surviving marker. Without
+        // it, onStart() re-opened the exact hole onCreate() had just closed the
+        // moment the Activity was resumed during a teardown.
+        boolean wipeInProgress = DuressManager.isResetPending(this);
         if (!wipeInProgress && user != null && SignalKeyManager.isInitialized(this)) {
             Log.i(TAG, "onStart: returning user detected — routing  uid=" + user.getUid());
             route(user.getUid());

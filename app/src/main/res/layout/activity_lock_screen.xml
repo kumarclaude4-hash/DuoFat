@@ -244,12 +244,37 @@
 
             </LinearLayout>
 
-            <!-- Row 4: [confirm], 0, [backspace] -->
+            <!-- Row 4: [backspace], 0, [confirm] -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center">
+
+                <!-- Backspace key -->
+                <FrameLayout
+                    android:id="@+id/keyBackspace"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:background="@drawable/bg_numpad_backspace"
+                    android:elevation="5dp"
+                    android:outlineProvider="background"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Delete">
+                    <ImageView
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_backspace_ls"
+                        android:contentDescription="Backspace"/>
+                </FrameLayout>
+
+                <LinearLayout android:id="@+id/key0"
+                    style="@style/NumpadKey"
+                    android:layout_marginHorizontal="12dp">
+                    <TextView android:text="0" style="@style/NumpadDigit"/>
+                </LinearLayout>
 
                 <!-- Confirm key — replaces the old empty placeholder. Disabled (muted)
                      until MIN_PIN_LEN digits are entered; verification only ever runs
@@ -275,31 +300,6 @@
                         app:tint="@color/ls_key_text"
                         android:alpha="0.55"
                         android:contentDescription="@null"/>
-                </FrameLayout>
-
-                <LinearLayout android:id="@+id/key0"
-                    style="@style/NumpadKey"
-                    android:layout_marginHorizontal="12dp">
-                    <TextView android:text="0" style="@style/NumpadDigit"/>
-                </LinearLayout>
-
-                <!-- Backspace key -->
-                <FrameLayout
-                    android:id="@+id/keyBackspace"
-                    android:layout_width="64dp"
-                    android:layout_height="64dp"
-                    android:background="@drawable/bg_numpad_backspace"
-                    android:elevation="5dp"
-                    android:outlineProvider="background"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:contentDescription="Delete">
-                    <ImageView
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
-                        android:layout_gravity="center"
-                        android:src="@drawable/ic_backspace_ls"
-                        android:contentDescription="Backspace"/>
                 </FrameLayout>
 
             </LinearLayout>

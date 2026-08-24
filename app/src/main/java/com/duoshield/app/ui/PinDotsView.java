@@ -11,23 +11,27 @@ import android.view.animation.AnimationUtils;
 import com.duoshield.app.R;
 
 /**
- * Purely visual PIN-entry indicator: a row of segmented dots that fill in as
- * digits are typed. It has no text focus or input of its own — the lock
- * screen keeps a zero-size, invisible {@code EditText} to capture keyboard
- * input and calls {@link #setFilledCount(int)} on every change.
+ * Purely visual PIN-entry indicator: dots appear one by one as digits are
+ * typed. It has no text focus or input of its own — the lock screen keeps a
+ * zero-size, invisible {@code EditText} to capture keyboard input and calls
+ * {@link #setFilledCount(int)} on every change.
  *
- * <p>Supports 4–6 dots since app PINs are variable length (see PinManager).
- * The dot count shown is always {@link #maxCount}; entered digits fill dots
- * left to right.
+ * <p>Only entered digits are drawn — there are deliberately no empty
+ * placeholder slots, so an onlooker cannot read the PIN's length off the
+ * screen. The view still reserves the width of {@link #SLOT_CAPACITY} dots so
+ * the row stays centred and the layout never shifts as digits are added, and
+ * that reserved width is identical for every PIN length.
  */
 public class PinDotsView extends View {
 
-    private static final int DEFAULT_MAX = 6;
+    /** Widest PIN the app allows; used only to reserve a constant view size. */
+    private static final int SLOT_CAPACITY = 6;
 
-    private int maxCount = DEFAULT_MAX;
+    private int maxCount = SLOT_CAPACITY;
     private int filledCount = 0;
     private float dotRadiusPx;
     private float dotSpacingPx;
+    private float pulseScale = 1f;
     private int colorFilled;
     private int colorEmpty;
 
@@ -60,14 +64,20 @@ public class PinDotsView extends View {
         invalidate();
     }
 
-    /** Sets how many dot slots to render (clamped 4–6). */
+    /**
+     * Sets the upper bound on how many dots can be drawn (clamped 4–6).
+     *
+     * <p>This no longer affects the view's appearance at rest — nothing is
+     * drawn until a digit is entered — it only caps the visible dot count.
+     * The reserved size stays at {@link #SLOT_CAPACITY} regardless, so the
+     * PIN length is not observable from the layout.
+     */
     public void setMaxCount(int max) {
-        this.maxCount = Math.max(4, Math.min(6, max));
-        requestLayout();
+        this.maxCount = Math.max(4, Math.min(SLOT_CAPACITY, max));
         invalidate();
     }
 
-    /** Sets how many of the dots should appear filled; triggers a brief pulse on the newest dot. */
+    /** Sets how many dots are shown; triggers a brief pulse on the newest dot. */
     public void setFilledCount(int count) {
         boolean grew = count > filledCount;
         filledCount = Math.max(0, Math.min(maxCount, count));
@@ -75,11 +85,12 @@ public class PinDotsView extends View {
             ValueAnimator pulse = ValueAnimator.ofFloat(1.3f, 1f);
             pulse.setDuration(140);
             pulse.addUpdateListener(a -> {
-                dotRadiusPx = 7f * getResources().getDisplayMetrics().density * (float) a.getAnimatedValue();
+                pulseScale = (float) a.getAnimatedValue();
                 invalidate();
             });
             pulse.start();
         } else {
+            pulseScale = 1f;
             invalidate();
         }
     }
@@ -90,7 +101,9 @@ public class PinDotsView extends View {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredWidth = (int) (maxCount * dotSpacingPx);
+        // Always reserve room for the widest allowed PIN so the row keeps a
+        // constant footprint: the measured width must not hint at pinLength.
+        int desiredWidth = (int) (SLOT_CAPACITY * dotSpacingPx);
         int desiredHeight = (int) (dotRadiusPx * 4);
         setMeasuredDimension(
             resolveSize(desiredWidth, widthMeasureSpec),
@@ -100,17 +113,22 @@ public class PinDotsView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        float totalWidth = maxCount * dotSpacingPx;
-        float startX = (getWidth() - totalWidth) / 2f + dotSpacingPx / 2f;
-        float centerY = getHeight() / 2f;
+        if (filledCount <= 0) return;
 
-        for (int i = 0; i < maxCount; i++) {
+        // Entered dots are centred as a group, so the row grows outward from
+        // the middle instead of revealing how many slots are still unfilled.
+        float baseRadius = 7f * getResources().getDisplayMetrics().density;
+        float centerX = getWidth() / 2f;
+        float centerY = getHeight() / 2f;
+        float startX = centerX - ((filledCount - 1) * dotSpacingPx) / 2f;
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(colorFilled);
+
+        for (int i = 0; i < filledCount; i++) {
             float cx = startX + i * dotSpacingPx;
-            boolean filled = i < filledCount;
-            paint.setStyle(filled ? Paint.Style.FILL : Paint.Style.STROKE);
-            paint.setStrokeWidth(2f);
-            paint.setColor(filled ? colorFilled : colorEmpty);
-            float r = filled ? (7f * getResources().getDisplayMetrics().density) : (7f * getResources().getDisplayMetrics().density) - 1f;
+            // Only the most recent dot pulses as it appears.
+            float r = (i == filledCount - 1) ? baseRadius * pulseScale : baseRadius;
             canvas.drawCircle(cx, centerY, r, paint);
         }
     }

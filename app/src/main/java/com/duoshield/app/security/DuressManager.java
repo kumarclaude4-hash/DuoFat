@@ -565,6 +565,21 @@ public class DuressManager {
             android.util.Log.e("DuressManager", "Failed to set legacy reset-pending flag", e);
         }
 
+        // Drop any leftover forced-rotation intent from a PREVIOUS unfreeze cycle.
+        //
+        // The rotation flags live in the same wipe-surviving session-state file as
+        // the marker above, precisely so a rotation survives being backgrounded
+        // mid-flow. The cost is that they also survive a duress wipe, which is a
+        // different kind of event entirely: this teardown ends the account's life on
+        // this device, so whatever rotation was outstanding is now meaningless.
+        // Leaving them behind is what made the secondary-PIN rotation screen crash
+        // on any install whose data had not been cleared — a stale
+        // session_rotation_duress_done sent the screen straight into its ack-retry
+        // panel with no PIN ever collected. Cleared here, at the one point where the
+        // rotation is definitively obsolete; the server re-sets rotationRequired from
+        // scratch on the next unfreeze, so nothing legitimate is lost.
+        PendingLockStore.clearRotationDue(appCtx);
+
         // 1. Instant navigation — removes chat screen from view immediately.
         //    To an observer, it looks like the app is simply processing the PIN.
         Intent intent = new Intent(context, SignInActivity.class);
