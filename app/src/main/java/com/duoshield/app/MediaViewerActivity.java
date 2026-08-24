@@ -17,7 +17,9 @@ import com.duoshield.app.util.B2StorageHelper;
 
 
 import java.io.File;
-import java.io.FileOutputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.concurrent.Executors;
 
@@ -31,6 +33,17 @@ public class MediaViewerActivity extends BaseActivity {
     private ProgressBar progressBar;
     private String      mediaRef;
     private String      mediaKey;
+    /**
+     * Decrypted scratch file backing the player, deleted in {@link #onDestroy()}.
+     *
+     * <p>The previous implementation relied on {@code File.deleteOnExit()}, which only runs on
+     * an orderly JVM shutdown — a process the OS kills to reclaim memory (the common fate of a
+     * backgrounded app on a low-RAM device) never fires it, so decrypted video plaintext
+     * accumulated in the cache directory indefinitely. Deleting on activity teardown is both
+     * reliable and appropriate for an app whose whole premise is that plaintext does not sit
+     * at rest.
+     */
+    private File        playbackFile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,48 +66,48 @@ public class MediaViewerActivity extends BaseActivity {
 
     // ── Load + play ───────────────────────────────────────────────────────────
 
+    /**
+     * Resolves the media to a decrypted file on disk and hands that file to ExoPlayer.
+     *
+     * <p>Uses {@link B2StorageHelper#loadMediaToFile} rather than
+     * {@link B2StorageHelper#loadMedia}: playback needs a file, and the old path allocated the
+     * encrypted blob plus the full decrypted plaintext in memory only to then write that
+     * plaintext to a temp file anyway. Peak memory was 2–3× the video size to reach a state
+     * that is simply "a file in the cache dir", which is a guaranteed OOM for a large video on
+     * a low-RAM device. The streaming path holds a 256 KB buffer instead, so playback memory is
+     * now flat regardless of file size.
+     */
     private void loadAndPlay() {
         if (B2StorageHelper.isB2Path(mediaRef)) {
             showProgress(true);
-            B2StorageHelper.loadMedia(this, mediaRef, mediaKey, new B2StorageHelper.MediaCallback() {
-                @Override public void onLoaded(byte[] plainBytes) {
-                    if (isDestroyed() || isFinishing()) return;
-                    writeTempAndPlay(plainBytes);
-                }
-                @Override public void onError(Exception e) {
-                    if (isDestroyed() || isFinishing()) return;
-                    showProgress(false);
-                    Toast.makeText(MediaViewerActivity.this,
-                            "Failed to load video", Toast.LENGTH_SHORT).show();
-                }
-            });
+            File dest;
+            try {
+                dest = File.createTempFile("vid_view_", ".mp4", getCacheDir());
+            } catch (Exception e) {
+                showProgress(false);
+                Toast.makeText(this, "Failed to prepare video", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            playbackFile = dest;
+            B2StorageHelper.loadMediaToFile(this, mediaRef, mediaKey, dest,
+                    new B2StorageHelper.FileCallback() {
+                        @Override public void onReady(File plainFile) {
+                            if (isDestroyed() || isFinishing()) return;
+                            showProgress(false);
+                            initPlayer(Uri.fromFile(plainFile));
+                        }
+                        @Override public void onError(Exception e) {
+                            if (isDestroyed() || isFinishing()) return;
+                            showProgress(false);
+                            Toast.makeText(MediaViewerActivity.this,
+                                    "Failed to load video", Toast.LENGTH_SHORT).show();
+                        }
+                    });
         } else {
             // Legacy public URL — play directly
             showProgress(false);
             initPlayer(Uri.parse(mediaRef));
         }
-    }
-
-    private void writeTempAndPlay(byte[] plainBytes) {
-        Executors.newSingleThreadExecutor().execute(() -> {
-            try {
-                File tmp = File.createTempFile("vid_view_", ".mp4", getCacheDir());
-                try (FileOutputStream fos = new FileOutputStream(tmp)) { fos.write(plainBytes); }
-                tmp.deleteOnExit();
-                runOnUiThread(() -> {
-                    if (isDestroyed() || isFinishing()) return;
-                    showProgress(false);
-                    initPlayer(Uri.fromFile(tmp));
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (isDestroyed() || isFinishing()) return;
-                    showProgress(false);
-                    Toast.makeText(MediaViewerActivity.this,
-                            "Failed to prepare video", Toast.LENGTH_SHORT).show();
-                });
-            }
-        });
     }
 
     private void initPlayer(Uri uri) {
@@ -108,27 +121,61 @@ public class MediaViewerActivity extends BaseActivity {
 
     // ── Download to gallery ───────────────────────────────────────────────────
 
+    /**
+     * Saves the video to the gallery by streaming a plaintext file into the MediaStore.
+     *
+     * <p>When the video is already playing, {@link #playbackFile} holds the decrypted bytes,
+     * so the save reuses it instead of re-downloading and re-decrypting the whole thing —
+     * pressing download on a video you are watching is now disk-to-disk only. Otherwise the
+     * file is streamed down to a scratch file first. Either way the plaintext is copied to the
+     * MediaStore in 256 KB chunks and never held in memory as one array.
+     */
     private void saveVideoToGallery() {
         if (mediaRef == null) return;
         Toast.makeText(this, "Saving…", Toast.LENGTH_SHORT).show();
 
-        if (B2StorageHelper.isB2Path(mediaRef)) {
-            B2StorageHelper.loadMedia(this, mediaRef, mediaKey, new B2StorageHelper.MediaCallback() {
-                @Override public void onLoaded(byte[] plainBytes) {
-                    Executors.newSingleThreadExecutor().execute(() -> writeVideoToGallery(plainBytes));
-                }
-                @Override public void onError(Exception e) {
-                    if (isDestroyed() || isFinishing()) return;
-                    runOnUiThread(() -> Toast.makeText(MediaViewerActivity.this,
-                            "Download failed", Toast.LENGTH_SHORT).show());
-                }
-            });
-        } else {
+        if (!B2StorageHelper.isB2Path(mediaRef)) {
             Toast.makeText(this, "Cannot save this video format", Toast.LENGTH_SHORT).show();
+            return;
         }
+
+        File ready = playbackFile;
+        if (ready != null && ready.exists() && ready.length() > 0) {
+            Executors.newSingleThreadExecutor().execute(() -> writeVideoToGallery(ready, false));
+            return;
+        }
+
+        File scratch;
+        try {
+            scratch = File.createTempFile("vid_save_", ".mp4", getCacheDir());
+        } catch (Exception e) {
+            Toast.makeText(this, "Save failed", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        B2StorageHelper.loadMediaToFile(this, mediaRef, mediaKey, scratch,
+                new B2StorageHelper.FileCallback() {
+                    @Override public void onReady(File plainFile) {
+                        Executors.newSingleThreadExecutor()
+                                .execute(() -> writeVideoToGallery(plainFile, true));
+                    }
+                    @Override public void onError(Exception e) {
+                        //noinspection ResultOfMethodCallIgnored
+                        scratch.delete();
+                        if (isDestroyed() || isFinishing()) return;
+                        Toast.makeText(MediaViewerActivity.this,
+                                "Download failed", Toast.LENGTH_SHORT).show();
+                    }
+                });
     }
 
-    private void writeVideoToGallery(byte[] bytes) {
+    /**
+     * Copies {@code plainFile} into the gallery. Runs on a background thread.
+     *
+     * @param deleteAfter whether {@code plainFile} is a throwaway scratch file this method
+     *                    owns. The playback file is still in use by ExoPlayer, so it is left
+     *                    for {@link #onDestroy()} to clean up.
+     */
+    private void writeVideoToGallery(File plainFile, boolean deleteAfter) {
         try {
             ContentValues values = new ContentValues();
             values.put(android.provider.MediaStore.Video.Media.DISPLAY_NAME,
@@ -140,9 +187,12 @@ public class MediaViewerActivity extends BaseActivity {
             Uri uri = getContentResolver().insert(
                     android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
             if (uri != null) {
-                OutputStream out = getContentResolver().openOutputStream(uri);
-                if (out != null) {
-                    try { out.write(bytes); } finally { out.close(); }
+                try (InputStream in = new FileInputStream(plainFile);
+                     OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    if (out == null) throw new IOException("MediaStore stream unavailable");
+                    byte[] buf = new byte[256 * 1024];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
                 }
                 // F37 fix: record the URI so wipe/duress logout can delete it from the gallery.
                 com.duoshield.app.util.MediaStoreWipeHelper.recordUri(
@@ -157,6 +207,11 @@ public class MediaViewerActivity extends BaseActivity {
                 if (!isDestroyed() && !isFinishing())
                     Toast.makeText(this, "Save failed", Toast.LENGTH_SHORT).show();
             });
+        } finally {
+            if (deleteAfter) {
+                //noinspection ResultOfMethodCallIgnored
+                plainFile.delete();
+            }
         }
     }
 
@@ -172,5 +227,10 @@ public class MediaViewerActivity extends BaseActivity {
     @Override protected void onDestroy() {
         super.onDestroy();
         if (player != null) { player.release(); player = null; }
+        if (playbackFile != null) {
+            //noinspection ResultOfMethodCallIgnored
+            playbackFile.delete();
+            playbackFile = null;
+        }
     }
 }

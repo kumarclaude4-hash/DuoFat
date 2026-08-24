@@ -134,6 +134,24 @@ public final class B2StorageHelper {
 
     // ── In-memory decrypted-media cache (adaptive: 1/5 of max heap, min 32 MB, max 96 MB) ─────
     private static final LruCache<String, byte[]> MEDIA_CACHE;
+    /**
+     * Largest single entry allowed into {@link #MEDIA_CACHE} (a quarter of the cache).
+     *
+     * <p>Without this cap the cache is a cache in name only. {@link LruCache} evicts
+     * least-recently-used entries until the new value fits, so putting one 60 MB video
+     * plaintext into a 96 MB cache flushes every avatar and image preview that the
+     * conversation list and chat scroll depend on — the entries that actually benefit
+     * from caching, since they are small, re-read constantly, and cheap to hold. Worse,
+     * an entry larger than {@code maxSize} can never fit at all: {@code trimToSize}
+     * evicts everything, including the value just inserted, so the video pays the full
+     * eviction cost and still is not cached. A single video view therefore trashed the
+     * whole cache for no benefit whatsoever.
+     *
+     * <p>Video playback and gallery saves no longer route plaintext through a
+     * {@code byte[]} at all (see {@link #loadMediaToFile}), so refusing oversized
+     * entries here costs nothing: the disk cache still absorbs the repeat-view case.
+     */
+    private static final int MAX_CACHE_ENTRY_BYTES;
     static {
         long maxHeap  = Runtime.getRuntime().maxMemory();
         int  cacheMax = (int) Math.min(96L * 1024 * 1024,
@@ -141,6 +159,23 @@ public final class B2StorageHelper {
         MEDIA_CACHE = new LruCache<String, byte[]>(cacheMax) {
             @Override protected int sizeOf(String key, byte[] value) { return value.length; }
         };
+        MAX_CACHE_ENTRY_BYTES = cacheMax / 4;
+    }
+
+    /**
+     * Inserts into {@link #MEDIA_CACHE} only when the value is small enough to be worth
+     * caching. Every write to the media cache must go through here rather than calling
+     * {@code MEDIA_CACHE.put} directly — see {@link #MAX_CACHE_ENTRY_BYTES} for why an
+     * unbounded put is actively harmful.
+     */
+    private static void cachePut(String b2Path, byte[] value) {
+        if (b2Path == null || value == null) return;
+        if (value.length > MAX_CACHE_ENTRY_BYTES) {
+            Log.d(TAG, "cachePut: skipping oversized entry " + b2Path
+                    + " (" + value.length + " B > " + MAX_CACHE_ENTRY_BYTES + " B cap)");
+            return;
+        }
+        MEDIA_CACHE.put(b2Path, value);
     }
 
     // ── In-flight request deduplication ──────────────────────────────────────
@@ -397,7 +432,7 @@ public final class B2StorageHelper {
             if (waiters == null) return;
             try {
                 byte[] raw = downloadFile(b2Path);
-                MEDIA_CACHE.put(b2Path, raw);
+                cachePut(b2Path, raw);
                 new Handler(Looper.getMainLooper()).post(() -> {
                     for (MediaCallback c : waiters) c.onLoaded(raw);
                 });
@@ -692,7 +727,7 @@ public final class B2StorageHelper {
         if (ctx != null) {
             byte[] disk = readDiskCache(ctx, b2Path);
             if (disk != null) {
-                MEDIA_CACHE.put(b2Path, disk);
+                cachePut(b2Path, disk);
                 new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(disk));
                 return;
             }
@@ -713,7 +748,7 @@ public final class B2StorageHelper {
             try {
                 byte[] raw   = downloadFile(b2Path);
                 byte[] plain = decryptAfterDownload(raw, keyBase64);
-                MEDIA_CACHE.put(b2Path, plain);
+                cachePut(b2Path, plain);
                 if (fCtx != null) writeDiskCache(fCtx, b2Path, plain);
                 new Handler(Looper.getMainLooper()).post(() -> {
                     for (MediaCallback c : waiters) c.onLoaded(plain);
@@ -738,6 +773,26 @@ public final class B2StorageHelper {
     /** Returns cached decrypted bytes for {@code b2Path}, or {@code null} if not cached. */
     public static byte[] getCached(String b2Path) {
         return b2Path != null ? MEDIA_CACHE.get(b2Path) : null;
+    }
+
+    /**
+     * Returns true when the plaintext for {@code b2Path} can be produced without a network
+     * round-trip — i.e. it is in the in-memory cache or the persistent disk cache.
+     *
+     * <p>Callers that only want to do optional work when the download is "already paid for"
+     * should use this rather than {@code getCached(path) != null}. The latter answers a
+     * narrower question ("are the bytes in RAM right now"), and since
+     * {@link #MAX_CACHE_ENTRY_BYTES} deliberately keeps large videos out of the in-memory
+     * cache, it now answers "no" for every large file even when the fully decrypted plaintext
+     * is sitting on disk. Gating on it would silently disable that optional work for exactly
+     * the files it was meant to cover.
+     */
+    public static boolean isLocallyAvailable(Context ctx, String b2Path) {
+        if (b2Path == null || b2Path.isEmpty()) return false;
+        if (MEDIA_CACHE.get(b2Path) != null) return true;
+        if (ctx == null) return false;
+        File f = diskCacheFile(ctx, b2Path);
+        return f != null && f.exists() && f.length() > 0;
     }
 
     // ── Video thumbnail generation (encrypted videos) ──────────────────────────
@@ -765,9 +820,19 @@ public final class B2StorageHelper {
     }
 
     /**
-     * Downloads + decrypts the video at {@code b2Path} (sharing the same cache as
-     * {@link #loadMedia}) and extracts a single JPEG thumbnail frame. Delivers on
-     * the main thread.
+     * Decrypts the video at {@code b2Path} to a scratch file and extracts a single JPEG
+     * thumbnail frame from it. Delivers on the main thread.
+     *
+     * <p>Routes through {@link #loadMediaToFile} rather than {@link #loadMedia} for the same
+     * reason playback does: {@link MediaMetadataRetriever} can only read a file, so the
+     * {@code byte[]} that {@code loadMedia} produced was written straight back out to a temp
+     * file and thrown away. Paying 2–3× the video size in heap to obtain one ~40 KB JPEG was
+     * the worst ratio of the three video paths, and the most dangerous — thumbnails are
+     * generated during RecyclerView scroll, so several could be in flight at once on exactly
+     * the low-RAM devices least able to absorb them.
+     *
+     * <p>{@code ctx} is required here (unlike in {@code loadMedia}) because a scratch file
+     * needs a cache directory; a null context fails fast rather than silently degrading.
      */
     public static void loadVideoThumbnail(Context ctx, String b2Path, String keyBase64,
                                            ThumbnailCallback cb) {
@@ -776,41 +841,53 @@ public final class B2StorageHelper {
                     cb.onError(new IOException("B2 path is null or empty")));
             return;
         }
+        if (ctx == null) {
+            new Handler(Looper.getMainLooper()).post(() ->
+                    cb.onError(new IOException("Context required for thumbnail extraction")));
+            return;
+        }
         byte[] cachedThumb = THUMB_CACHE.get(b2Path);
         if (cachedThumb != null) {
             new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(cachedThumb));
             return;
         }
-        loadMedia(ctx, b2Path, keyBase64, new MediaCallback() {
-            @Override public void onLoaded(byte[] plainVideoBytes) {
+        final File scratch;
+        try {
+            scratch = File.createTempFile("thumb_", ".mp4", ctx.getCacheDir());
+        } catch (Exception e) {
+            new Handler(Looper.getMainLooper()).post(() -> cb.onError(e));
+            return;
+        }
+        loadMediaToFile(ctx, b2Path, keyBase64, scratch, new FileCallback() {
+            @Override public void onReady(File plainFile) {
                 MEDIA_POOL.execute(() -> {
                     try {
-                        byte[] jpeg = extractThumbnailJpeg(ctx, b2Path, plainVideoBytes);
+                        byte[] jpeg = extractThumbnailJpeg(plainFile);
                         if (jpeg == null) throw new IOException("no frame extracted");
                         THUMB_CACHE.put(b2Path, jpeg);
                         new Handler(Looper.getMainLooper()).post(() -> cb.onLoaded(jpeg));
                     } catch (Exception e) {
                         Log.w(TAG, "loadVideoThumbnail: extraction failed for " + b2Path, e);
                         new Handler(Looper.getMainLooper()).post(() -> cb.onError(e));
+                    } finally {
+                        //noinspection ResultOfMethodCallIgnored
+                        plainFile.delete();
                     }
                 });
             }
             @Override public void onError(Exception e) {
+                //noinspection ResultOfMethodCallIgnored
+                scratch.delete();
                 cb.onError(e);
             }
         });
     }
 
-    /** Writes {@code plainVideoBytes} to a scratch file and pulls a frame near the start. */
-    private static byte[] extractThumbnailJpeg(Context ctx, String b2Path, byte[] plainVideoBytes)
-            throws Exception {
-        File tmp = File.createTempFile("thumb_", ".mp4", ctx.getCacheDir());
+    /** Pulls a frame near the start of an already-decrypted video file and JPEG-encodes it. */
+    private static byte[] extractThumbnailJpeg(File plainVideoFile) throws Exception {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
-            try (FileOutputStream fos = new FileOutputStream(tmp)) {
-                fos.write(plainVideoBytes);
-            }
-            retriever.setDataSource(tmp.getAbsolutePath());
+            retriever.setDataSource(plainVideoFile.getAbsolutePath());
             Bitmap frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
             if (frame == null) return null;
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -819,8 +896,6 @@ public final class B2StorageHelper {
             return baos.toByteArray();
         } finally {
             retriever.release();
-            //noinspection ResultOfMethodCallIgnored
-            tmp.delete();
         }
     }
 
@@ -940,7 +1015,7 @@ public final class B2StorageHelper {
         try {
             byte[] raw   = downloadFile(b2Path);
             byte[] plain = decryptAfterDownload(raw, keyBase64);
-            MEDIA_CACHE.put(b2Path, plain);
+            cachePut(b2Path, plain);
             writeDiskCache(ctx, b2Path, plain);
             Log.d(TAG, "preCacheSync: cached " + b2Path + " (" + plain.length + " B)");
         } catch (Exception e) {
@@ -1992,5 +2067,117 @@ public final class B2StorageHelper {
         } finally {
             tmp.delete();
         }
+    }
+
+    // ── Streaming media load to a plaintext file (large videos) ───────────────
+
+    /** Async result of {@link #loadMediaToFile}. Both methods are called on the main thread. */
+    public interface FileCallback {
+        /** {@code dest} now holds the decrypted plaintext and is ready to hand to a player. */
+        void onReady(File dest);
+        void onError(Exception e);
+    }
+
+    /**
+     * Decrypts the media at {@code b2Path} into {@code dest} on disk, never materializing the
+     * plaintext as a single {@code byte[]}.
+     *
+     * <p>This is the file-oriented counterpart to {@link #loadMedia}, and the correct entry
+     * point for anything whose end state is a file — video playback and gallery saves both
+     * hand a path to the OS, so the intermediate {@code byte[]} that {@code loadMedia}
+     * produces is pure overhead. Going through {@code loadMedia} for a video allocated the
+     * encrypted blob and the decrypted plaintext simultaneously and then wrote the plaintext
+     * to a temp file anyway, so peak usage was 2–3× the file size to reach a state that is
+     * just "a file on disk". On a 2 GB device with roughly 150–190 MB of usable heap that
+     * turns a 200 MB video from slow into a certain {@code OutOfMemoryError}.
+     *
+     * <p>Resolution order mirrors {@link #loadMedia}:
+     * <ol>
+     *   <li>In-memory LRU hit — already in RAM, so just write it out.</li>
+     *   <li>Disk-cache hit — stream-copied to {@code dest}; the cache entry is left in place
+     *       so the caller can freely delete {@code dest} without evicting the cache.</li>
+     *   <li>Live download — streamed to disk and decrypted in place via
+     *       {@link #downloadAndDecryptToFile}, then stream-copied into the disk cache.</li>
+     * </ol>
+     *
+     * <p>Unlike {@link #loadMedia} this does not deduplicate concurrent requests through
+     * {@link #IN_FLIGHT}: each caller supplies its own {@code dest}, so there is no single
+     * result to share, and the callers (a full-screen viewer and an explicit save action) are
+     * inherently one-at-a-time rather than the many-rows-at-once pattern that made
+     * deduplication worthwhile for avatars.
+     *
+     * @param ctx  optional — when non-null the persistent disk cache is read and populated.
+     * @param dest file to write the plaintext into; its parent directory must exist.
+     */
+    public static void loadMediaToFile(Context ctx, String b2Path, String keyBase64,
+                                        File dest, FileCallback cb) {
+        if (b2Path == null || b2Path.isEmpty()) {
+            new Handler(Looper.getMainLooper()).post(() ->
+                    cb.onError(new IOException("B2 path is null or empty")));
+            return;
+        }
+        final Context fCtx = ctx;
+        MEDIA_POOL.execute(() -> {
+            try {
+                byte[] cached = MEDIA_CACHE.get(b2Path);
+                if (cached != null) {
+                    try (FileOutputStream fos = new FileOutputStream(dest)) {
+                        fos.write(cached);
+                    }
+                } else {
+                    File cacheFile = fCtx != null ? diskCacheFile(fCtx, b2Path) : null;
+                    if (cacheFile != null && cacheFile.exists() && cacheFile.length() > 0) {
+                        copyFile(cacheFile, dest);
+                        // Refresh the LRU timestamp so enforceDiskCacheLimit() does not treat a
+                        // repeatedly-viewed video as the coldest file in the cache.
+                        //noinspection ResultOfMethodCallIgnored
+                        cacheFile.setLastModified(System.currentTimeMillis());
+                    } else {
+                        downloadAndDecryptToFile(b2Path, keyBase64, dest);
+                        if (fCtx != null) writeDiskCacheFromFile(fCtx, b2Path, dest);
+                    }
+                }
+                new Handler(Looper.getMainLooper()).post(() -> cb.onReady(dest));
+            } catch (Exception e) {
+                Log.e(TAG, "loadMediaToFile failed: " + b2Path, e);
+                //noinspection ResultOfMethodCallIgnored
+                dest.delete();
+                new Handler(Looper.getMainLooper()).post(() -> cb.onError(e));
+            }
+        });
+    }
+
+    /**
+     * File-to-file variant of {@link #writeDiskCache} — populates the disk cache from an
+     * existing plaintext file instead of a {@code byte[]}, so the streaming path never has to
+     * read the plaintext back into memory just to cache it. Must be called from a background
+     * thread.
+     */
+    private static void writeDiskCacheFromFile(Context ctx, String b2Path, File src) {
+        File f = diskCacheFile(ctx, b2Path);
+        if (f == null) return;
+        // A file that cannot coexist with the cache budget must not enter the cache. Caching it
+        // anyway would make enforceDiskCacheLimit() delete every other entry trying to get back
+        // under the cap and still overshoot, so one oversized video would wipe the entire cache
+        // and not even be retained itself. Half the budget is the threshold rather than the
+        // whole of it so a single large entry can never monopolise the cache.
+        long srcLen = src.length();
+        if (srcLen > DISK_CACHE_MAX_BYTES / 2) {
+            Log.d(TAG, "writeDiskCacheFromFile: skipping oversized " + b2Path
+                    + " (" + srcLen + " B)");
+            return;
+        }
+        try {
+            copyFile(src, f);
+        } catch (Exception e) {
+            // A partial copy is worse than no copy: a truncated cache file still passes the
+            // exists() && length() > 0 test in loadMediaToFile and would be served as if it
+            // were the whole video.
+            Log.w(TAG, "writeDiskCacheFromFile failed for " + b2Path, e);
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            return;
+        }
+        enforceDiskCacheLimit(ctx);
     }
 }
