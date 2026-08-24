@@ -102,6 +102,43 @@ function contentTypeForKey(key) {
   return CONTENT_TYPE_BY_EXT[ext] || 'application/octet-stream';
 }
 
+// ─── Range requests ──────────────────────────────────────────────────────────
+// Chunked media playback (format v2 — see B2StorageHelper.CHUNKED_FORMAT_VERSION)
+// fetches a 16-byte header and then one 1 MiB chunk at a time, so the client can
+// start playing and seek without pulling the whole object down. That only works
+// if this Worker honours `Range`; before this it always streamed the full body
+// from whichever tier held the object, and a "range" GET silently returned
+// everything.
+//
+// Deliberately narrow: only a single `bytes=start-end` (or `bytes=start-`) range
+// is supported. Multipart ranges would mean emitting a multipart/byteranges body
+// that no client here asks for, and suffix ranges (`bytes=-N`) likewise have no
+// caller — anything unrecognised is reported as such so the caller sees a clear
+// 416 instead of a full-body 200 it would then mistake for its requested slice.
+//
+// Returns:
+//   null                — no Range header; serve the whole object as before.
+//   'invalid'           — header present but unusable, or start beyond EOF.
+//   { start, end, length } — inclusive byte offsets, clamped to `size`.
+function parseByteRange(header, size) {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return 'invalid';
+  const [, rawStart, rawEnd] = match;
+  // A suffix range has an empty start; not supported (see above).
+  if (rawStart === '') return 'invalid';
+  const start = Number(rawStart);
+  if (!Number.isSafeInteger(start) || start < 0) return 'invalid';
+  // An empty end means "to the last byte". Clamp an over-long end rather than
+  // rejecting it — RFC 9110 requires the server to satisfy what it can.
+  const end = rawEnd === '' ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  if (!Number.isSafeInteger(end) || end < start) return 'invalid';
+  // `start === size` is unsatisfiable even for a zero-length object, which is
+  // the one case where there is no valid first byte to serve.
+  if (start >= size) return 'invalid';
+  return { start, end, length: end - start + 1 };
+}
+
 // ─── Response helpers ─────────────────────────────────────────────────────────
 // S03-L4 fix: json() always merges in whatever CORS headers apply to this
 // request, so quota/rate-limit rejections (429/507/etc.) are just as
@@ -469,7 +506,7 @@ async function adjustR2(env, deltaBytes) {
   }
 }
 
-// ─── Per-user storage quota (S03-H3) ──────────────────────────────────────────
+// ─── Per-user storage quota (S03-H3) ───────────────────────────────────��──────
 // The global MAX_R2_BYTES cap alone lets one uploader (~19 uploads at the
 // default 500 MB file size) fill the entire 9.5 GB free-tier budget and stop
 // uploads for every user for weeks (objects only leave R2 via the 30-day
@@ -851,8 +888,38 @@ export default {
 
     // ── DOWNLOAD ──────────────────────────────────────────────────────────────
     if (request.method === 'GET') {
+      const rangeHeader = request.headers.get('Range');
+
       // 1. Hot tier: R2
-      const r2Object = await env.HOT_BUCKET.get(key);
+      //
+      // HEAD before GET so a range can be resolved against the real object size
+      // (R2 needs an absolute offset+length, and an `end` clamped to EOF is only
+      // knowable from the size). Costs one extra metadata lookup on the hot path,
+      // which is why it is skipped entirely for a plain full-object GET.
+      let r2Range = null;
+      if (rangeHeader) {
+        const r2Head = await env.HOT_BUCKET.head(key).catch(() => null);
+        if (r2Head) {
+          const parsed = parseByteRange(rangeHeader, r2Head.size);
+          if (parsed === 'invalid') {
+            return new Response(null, {
+              status:  416,
+              headers: new Headers({
+                'Content-Range': `bytes */${r2Head.size}`,
+                'Accept-Ranges': 'bytes',
+                ...cors,
+              }),
+            });
+          }
+          r2Range = parsed ? { ...parsed, size: r2Head.size } : null;
+        }
+      }
+
+      const r2Object = r2Range
+        ? await env.HOT_BUCKET.get(key, {
+            range: { offset: r2Range.start, length: r2Range.length },
+          })
+        : await env.HOT_BUCKET.get(key);
       if (r2Object) {
         const headers = new Headers({
           // S03-M1: derived from the key's allow-listed extension, not from
@@ -861,10 +928,13 @@ export default {
           // when this check didn't exist) may still have an attacker-chosen
           // stored value; reading it here would keep replaying that.
           'Content-Type':           contentTypeForKey(key),
+          // r2Object.size is the size of the body actually returned, so it is
+          // already the partial length on a ranged get.
           'Content-Length':         String(r2Object.size),
           'ETag':                   r2Object.httpEtag ?? '',
           'Cache-Control':          'private, max-age=3600',
           'X-Storage-Tier':         'hot',
+          'Accept-Ranges':          'bytes',
           // S03-M1: a browser/WebView that ever opens this URL directly must
           // not MIME-sniff the body into executing as HTML/SVG/JS, and must
           // not render it inline — this is defense-in-depth today (the
@@ -874,6 +944,11 @@ export default {
           'Content-Disposition':    'attachment',
           ...cors,
         });
+        if (r2Range) {
+          headers.set('Content-Range',
+            `bytes ${r2Range.start}-${r2Range.end}/${r2Range.size}`);
+          return new Response(r2Object.body, { status: 206, headers });
+        }
         return new Response(r2Object.body, { headers });
       }
 
@@ -881,9 +956,25 @@ export default {
       const b2 = getB2Client(env);
       let b2Response;
       try {
-        b2Response = await b2.fetch(b2Url(env, key));
+        // Forward the client's Range verbatim and let B2 resolve it — no HEAD needed
+        // here, because S3 answers a range GET with the authoritative Content-Range
+        // (including the total size) which is passed straight through below. A 416
+        // from B2 is also passed through as-is by the !ok branch's status mapping.
+        b2Response = await b2.fetch(b2Url(env, key),
+          rangeHeader ? { headers: { Range: rangeHeader } } : undefined);
       } catch (err) {
         return respond({ error: 'B2 fetch failed', detail: err.message }, 502);
+      }
+
+      if (b2Response.status === 416) {
+        return new Response(null, {
+          status:  416,
+          headers: new Headers({
+            'Content-Range': b2Response.headers.get('Content-Range') ?? 'bytes */*',
+            'Accept-Ranges': 'bytes',
+            ...cors,
+          }),
+        });
       }
 
       if (b2Response.ok) {
@@ -901,8 +992,17 @@ export default {
           'X-Storage-Tier':         'cold',
           'X-Content-Type-Options': 'nosniff',
           'Content-Disposition':    'attachment',
+          'Accept-Ranges':          'bytes',
           ...cors,
         });
+        // 206 only when B2 actually honoured the range. If it answered 200 to a
+        // range request, say 200 — reporting 206 without a real partial body would
+        // make the client treat a full object as the slice it asked for.
+        if (b2Response.status === 206) {
+          const contentRange = b2Response.headers.get('Content-Range');
+          if (contentRange) headers.set('Content-Range', contentRange);
+          return new Response(b2Response.body, { status: 206, headers });
+        }
         return new Response(b2Response.body, { status: 200, headers });
       }
 

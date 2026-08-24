@@ -2035,7 +2035,7 @@ public class ChatMediaActivity extends BaseActivity {
         return false;
     }
 
-    // ════════════════════════════���═════════════════════════════════
+    // ═══════════════════════════������═════════════════════════════════
     // MESSAGE ACTION DIALOG
     // ══════════════════════════════════════════════════════════════
 
@@ -2930,8 +2930,15 @@ public class ChatMediaActivity extends BaseActivity {
                     });
                     java.io.File encTmp = java.io.File.createTempFile("enc_", ".tmp", getCacheDir());
                     try {
-                        String mediaKey = B2StorageHelper.encryptUriToFile(
-                                getContentResolver(), fileUri, encTmp);
+                        // Chunked v2 format: 1 MiB independently authenticated chunks, so the
+                        // recipient can start playing and seek while the object is still
+                        // downloading instead of waiting on a full download + decrypt. Only the
+                        // large-video branch uses it — small videos and images finish
+                        // downloading faster than the extra range round trips would cost, and
+                        // `path` is already generated above, which is what lets it be bound
+                        // into every chunk's AAD here.
+                        String mediaKey = B2StorageHelper.encryptUriToChunkedFile(
+                                getContentResolver(), fileUri, path, encTmp);
                         runOnUiThread(() -> {
                             if (!isFinishing() && !isDestroyed()) tvUploadPct.setText("0%");
                         });

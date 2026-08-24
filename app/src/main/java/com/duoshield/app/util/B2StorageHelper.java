@@ -17,6 +17,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -56,7 +58,11 @@ import okio.BufferedSink;
  *  1. All bytes are AES-256-GCM encrypted BEFORE upload using a per-file random key.
  *  2. The per-file key (Base64) is stored in the Firestore message doc as "mediaKey".
  *  3. Downloads are public (bucket allows public GET) — safe because content is E2EE.
- *  4. On-wire format: [12-byte IV | ciphertext | 16-byte GCM auth tag]
+ *  4. On-wire format (v1, whole-blob): [12-byte IV | ciphertext | 16-byte GCM auth tag].
+ *     Large new video uploads instead use the chunked v2 format documented at
+ *     {@link #CHUNKED_FORMAT_VERSION}, which is range-addressable so playback can
+ *     start and seek while the object is still downloading. Which format an object
+ *     uses is recorded on the message ("chunked"), never sniffed from its bytes.
  *  5. Paths are stored with "b2:" prefix to distinguish from Supabase paths.
  *
  * Firestore message doc:
@@ -2111,6 +2117,22 @@ public final class B2StorageHelper {
      */
     public static void loadMediaToFile(Context ctx, String b2Path, String keyBase64,
                                         File dest, FileCallback cb) {
+        loadMediaToFile(ctx, b2Path, keyBase64, dest, false, cb);
+    }
+
+    /**
+     * Chunked-aware variant of {@link #loadMediaToFile(Context, String, String, File,
+     * FileCallback)}.
+     *
+     * <p>{@code chunked} selects which on-wire format the object is in, and it must come from
+     * the message that named the object — the two formats are not self-describing at this
+     * layer, and guessing by sniffing the first byte would mean treating an attacker-influenced
+     * byte as a format switch. A chunked object handed to the legacy decrypt path fails its tag
+     * check rather than producing garbage, but failing for the right reason is worth the
+     * explicit flag.
+     */
+    public static void loadMediaToFile(Context ctx, String b2Path, String keyBase64,
+                                        File dest, boolean chunked, FileCallback cb) {
         if (b2Path == null || b2Path.isEmpty()) {
             new Handler(Looper.getMainLooper()).post(() ->
                     cb.onError(new IOException("B2 path is null or empty")));
@@ -2133,7 +2155,11 @@ public final class B2StorageHelper {
                         //noinspection ResultOfMethodCallIgnored
                         cacheFile.setLastModified(System.currentTimeMillis());
                     } else {
-                        downloadAndDecryptToFile(b2Path, keyBase64, dest);
+                        if (chunked) {
+                            downloadAndDecryptChunkedToFile(b2Path, keyBase64, dest);
+                        } else {
+                            downloadAndDecryptToFile(b2Path, keyBase64, dest);
+                        }
                         if (fCtx != null) writeDiskCacheFromFile(fCtx, b2Path, dest);
                     }
                 }
@@ -2179,5 +2205,413 @@ public final class B2StorageHelper {
             return;
         }
         enforceDiskCacheLimit(ctx);
+    }
+
+    // ── Chunked, range-addressable media format (v2) ───────────────────────────
+
+    /**
+     * On-wire layout of a chunked object:
+     *
+     * <pre>
+     * [1 byte : 0x02 format version]
+     * [7 bytes: random per-file nonce prefix]
+     * [8 bytes: big-endian plaintext total length L]
+     * chunk_0 ciphertext+tag  (CHUNK_PLAINTEXT_SIZE + 16 B, unless also last)
+     * chunk_1 ciphertext+tag
+     * ...
+     * chunk_{n-1} ciphertext+tag  (last: (L - (n-1)*CHUNK_PLAINTEXT_SIZE) + 16 B)
+     * </pre>
+     *
+     * <p>Why a new format at all: the legacy layout is one AES-GCM blob whose single tag
+     * cannot be verified until the final byte has arrived. A range read of that blob would
+     * either have to block until EOF anyway — buying nothing — or hand the player
+     * unauthenticated plaintext, which is exactly the thing this app exists to not do. With
+     * fixed-size chunks, every chunk is independently authenticated and every plaintext
+     * offset maps to a chunk index arithmetically, so seeking costs one small range GET.
+     *
+     * <p>Every chunk but the last is exactly {@link #CHUNK_PLAINTEXT_SIZE}, which is what
+     * makes offsets computable from {@code L} alone — no per-chunk length prefixes to parse,
+     * and no index table to fetch before the first frame can play.
+     */
+    public static final byte CHUNKED_FORMAT_VERSION = 0x02;
+
+    /** Plaintext bytes per chunk (1 MiB). */
+    public static final int  CHUNK_PLAINTEXT_SIZE   = 1024 * 1024;
+    /** GCM tag bytes appended to each chunk. */
+    private static final int CHUNK_TAG_BYTES        = 16;
+    /** On-wire size of a non-final chunk. */
+    public static final int  CHUNK_CIPHERTEXT_SIZE  = CHUNK_PLAINTEXT_SIZE + CHUNK_TAG_BYTES;
+    /** Fixed header size — fetched with one small range GET before any chunk. */
+    public static final int  CHUNKED_HEADER_BYTES   = 16;
+    private static final int NONCE_PREFIX_BYTES     = 7;
+
+    /**
+     * Top bit of the 4-byte chunk counter, set iff the chunk is the final one.
+     *
+     * <p>This is the STREAM construction (Rogaway/Shrimpton — the same idea behind Tink's
+     * streaming AEAD and {@code age}), and it is what makes truncation fail closed: a
+     * non-final chunk was authenticated under an IV with this bit clear, so an attacker who
+     * drops the tail and relabels chunk k as final changes the IV, and GCM tag verification
+     * fails. Overflow is not reachable — the app's 500 MB file cap means at most ~500 chunks
+     * against a 2^31 counter space.
+     */
+    private static final int LAST_CHUNK_FLAG = 0x80000000;
+
+    /**
+     * Hard ceiling on chunk count, derived from the app's 500 MB upload cap with generous
+     * headroom. A header claiming more chunks than this is malformed or hostile; rejecting it
+     * up front keeps a corrupted 8-byte length field from turning into an unbounded fetch loop.
+     */
+    private static final int MAX_CHUNKS = 4096;
+
+    /**
+     * Cached per-object capability tokens.
+     *
+     * <p>Streaming playback issues one range GET per 1 MiB chunk, and minting a fresh
+     * capability token for each would mean a push-server round trip per megabyte — slower than
+     * the download it authorizes, and enough to trip the server's own per-user rate limit on a
+     * large video. The server's tokens are valid for 10 minutes; caching them for 5 keeps a
+     * comfortable margin against clock skew and in-flight requests while collapsing hundreds
+     * of mint calls into one. Tokens are scoped to one object and one verb, so caching does
+     * not widen what a leaked token could do — it only reuses it for the requests it was
+     * already minted for.
+     */
+    private static final ConcurrentHashMap<String, CachedCapToken> CAP_TOKEN_CACHE =
+            new ConcurrentHashMap<>();
+    private static final long CAP_TOKEN_CACHE_MS = 5 * 60_000L;
+
+    private static final class CachedCapToken {
+        final String token;
+        final long   cachedAtMs;
+        CachedCapToken(String token, long cachedAtMs) {
+            this.token = token; this.cachedAtMs = cachedAtMs;
+        }
+    }
+
+    private static String capabilityTokenCached(String objectKey, String op) throws Exception {
+        String cacheKey = op + ":" + objectKey;
+        CachedCapToken hit = CAP_TOKEN_CACHE.get(cacheKey);
+        long now = System.currentTimeMillis();
+        if (hit != null && now - hit.cachedAtMs < CAP_TOKEN_CACHE_MS) return hit.token;
+        String fresh = fetchMediaCapabilityToken(objectKey, op);
+        CAP_TOKEN_CACHE.put(cacheKey, new CachedCapToken(fresh, now));
+        return fresh;
+    }
+
+    /** Parsed 16-byte chunked header. */
+    public static final class ChunkedHeader {
+        /** 7-byte per-file nonce prefix. */
+        public final byte[] noncePrefix;
+        /** Total plaintext length in bytes. */
+        public final long   plaintextLength;
+        /** Number of chunks the object is made of (always ≥ 1). */
+        public final int    chunkCount;
+
+        ChunkedHeader(byte[] noncePrefix, long plaintextLength, int chunkCount) {
+            this.noncePrefix     = noncePrefix;
+            this.plaintextLength = plaintextLength;
+            this.chunkCount      = chunkCount;
+        }
+
+        /** Byte offset of chunk {@code index} within the encrypted object. */
+        public long chunkOffset(int index) {
+            return CHUNKED_HEADER_BYTES + (long) index * CHUNK_CIPHERTEXT_SIZE;
+        }
+
+        /** On-wire (ciphertext + tag) length of chunk {@code index}. */
+        public int chunkOnWireLength(int index) {
+            if (index < chunkCount - 1) return CHUNK_CIPHERTEXT_SIZE;
+            long tail = plaintextLength - (long) index * CHUNK_PLAINTEXT_SIZE;
+            return (int) tail + CHUNK_TAG_BYTES;
+        }
+    }
+
+    /** Per-chunk 12-byte GCM IV: 7-byte file nonce prefix + 4-byte big-endian counter. */
+    private static byte[] chunkIv(byte[] noncePrefix, int index, boolean last) {
+        int counter = last ? (index | LAST_CHUNK_FLAG) : index;
+        return ByteBuffer.allocate(GCM_IV_LEN)
+                .put(noncePrefix, 0, NONCE_PREFIX_BYTES)
+                .putInt(counter)     // ByteBuffer is big-endian by default
+                .array();
+    }
+
+    /**
+     * Additional authenticated data for one chunk: the object key, the chunk counter, and the
+     * final-chunk flag.
+     *
+     * <p>Defense-in-depth rather than load-bearing, and worth being explicit about: every file
+     * already gets its own fresh random AES-256 key, so a chunk from one object can never
+     * verify under another object's key — cross-file splicing is already prevented by key
+     * separation alone. Binding the key name here simply means a future change that ever
+     * reuses a key across objects does not silently become a splicing bug.
+     */
+    private static byte[] chunkAad(String objectKey, int index, boolean last) {
+        byte[] keyBytes = objectKey.getBytes(StandardCharsets.UTF_8);
+        return ByteBuffer.allocate(keyBytes.length + 5)
+                .put(keyBytes)
+                .putInt(index)
+                .put((byte) (last ? 1 : 0))
+                .array();
+    }
+
+    /** Reads up to {@code max} bytes, looping until the buffer is full or the stream ends. */
+    private static int readUpTo(InputStream in, byte[] buf, int max) throws IOException {
+        int total = 0;
+        while (total < max) {
+            int n = in.read(buf, total, max - total);
+            if (n == -1) break;
+            total += n;
+        }
+        return total;
+    }
+
+    private static SecretKey decodeMediaKey(String keyBase64) throws IOException {
+        if (keyBase64 == null || keyBase64.isEmpty())
+            throw new IOException("Chunked media requires a mediaKey");
+        return new SecretKeySpec(Base64.decode(keyBase64, Base64.NO_WRAP), "AES");
+    }
+
+    /**
+     * AES-256-GCM encrypts the content at {@code uri} into {@code dest} using the chunked v2
+     * format, so the receiver can play and seek the object while it is still downloading.
+     *
+     * <p>{@code objectKey} is the B2 key the encrypted file will be uploaded to — the caller
+     * already generates it before encrypting (see {@code ChatMediaActivity}) — and is bound
+     * into every chunk's AAD.
+     *
+     * <p>The plaintext length is only known once the source stream ends, so the header is
+     * written with a zero length placeholder and patched in place afterwards via
+     * {@link RandomAccessFile}. Memory stays flat at two 1 MiB buffers regardless of file size.
+     *
+     * <p>Call from a background thread. Deleting {@code dest} after upload is the caller's
+     * responsibility.
+     *
+     * @return Base64-encoded AES-256 key to store in Firestore as "mediaKey".
+     */
+    public static String encryptUriToChunkedFile(android.content.ContentResolver cr,
+                                                 android.net.Uri uri,
+                                                 String objectKey,
+                                                 File dest) throws Exception {
+        if (objectKey == null || objectKey.isEmpty())
+            throw new IOException("Chunked encryption requires the destination object key");
+
+        KeyGenerator kg = KeyGenerator.getInstance("AES");
+        kg.init(256, new SecureRandom());
+        SecretKey key = kg.generateKey();
+        byte[] noncePrefix = new byte[NONCE_PREFIX_BYTES];
+        new SecureRandom().nextBytes(noncePrefix);
+
+        long total = 0;
+        try (InputStream in = cr.openInputStream(uri);
+             RandomAccessFile out = new RandomAccessFile(dest, "rw")) {
+            if (in == null) throw new IOException("Cannot open URI for streaming: " + uri);
+            out.setLength(0);
+            out.write(CHUNKED_FORMAT_VERSION);
+            out.write(noncePrefix);
+            out.write(new byte[8]); // plaintext length placeholder, patched below
+
+            byte[] cur  = new byte[CHUNK_PLAINTEXT_SIZE];
+            byte[] next = new byte[CHUNK_PLAINTEXT_SIZE];
+            int curLen  = readUpTo(in, cur, CHUNK_PLAINTEXT_SIZE);
+            int index   = 0;
+
+            if (curLen == 0) {
+                // Empty source: still emit exactly one (empty, final) chunk so the reader
+                // never has to special-case a zero-chunk object.
+                out.write(sealChunk(key, noncePrefix, objectKey, cur, 0, 0, true));
+            } else {
+                while (true) {
+                    int nextLen  = readUpTo(in, next, CHUNK_PLAINTEXT_SIZE);
+                    boolean last = (nextLen == 0);
+                    if (index >= MAX_CHUNKS)
+                        throw new IOException("Chunk count exceeds " + MAX_CHUNKS);
+                    out.write(sealChunk(key, noncePrefix, objectKey, cur, curLen, index, last));
+                    total += curLen;
+                    index++;
+                    if (last) break;
+                    byte[] swap = cur; cur = next; next = swap;
+                    curLen = nextLen;
+                }
+            }
+
+            out.seek(8);
+            out.write(ByteBuffer.allocate(8).putLong(total).array());
+        }
+        Log.d(TAG, "Chunked-encrypted " + objectKey + " (" + total + " B plaintext, "
+                + dest.length() + " B on wire)");
+        return Base64.encodeToString(key.getEncoded(), Base64.NO_WRAP);
+    }
+
+    private static byte[] sealChunk(SecretKey key, byte[] noncePrefix, String objectKey,
+                                    byte[] plain, int plainLen, int index, boolean last)
+            throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key,
+                new GCMParameterSpec(GCM_TAG_LEN, chunkIv(noncePrefix, index, last)));
+        cipher.updateAAD(chunkAad(objectKey, index, last));
+        return cipher.doFinal(plain, 0, plainLen);
+    }
+
+    /**
+     * Decrypts one chunk and returns its plaintext.
+     *
+     * <p>The critical invariant of the whole streaming design lives here: the plaintext is
+     * produced by a single {@code doFinal}, so it is returned only after the GCM tag has
+     * verified. Nothing anywhere hands a player bytes from a chunk whose tag has not been
+     * checked — a tampered or corrupted object breaks playback, which is the correct failure,
+     * and never yields unauthenticated output.
+     */
+    private static byte[] openChunk(SecretKey key, byte[] noncePrefix, String objectKey,
+                                    byte[] onWire, int onWireLen, int index, boolean last)
+            throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, key,
+                new GCMParameterSpec(GCM_TAG_LEN, chunkIv(noncePrefix, index, last)));
+        cipher.updateAAD(chunkAad(objectKey, index, last));
+        return cipher.doFinal(onWire, 0, onWireLen);
+    }
+
+    /** Parses and validates the fixed 16-byte chunked header. */
+    public static ChunkedHeader parseChunkedHeader(byte[] header) throws IOException {
+        if (header == null || header.length < CHUNKED_HEADER_BYTES)
+            throw new IOException("Chunked header too short: "
+                    + (header == null ? 0 : header.length));
+        if (header[0] != CHUNKED_FORMAT_VERSION)
+            throw new IOException("Unsupported media format version: " + header[0]);
+        byte[] noncePrefix = Arrays.copyOfRange(header, 1, 1 + NONCE_PREFIX_BYTES);
+        long len = ByteBuffer.wrap(header, 1 + NONCE_PREFIX_BYTES, 8).getLong();
+        if (len < 0) throw new IOException("Negative plaintext length in header");
+        int chunkCount = len == 0
+                ? 1
+                : (int) ((len + CHUNK_PLAINTEXT_SIZE - 1) / CHUNK_PLAINTEXT_SIZE);
+        if (chunkCount > MAX_CHUNKS)
+            throw new IOException("Header claims " + chunkCount + " chunks (max " + MAX_CHUNKS + ")");
+        return new ChunkedHeader(noncePrefix, len, chunkCount);
+    }
+
+    /**
+     * Fetches a byte range of an encrypted object through the Cloudflare Worker.
+     *
+     * <p>Worker-only by design. The SigV4 and presigned-URL fallbacks keep using the existing
+     * full-download-then-decrypt flow — a known gap, called out rather than papered over: the
+     * Worker is the production path, and teaching the other two to range-read would mean
+     * signing range headers and re-deriving presign scopes for no user-visible benefit today.
+     *
+     * @param endInclusive last byte offset to fetch, inclusive (HTTP {@code Range} semantics).
+     */
+    private static byte[] fetchRangeViaWorker(String b2Path, long start, long endInclusive)
+            throws Exception {
+        if (getWorkerUrl().isEmpty())
+            throw new NonRetryableException(501,
+                    "Chunked streaming requires the storage Worker (WORKER_URL is not set)");
+        String objectKey = toObjectKey(b2Path);
+        String url       = getWorkerUrl() + "/" + objectKey;
+        String range     = "bytes=" + start + "-" + endInclusive;
+        int    expected  = (int) (endInclusive - start + 1);
+
+        return withRetry("worker-range:" + objectKey + ":" + range, () -> {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .header("X-Client-ID",   getClientId())
+                    .header("Authorization", "Bearer " + capabilityTokenCached(objectKey, "read"))
+                    .header("Range",         range)
+                    .build();
+            try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+                int code = response.code();
+                if (code == 206) {
+                    ResponseBody body = response.body();
+                    if (body == null) throw new IOException("Empty range body for " + objectKey);
+                    byte[] bytes = body.bytes();
+                    if (bytes.length != expected)
+                        throw new IOException("Range " + range + " returned " + bytes.length
+                                + " B, expected " + expected);
+                    return bytes;
+                }
+                ResponseBody errBody = response.body();
+                if (code == 200) {
+                    // The server ignored Range and is about to stream the whole object. Do not
+                    // silently buffer it — for a 500 MB video that is precisely the OOM this
+                    // format exists to avoid. Fail loudly so the caller can fall back to the
+                    // whole-file path instead.
+                    throw new NonRetryableException(200,
+                            "Storage tier ignored the Range header for " + objectKey);
+                }
+                String err = errBody != null ? errBody.string() : "";
+                if (code == 404) throw new NonRetryableException(404, "File not found: " + objectKey);
+                if (code >= 400 && code < 500)
+                    throw new NonRetryableException(code,
+                            "Worker range GET failed [" + code + "]: " + err);
+                throw new IOException("Worker range GET failed [" + code + "]: " + err);
+            }
+        });
+    }
+
+    /** Fetches and parses the 16-byte header of a chunked object. */
+    public static ChunkedHeader fetchChunkedHeader(String b2Path) throws Exception {
+        return parseChunkedHeader(fetchRangeViaWorker(b2Path, 0, CHUNKED_HEADER_BYTES - 1));
+    }
+
+    /**
+     * Fetches chunk {@code index} of a chunked object and returns its verified plaintext.
+     * Call from a background thread — this performs network I/O.
+     */
+    public static byte[] fetchAndDecryptChunk(String b2Path, String keyBase64,
+                                              ChunkedHeader header, int index) throws Exception {
+        if (index < 0 || index >= header.chunkCount)
+            throw new IOException("Chunk index " + index + " out of range (0.."
+                    + (header.chunkCount - 1) + ")");
+        long start   = header.chunkOffset(index);
+        int  onWire  = header.chunkOnWireLength(index);
+        byte[] bytes = fetchRangeViaWorker(b2Path, start, start + onWire - 1);
+        return openChunk(decodeMediaKey(keyBase64), header.noncePrefix, toObjectKey(b2Path),
+                bytes, bytes.length, index, index == header.chunkCount - 1);
+    }
+
+    /**
+     * Decrypts a complete chunked file on disk into {@code dest}, one chunk at a time.
+     *
+     * <p>The streaming player never needs this, but "save to gallery" and the disk cache do:
+     * they want the whole plaintext as a file, and a chunked object cannot be fed to
+     * {@link #decryptFileToFile} (which assumes the single-tag legacy layout). Peak memory is
+     * one chunk.
+     */
+    public static void decryptChunkedFileToFile(File encFile, String keyBase64,
+                                                String objectKey, File dest) throws Exception {
+        SecretKey key = decodeMediaKey(keyBase64);
+        try (RandomAccessFile in = new RandomAccessFile(encFile, "r");
+             FileOutputStream out = new FileOutputStream(dest)) {
+            byte[] hdr = new byte[CHUNKED_HEADER_BYTES];
+            in.readFully(hdr);
+            ChunkedHeader header = parseChunkedHeader(hdr);
+            byte[] buf = new byte[CHUNK_CIPHERTEXT_SIZE];
+            for (int i = 0; i < header.chunkCount; i++) {
+                int onWire = header.chunkOnWireLength(i);
+                if (onWire > buf.length)
+                    throw new IOException("Chunk " + i + " claims " + onWire + " B on wire");
+                in.seek(header.chunkOffset(i));
+                in.readFully(buf, 0, onWire);
+                byte[] plain = openChunk(key, header.noncePrefix, objectKey, buf, onWire,
+                        i, i == header.chunkCount - 1);
+                out.write(plain);
+            }
+        }
+    }
+
+    /**
+     * Downloads a chunked object in full and decrypts it to {@code dest}, cleaning up the
+     * intermediate encrypted temp file even on failure. The chunked counterpart to
+     * {@link #downloadAndDecryptToFile}.
+     */
+    public static void downloadAndDecryptChunkedToFile(String b2Path, String keyBase64, File dest)
+            throws Exception {
+        File tmp = File.createTempFile("b2dlc_", ".enc", dest.getParentFile());
+        try {
+            downloadFileToDisk(b2Path, tmp);
+            decryptChunkedFileToFile(tmp, keyBase64, toObjectKey(b2Path), dest);
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
     }
 }
