@@ -5,9 +5,11 @@ import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 import com.duoshield.app.BuildConfig;
+import com.duoshield.app.util.DevicePerformanceTier;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.ListenerRegistration;
@@ -202,46 +204,95 @@ public class CallManager {
         }
     };
 
-    // ── 32-bit thermal watchdog ───────────────────────────────────────────────
+    // ── Tiered capture / bitrate policy ──────────────────────────────────────
     /**
-     * Hard bitrate ceiling for 32-bit devices (armeabi-v7a, e.g. POCO C51 / Helio G36).
+     * Hard bitrate ceiling for {@link DevicePerformanceTier#LOW} devices.
      *
-     * <p>The Helio G36's four Cortex-A53 cores cannot sustain 1 280×720 @ 30 fps
-     * encoding without thermal throttle.  640×480 @ 24 fps + 400 kbps cap is the
-     * largest operating point that stays below the thermal threshold on a 5-minute
-     * call in a warm room.
+     * <p>Applies to any device built entirely from in-order ARM cores — the POCO C51 /
+     * Helio G36 (4× Cortex-A53) this was originally written for, but equally the
+     * MediaTek Helio P35 / MT6765 (8× Cortex-A53 @ 2.2/1.6 GHz) and the rest of the
+     * budget arm64 field.  Extra A53 cores do not help a real-time encoder: the
+     * bottleneck is single-core throughput, and these are in-order designs.
      *
-     * <p>64-bit devices use BWE (Bandwidth Estimation) instead of a static cap — see
-     * {@link #applyBitrateConstraints()} for the full rationale.
+     * <p>640×480 @ 20 fps + 600 kbps is the largest operating point that stays below
+     * the thermal threshold on a multi-minute call in a warm room.
      */
-    private static final int VIDEO_BITRATE_32BIT_MAX_BPS =  400_000;
-    private static final int VIDEO_BITRATE_32BIT_MIN_BPS =  150_000;
-    private static final int AUDIO_BITRATE_32BIT_MAX_BPS =   20_000;
-    private static final int AUDIO_BITRATE_32BIT_MIN_BPS =   16_000;
+    private static final int VIDEO_BITRATE_LOW_MAX_BPS   =  600_000;
+    private static final int VIDEO_BITRATE_LOW_MIN_BPS   =  150_000;
+    private static final int AUDIO_BITRATE_LOW_MAX_BPS   =   20_000;
+    private static final int AUDIO_BITRATE_LOW_MIN_BPS   =   16_000;
 
     /**
-     * BWE floor for 64-bit devices — the minimum bitrate libwebrtc's congestion
-     * controller is allowed to settle at.  Without a floor, BWE may drop all the way
-     * to ~30 kbps on a saturated network, causing severe pixelation.  With a floor it
-     * degrades gracefully to the lowest still-watchable quality and only drops further
-     * if the network genuinely cannot sustain even that.
+     * Ceiling for {@link DevicePerformanceTier#MID} devices — hardware we could not
+     * positively identify as a flagship.  Capped rather than unbounded, because an
+     * unknown device is far more likely to be budget silicon than a flagship.
+     */
+    private static final int VIDEO_BITRATE_MID_MAX_BPS   = 1_200_000;
+    private static final int VIDEO_BITRATE_MID_MIN_BPS   =   250_000;
+    private static final int AUDIO_BITRATE_MID_MAX_BPS   =    24_000;
+    private static final int AUDIO_BITRATE_MID_MIN_BPS   =    20_000;
+
+    /**
+     * BWE floor for {@link DevicePerformanceTier#HIGH} devices — the minimum bitrate
+     * libwebrtc's congestion controller is allowed to settle at.  Without a floor, BWE
+     * may drop all the way to ~30 kbps on a saturated network, causing severe
+     * pixelation.  With a floor it degrades gracefully to the lowest still-watchable
+     * quality and only drops further if the network genuinely cannot sustain even that.
      *
-     * <p>No {@code maxBitrateBps} is set for 64-bit; instead, libwebrtc's Transport-CC
+     * <p>No {@code maxBitrateBps} is set for HIGH; instead, libwebrtc's Transport-CC
      * congestion controller picks the ceiling dynamically.  On a good WiFi connection
      * it will climb to 2–4 Mbps naturally; on LTE it typically stabilises at 500–
      * 1 500 kbps — all without hard-coding a number that is almost certainly wrong
      * for some fraction of network conditions.
      */
-    private static final int VIDEO_BITRATE_64BIT_MIN_BPS =  300_000;
-    private static final int AUDIO_BITRATE_64BIT_MIN_BPS =   24_000;
+    private static final int VIDEO_BITRATE_HIGH_MIN_BPS  =  300_000;
+    private static final int AUDIO_BITRATE_HIGH_MIN_BPS  =   24_000;
 
     /**
-     * Thermal step: if the outbound-rtp encoder is delivering fewer than this many
-     * frames per second on a 32-bit device, we downgrade the camera to 320×240 @ 15 fps
-     * to shed CPU/thermal load and prevent ANR.  Only triggered once per call.
+     * Quality ladder used by the thermal watchdog.  Each step is
+     * {@code {width, height, fps, videoBps}}, ordered best → worst.  A call starts at
+     * the step matching its {@link DevicePerformanceTier} and walks down under thermal
+     * or encoder-FPS pressure, then back up once the device recovers.
+     */
+    private static final int[][] QUALITY_LADDER = {
+            {1280, 720, 30, 0 /* 0 == unbounded, let BWE decide */},
+            { 960, 540, 24, VIDEO_BITRATE_MID_MAX_BPS},
+            { 640, 480, 20, VIDEO_BITRATE_LOW_MAX_BPS},
+            { 480, 360, 18, 350_000},
+            { 320, 240, 15, 150_000},
+    };
+
+    private static final int LADDER_HIGH_START = 0;
+    private static final int LADDER_MID_START  = 1;
+    private static final int LADDER_LOW_START  = 2;
+
+    /**
+     * Thermal step: if the outbound-rtp encoder delivers fewer than this many frames
+     * per second, step one rung down the {@link #QUALITY_LADDER}.
      */
     private static final float THERMAL_FPS_THRESHOLD  = 12.0f;
-    private boolean thermalDowngradeApplied = false;
+
+    /**
+     * Encoder FPS above which the call is considered healthy enough to consider
+     * stepping back up.  The gap between this and {@link #THERMAL_FPS_THRESHOLD} is
+     * the hysteresis band that stops the ladder oscillating.
+     */
+    private static final float RECOVERY_FPS_THRESHOLD = 18.0f;
+
+    /** Consecutive healthy polls required before stepping back up a rung. */
+    private static final int RECOVERY_POLLS_REQUIRED = 3;
+
+    /**
+     * Current index into {@link #QUALITY_LADDER}. Written on the main thread, read from the
+     * WebRTC stats callback thread, hence volatile.
+     */
+    private volatile int qualityStep = LADDER_HIGH_START;
+    /** Best rung this call is allowed to use, set from the device tier at connect. */
+    private volatile int qualityCeiling = LADDER_HIGH_START;
+    /** Consecutive healthy polls observed since the last downgrade. */
+    private int healthyPolls = 0;
+    /** Thermal listener registered for proactive downgrades (API 29+). */
+    private PowerManager.OnThermalStatusChangedListener thermalListener;
     /** framesEncoded counter from the last outbound-rtp stats snapshot (for FPS delta). */
     private long lastFramesEncoded = -1L;
     /** Timestamp (ms) of the last outbound-rtp stats snapshot. */
@@ -249,6 +300,10 @@ public class CallManager {
 
     public CallManager(Context context) {
         this.context = context.getApplicationContext();
+        // Resolve the device tier up front so the very first startCapture() already uses a
+        // resolution this hardware can sustain, rather than opening at 720p and clawing back.
+        this.qualityCeiling = ladderStartForTier(DevicePerformanceTier.get(this.context));
+        this.qualityStep = this.qualityCeiling;
         this.repo = new CallSignalRepository();
     }
 
@@ -543,19 +598,34 @@ public class CallManager {
     }
 
     // ─── Adaptive video capture resolution ───────────────────────────────────
-    // POCO C51 (and any other 32-bit-only device) uses a Helio G36 (quad Cortex-A53
-    // @ 2.2 GHz). Encoding 1280×720 @ 30 fps saturates the CPU within seconds,
-    // triggering thermal throttle, dropped frames, and ANR-level audio glitches.
-    // On 32-bit devices (SUPPORTED_64_BIT_ABIS is empty) we cap to 640×480 @ 24 fps
-    // which the G36 handles comfortably and still looks fine on a 6.5" screen.
+    // Budget SoCs built from in-order Cortex-A53/A55 cores — the POCO C51's Helio G36
+    // (4× A53) and the Helio P35 / MT6765 (8× A53 @ 2.2/1.6 GHz) alike — saturate the
+    // CPU within seconds encoding 1280×720 @ 30 fps, triggering thermal throttle,
+    // dropped frames and ANR-level audio glitches.
+    //
+    // This used to be gated on SUPPORTED_64_BIT_ABIS being empty, which quietly gave
+    // every arm64 budget phone the flagship path. Resolution now comes from
+    // DevicePerformanceTier (CPU microarchitecture first, then RAM), and the live
+    // thermal watchdog moves qualityStep along QUALITY_LADDER from there.
 
-    private static boolean is32BitOnly() {
-        return Build.SUPPORTED_64_BIT_ABIS == null || Build.SUPPORTED_64_BIT_ABIS.length == 0;
+    /** Best ladder rung a device of the given tier may start at. */
+    private static int ladderStartForTier(DevicePerformanceTier tier) {
+        switch (tier) {
+            case LOW:
+                return LADDER_LOW_START;
+            case MID:
+                return LADDER_MID_START;
+            case HIGH:
+            default:
+                return LADDER_HIGH_START;
+        }
     }
 
-    private static int captureWidth()  { return is32BitOnly() ? 640  : 1280; }
-    private static int captureHeight() { return is32BitOnly() ? 480  : 720;  }
-    private static int captureFps()    { return is32BitOnly() ? 24   : 30;   }
+    private int captureWidth()    { return QUALITY_LADDER[qualityStep][0]; }
+    private int captureHeight()   { return QUALITY_LADDER[qualityStep][1]; }
+    private int captureFps()      { return QUALITY_LADDER[qualityStep][2]; }
+    /** Video ceiling for the current rung; {@code 0} means "unbounded, let BWE decide". */
+    private int captureVideoBps() { return QUALITY_LADDER[qualityStep][3]; }
 
     private CameraVideoCapturer createCameraCapturer() {
         CameraEnumerator enumerator = Camera2Enumerator.isSupported(context)
@@ -978,21 +1048,23 @@ public class CallManager {
     /**
      * Configures per-sender bitrate policy immediately after ICE connects.
      *
-     * <h3>Strategy by device class</h3>
+     * <h3>Strategy by device tier</h3>
      *
-     * <b>32-bit (armeabi-v7a) devices</b> — hard ceiling + floor:
+     * <b>{@link DevicePerformanceTier#LOW} / {@link DevicePerformanceTier#MID}</b> — hard
+     * ceiling + floor:
      * <ul>
-     *   <li>Video: {@link #VIDEO_BITRATE_32BIT_MAX_BPS} / {@link #VIDEO_BITRATE_32BIT_MIN_BPS}</li>
-     *   <li>Audio: {@link #AUDIO_BITRATE_32BIT_MAX_BPS} / {@link #AUDIO_BITRATE_32BIT_MIN_BPS}</li>
-     *   <li>Rationale: the Helio G36 (and similar low-end SoCs) cannot encode 640×480 @ 24 fps
-     *       at more than ~400 kbps without thermal throttle.  Locking the ceiling prevents the
-     *       encoder from overshooting on a fast WiFi link and then getting throttled.</li>
+     *   <li>LOW video: {@link #VIDEO_BITRATE_LOW_MAX_BPS} / {@link #VIDEO_BITRATE_LOW_MIN_BPS}</li>
+     *   <li>MID video: {@link #VIDEO_BITRATE_MID_MAX_BPS} / {@link #VIDEO_BITRATE_MID_MIN_BPS}</li>
+     *   <li>Rationale: in-order A53/A55 SoCs cannot encode their tier's capture format above
+     *       these rates without thermal throttle.  Locking the ceiling stops the encoder
+     *       overshooting on a fast WiFi link and then getting throttled — which costs far more
+     *       quality than simply never overshooting in the first place.</li>
      * </ul>
      *
-     * <b>64-bit (arm64-v8a) devices</b> — BWE-managed ceiling, floor only:
+     * <b>{@link DevicePerformanceTier#HIGH}</b> — BWE-managed ceiling, floor only:
      * <ul>
-     *   <li>Video floor: {@link #VIDEO_BITRATE_64BIT_MIN_BPS}; ceiling: {@code null} (BWE)</li>
-     *   <li>Audio floor: {@link #AUDIO_BITRATE_64BIT_MIN_BPS}; ceiling: {@code null} (BWE)</li>
+     *   <li>Video floor: {@link #VIDEO_BITRATE_HIGH_MIN_BPS}; ceiling: {@code null} (BWE)</li>
+     *   <li>Audio floor: {@link #AUDIO_BITRATE_HIGH_MIN_BPS}; ceiling: {@code null} (BWE)</li>
      *   <li>Rationale: libwebrtc's Transport-CC congestion controller picks a ceiling that
      *       matches the real available bandwidth — it climbs on good WiFi (1–4 Mbps) and backs
      *       off on congested LTE without ever hardcoding a number that is wrong for some
@@ -1000,12 +1072,29 @@ public class CallManager {
      *       point where the call is unusable rather than just lower quality.</li>
      * </ul>
      *
-     * <p>Called once from {@link #startStatsPolling()} (i.e. on every CONNECTED transition)
-     * so it also fires on call resume after a temporary ICE disconnect.
+     * <p>Video senders on LOW/MID also get
+     * {@link RtpParameters.DegradationPreference#MAINTAIN_FRAMERATE} so libwebrtc sheds
+     * <em>resolution</em> rather than frame rate under load: a smooth 20 fps at a lower
+     * resolution reads far better on a small screen than a stuttering 8 fps sharp image.
+     *
+     * <p>Called from {@link #startStatsPolling()} (i.e. on every CONNECTED transition) so it
+     * also fires on call resume after a temporary ICE disconnect.
      */
     private void applyBitrateConstraints() {
         if (peerConnection == null) return;
-        boolean is32Bit = is32BitOnly();
+
+        int videoCap = captureVideoBps();          // 0 == unbounded (HIGH tier / top rung)
+        boolean cappedVideo = videoCap > 0;
+        boolean lowTier = qualityCeiling >= LADDER_LOW_START;
+
+        int videoFloor = lowTier ? VIDEO_BITRATE_LOW_MIN_BPS
+                : (qualityCeiling >= LADDER_MID_START ? VIDEO_BITRATE_MID_MIN_BPS
+                                                      : VIDEO_BITRATE_HIGH_MIN_BPS);
+        int audioCap = lowTier ? AUDIO_BITRATE_LOW_MAX_BPS
+                : (qualityCeiling >= LADDER_MID_START ? AUDIO_BITRATE_MID_MAX_BPS : 0);
+        int audioFloor = lowTier ? AUDIO_BITRATE_LOW_MIN_BPS
+                : (qualityCeiling >= LADDER_MID_START ? AUDIO_BITRATE_MID_MIN_BPS
+                                                      : AUDIO_BITRATE_HIGH_MIN_BPS);
 
         for (RtpSender sender : peerConnection.getSenders()) {
             if (sender.track() == null) continue;
@@ -1014,29 +1103,30 @@ public class CallManager {
 
             boolean isVideoTrack = sender.track() instanceof VideoTrack;
 
+            if (isVideoTrack && cappedVideo) {
+                // Shed resolution, not frame rate, when the encoder cannot keep up.
+                params.degradationPreference =
+                        RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE;
+            }
+
             for (RtpParameters.Encoding enc : params.encodings) {
-                if (is32Bit) {
-                    // Hard ceiling — prevents thermal throttle on weak SoCs.
-                    enc.maxBitrateBps = isVideoTrack
-                            ? VIDEO_BITRATE_32BIT_MAX_BPS : AUDIO_BITRATE_32BIT_MAX_BPS;
-                    enc.minBitrateBps = isVideoTrack
-                            ? VIDEO_BITRATE_32BIT_MIN_BPS : AUDIO_BITRATE_32BIT_MIN_BPS;
+                if (isVideoTrack) {
+                    // null ceiling tells libwebrtc to use Transport-CC output instead.
+                    enc.maxBitrateBps = cappedVideo ? videoCap : null;
+                    enc.minBitrateBps = Math.min(videoFloor, cappedVideo ? videoCap : videoFloor);
                 } else {
-                    // BWE-managed ceiling: null tells libwebrtc to use Transport-CC output.
-                    enc.maxBitrateBps = null;
-                    enc.minBitrateBps = isVideoTrack
-                            ? VIDEO_BITRATE_64BIT_MIN_BPS : AUDIO_BITRATE_64BIT_MIN_BPS;
+                    enc.maxBitrateBps = audioCap > 0 ? audioCap : null;
+                    enc.minBitrateBps = audioFloor;
                 }
             }
             sender.setParameters(params);
             Log.d(TAG, String.format(Locale.US,
-                    "Bitrate policy: %s — %s, floor=%d kbps (32-bit=%b)",
+                    "Bitrate policy: %s — %s, floor=%d kbps (tier=%s, rung=%d %dx%d@%d)",
                     isVideoTrack ? "video" : "audio",
-                    is32Bit ? "hard cap" : "BWE-managed",
-                    (isVideoTrack
-                            ? (is32Bit ? VIDEO_BITRATE_32BIT_MIN_BPS : VIDEO_BITRATE_64BIT_MIN_BPS)
-                            : (is32Bit ? AUDIO_BITRATE_32BIT_MIN_BPS : AUDIO_BITRATE_64BIT_MIN_BPS)) / 1000,
-                    is32Bit));
+                    (isVideoTrack ? cappedVideo : audioCap > 0) ? "hard cap" : "BWE-managed",
+                    (isVideoTrack ? videoFloor : audioFloor) / 1000,
+                    DevicePerformanceTier.getCachedOrDefault(),
+                    qualityStep, captureWidth(), captureHeight(), captureFps()));
         }
     }
 
@@ -1046,11 +1136,17 @@ public class CallManager {
         lastTransportBytesReceived = -1L;
         lastFramesEncoded          = -1L;
         lastFramesTs               = -1L;
-        thermalDowngradeApplied    = false;
+        healthyPolls               = 0;
         isRelayCall                = false; // determined on first stats poll
+        // Re-derive the ceiling on every CONNECTED transition: if the device is already warm
+        // from a previous call, effectiveTier() demotes it a rung before we even start.
+        qualityCeiling = ladderStartForTier(DevicePerformanceTier.effectiveTier(context));
+        qualityStep = Math.max(qualityStep, qualityCeiling);
+        registerThermalListener();
         applyBitrateConstraints(); // cap bitrate immediately on connect
         statsHandler.postDelayed(statsPollRunnable, STATS_POLL_INTERVAL_MS);
-        Log.d(TAG, "TURN stats polling started (32-bit=" + is32BitOnly() + ")");
+        Log.d(TAG, "TURN stats polling started (tier="
+                + DevicePerformanceTier.getCachedOrDefault() + ", rung=" + qualityStep + ")");
     }
 
     private void stopStatsPolling() {
@@ -1073,8 +1169,10 @@ public class CallManager {
         lastTransportBytesReceived = -1L;
         lastFramesEncoded          = -1L;
         lastFramesTs               = -1L;
-        thermalDowngradeApplied    = false;
+        healthyPolls               = 0;
+        qualityStep                = qualityCeiling;
         isRelayCall                = false;
+        unregisterThermalListener();
     }
 
     /**
@@ -1176,26 +1274,18 @@ public class CallManager {
                             isRelayCall ? "relay" : "direct"));
                 }
 
-                // ── Thermal watchdog: outbound-rtp encoder FPS (32-bit only) ──
-                if (is32BitOnly() && !thermalDowngradeApplied
+                // ── Thermal watchdog: outbound-rtp encoder FPS ──────────────
+                if (thermalWatchdogEnabled()
                         && "video".equals(outboundKind) && framesEncoded >= 0) {
                     long nowMs = System.currentTimeMillis();
                     if (lastFramesEncoded >= 0 && lastFramesTs > 0) {
                         double elapsedSec = (nowMs - lastFramesTs) / 1000.0;
-                        double actualFps  = (framesEncoded - lastFramesEncoded) / elapsedSec;
-                        Log.d(TAG, String.format(Locale.US,
-                                "Thermal watchdog: encoder %.1f fps (threshold %.0f fps)",
-                                actualFps, THERMAL_FPS_THRESHOLD));
-                        if (actualFps < THERMAL_FPS_THRESHOLD && videoCapturer != null) {
-                            thermalDowngradeApplied = true;
-                            Log.w(TAG, "Thermal downgrade triggered on 32-bit device: "
-                                    + "320×240 @ 15 fps to relieve encoder CPU.");
-                            try {
-                                videoCapturer.changeCaptureFormat(320, 240, 15);
-                            } catch (Exception ex) {
-                                Log.w(TAG, "changeCaptureFormat failed: " + ex.getMessage());
-                            }
-                            applyBitrateConstraintsForResolution(150_000 /* 150 kbps */);
+                        if (elapsedSec > 0) {
+                            double actualFps =
+                                    (framesEncoded - lastFramesEncoded) / elapsedSec;
+                            // Hop to the main thread: the capturer and RtpSenders must not be
+                            // mutated from the WebRTC stats callback thread.
+                            statsHandler.post(() -> evaluateQualityStep(actualFps));
                         }
                     }
                     lastFramesEncoded = framesEncoded;
@@ -1205,30 +1295,129 @@ public class CallManager {
         });
     }
 
+    // ── Thermal quality ladder ────────────────────────────────────────────────
+
     /**
-     * Applies an emergency video bitrate ceiling after a thermal-downgrade resolution change.
-     *
-     * <p>This is the one case where we force a hard ceiling even on 64-bit devices: the
-     * thermal watchdog has already lowered the capture to 320×240 @ 15 fps because the
-     * encoder was visibly falling behind.  Giving BWE a ceiling consistent with that
-     * resolution (150 kbps) prevents the encoder from immediately clawing back towards its
-     * uncapped target and re-triggering the thermal event.
-     *
-     * @param videoBps hard ceiling in bps (typically 150 000 after downgrade to 320×240 @ 15 fps)
+     * The watchdog runs for {@link DevicePerformanceTier#LOW} and
+     * {@link DevicePerformanceTier#MID} devices. It used to be gated on
+     * {@code is32BitOnly()}, which meant every arm64 budget phone — the Helio P35 included —
+     * encoded 720p30 with no thermal protection whatsoever.
      */
-    private void applyBitrateConstraintsForResolution(int videoBps) {
-        if (peerConnection == null) return;
-        for (RtpSender sender : peerConnection.getSenders()) {
-            if (sender.track() == null || !(sender.track() instanceof VideoTrack)) continue;
-            RtpParameters params = sender.getParameters();
-            if (params == null || params.encodings == null) continue;
-            for (RtpParameters.Encoding enc : params.encodings) {
-                enc.maxBitrateBps = videoBps;
-                enc.minBitrateBps = Math.min(enc.minBitrateBps != null
-                        ? enc.minBitrateBps : videoBps, videoBps);
+    private boolean thermalWatchdogEnabled() {
+        return qualityCeiling >= LADDER_MID_START;
+    }
+
+    /**
+     * Moves {@link #qualityStep} along {@link #QUALITY_LADDER} based on observed encoder FPS.
+     *
+     * <p>Replaces the previous one-way {@code thermalDowngradeApplied} latch, which pinned a
+     * call to 320×240 for its entire remaining duration after a single transient dip — so a
+     * momentary hiccup 20 seconds into a 30-minute call cost the user every one of the
+     * remaining 29 minutes.
+     *
+     * <p>Steps down immediately when the encoder falls below
+     * {@link #THERMAL_FPS_THRESHOLD} or the device reports thermal throttling, and steps back
+     * up only after {@link #RECOVERY_POLLS_REQUIRED} consecutive polls above
+     * {@link #RECOVERY_FPS_THRESHOLD} while not throttling. The gap between the two
+     * thresholds is the hysteresis band that stops the ladder oscillating.
+     */
+    private void evaluateQualityStep(double actualFps) {
+        boolean throttling = DevicePerformanceTier.isThrottling(
+                DevicePerformanceTier.currentThermalStatus(context));
+
+        Log.d(TAG, String.format(Locale.US,
+                "Thermal watchdog: encoder %.1f fps (down<%.0f, up>%.0f), rung=%d, throttling=%b",
+                actualFps, THERMAL_FPS_THRESHOLD, RECOVERY_FPS_THRESHOLD,
+                qualityStep, throttling));
+
+        if (actualFps < THERMAL_FPS_THRESHOLD || throttling) {
+            healthyPolls = 0;
+            stepDownQuality(throttling ? "device thermal throttling"
+                    : String.format(Locale.US, "encoder at %.1f fps", actualFps));
+        } else if (actualFps > RECOVERY_FPS_THRESHOLD) {
+            healthyPolls++;
+            if (healthyPolls >= RECOVERY_POLLS_REQUIRED) {
+                healthyPolls = 0;
+                stepUpQuality();
             }
-            sender.setParameters(params);
-            Log.d(TAG, "Thermal downgrade: video hard cap → " + videoBps / 1000 + " kbps");
+        } else {
+            // In the hysteresis band: hold the current rung and reset the recovery streak.
+            healthyPolls = 0;
+        }
+    }
+
+    /** Drops one rung, unless already at the bottom of the ladder. */
+    private void stepDownQuality(String reason) {
+        if (qualityStep >= QUALITY_LADDER.length - 1) return;
+        qualityStep++;
+        Log.w(TAG, "Thermal downgrade → rung " + qualityStep + " ("
+                + captureWidth() + "×" + captureHeight() + " @ " + captureFps()
+                + " fps): " + reason);
+        applyCurrentQualityStep();
+    }
+
+    /** Climbs one rung, never above the tier's ceiling. */
+    private void stepUpQuality() {
+        if (qualityStep <= qualityCeiling) return;
+        qualityStep--;
+        Log.i(TAG, "Thermal recovery → rung " + qualityStep + " ("
+                + captureWidth() + "×" + captureHeight() + " @ " + captureFps() + " fps)");
+        applyCurrentQualityStep();
+    }
+
+    /** Pushes the current rung's format and bitrate ceiling to the capturer and senders. */
+    private void applyCurrentQualityStep() {
+        if (videoCapturer != null) {
+            try {
+                videoCapturer.changeCaptureFormat(
+                        captureWidth(), captureHeight(), captureFps());
+            } catch (Exception ex) {
+                Log.w(TAG, "changeCaptureFormat failed: " + ex.getMessage());
+            }
+        }
+        // Re-derive the bitrate policy so the ceiling stays consistent with the resolution;
+        // otherwise the encoder immediately claws back toward its old target and re-triggers
+        // the very thermal event we just stepped down to escape.
+        applyBitrateConstraints();
+    }
+
+    /**
+     * Registers a thermal-status listener so we can downgrade <em>proactively</em>, as soon as
+     * the platform reports throttling, instead of waiting for frames to already be dropping.
+     * No-op below API 29.
+     */
+    private void registerThermalListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || thermalListener != null) return;
+        if (!thermalWatchdogEnabled()) return;
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm == null) return;
+            thermalListener = status -> {
+                if (DevicePerformanceTier.isThrottling(status)) {
+                    statsHandler.post(() -> {
+                        healthyPolls = 0;
+                        stepDownQuality("thermal status " + status);
+                    });
+                }
+            };
+            pm.addThermalStatusListener(thermalListener);
+        } catch (Throwable t) {
+            Log.w(TAG, "Unable to register thermal listener", t);
+            thermalListener = null;
+        }
+    }
+
+    private void unregisterThermalListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || thermalListener == null) return;
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                pm.removeThermalStatusListener(thermalListener);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Unable to remove thermal listener", t);
+        } finally {
+            thermalListener = null;
         }
     }
 
