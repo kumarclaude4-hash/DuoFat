@@ -71,6 +71,14 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
     private LinearLayout panelEntry, panelExplain, panelAckRetry;
     private EditText etNewCode, etConfirmCode;
     private TextView tvError;
+    /**
+     * Held as a field rather than re-resolved via {@code findViewById} inside the
+     * async ack callbacks. Those callbacks run after a network round trip, by which
+     * point this Activity may already have been destroyed (rotation, background
+     * kill) — {@code findViewById} then returns null and dereferencing it threw an
+     * NPE that presented as "the secondary PIN rotation crashes the app."
+     */
+    private MaterialButton btnRetryAck;
 
     private String pendingCode; // held between the entry panel and the explanation panel
 
@@ -90,7 +98,7 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
 
         MaterialButton btnContinueEntry = findViewById(R.id.btnContinueEntry);
         MaterialButton btnConfirmExplain = findViewById(R.id.btnConfirmExplain);
-        MaterialButton btnRetryAck = findViewById(R.id.btnRetryAck);
+        btnRetryAck = findViewById(R.id.btnRetryAck);
 
         btnContinueEntry.setOnClickListener(v -> onContinueEntry());
         btnConfirmExplain.setOnClickListener(v -> onConfirmExplain());
@@ -107,8 +115,35 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         // deliberately keeps the old code armed so a restore of the same account
         // stays gated), so "armed" alone can't distinguish "screen 2 hasn't run
         // yet" from "screen 2 already replaced it and is only waiting on the ack."
-        if (PendingLockStore.isRotationDuressDone(this)) {
+        //
+        // Validated on entry rather than trusted outright. Two things must hold for
+        // the resume path to make sense, and neither did on an install whose data was
+        // never cleared:
+        //
+        //  * The rotation must still be due. session_rotation_* lives in the
+        //    wipe-surviving session-state file, so before the companion fix in
+        //    DuressManager.performLogout() these flags outlived the duress wipe and
+        //    even a restore. A leftover duress_done from a previous cycle sent this
+        //    screen straight into the ack-retry panel on a genuinely fresh arrival —
+        //    no code was ever collected, pendingCode stayed null, and the flow was a
+        //    dead end that then crashed in acknowledgeRotation().
+        //  * There must be a signed-in session. acknowledgeRotationViaServer()
+        //    throws outright without one, so retrying could only ever fail.
+        //
+        // A stale flag is self-healed back to the entry panel instead of being acted
+        // on: screen 2's job is to arm a fresh code, and doing that again is always
+        // safe.
+        boolean rotationDue     = PendingLockStore.isRotationDue(this);
+        boolean signedIn        = FirebaseAuth.getInstance().getCurrentUser() != null;
+        boolean duressDoneFlag  = PendingLockStore.isRotationDuressDone(this);
+
+        if (duressDoneFlag && rotationDue && signedIn) {
             showAckRetryPanel();
+        } else if (duressDoneFlag) {
+            android.util.Log.w("ForcedDuressRotation",
+                    "onCreate: stale rotation progress flag (rotationDue=" + rotationDue
+                            + " signedIn=" + signedIn + ") — restarting at code entry");
+            PendingLockStore.setRotationDuressDone(this, false);
         }
     }
 
@@ -116,8 +151,17 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         String code    = etNewCode.getText().toString().trim();
         String confirm = etConfirmCode.getText().toString().trim();
 
-        if (code.length() < 4 || code.length() > 6) {
-            Toast.makeText(this, "Code must be 4–6 digits.", Toast.LENGTH_SHORT).show();
+        // Bounds come from PinManager rather than being written out again here.
+        // DuressManager.setDuressPin() enforces MIN_PIN_LEN/MAX_PIN_LEN and returns
+        // false outside them; a hardcoded 4–6 here happens to agree today, but if
+        // either constant ever moves this screen would accept a code the save then
+        // silently rejects, surfacing as "Could not save. Try again." with no
+        // indication of what is actually wrong.
+        if (code.length() < PinManager.MIN_PIN_LEN || code.length() > PinManager.MAX_PIN_LEN) {
+            Toast.makeText(this,
+                    "Code must be " + PinManager.MIN_PIN_LEN + "–"
+                            + PinManager.MAX_PIN_LEN + " digits.",
+                    Toast.LENGTH_SHORT).show();
             return;
         }
         if (!code.equals(confirm)) {
@@ -194,6 +238,14 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         bgExecutor.execute(() -> {
             boolean saved = DuressManager.setDuressPin(this, codeToSave);
             runOnUiThread(() -> {
+                // setDuressPin() runs PBKDF2, so this callback can land well after
+                // the user backgrounded the screen. If the Activity is gone the
+                // panel fields are unsafe to touch; the durable flag below is what
+                // the resume path reads, so state stays correct either way.
+                if (isFinishing() || isDestroyed()) {
+                    if (saved) PendingLockStore.setRotationDuressDone(this, true);
+                    return;
+                }
                 if (!saved) {
                     Toast.makeText(this, "Could not save. Try again.", Toast.LENGTH_LONG).show();
                     panelExplain.setVisibility(View.GONE);
@@ -218,8 +270,8 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
     }
 
     private void acknowledgeRotation() {
-        tvError.setVisibility(View.GONE);
-        findViewById(R.id.btnRetryAck).setEnabled(false);
+        if (tvError != null) tvError.setVisibility(View.GONE);
+        if (btnRetryAck != null) btnRetryAck.setEnabled(false);
         bgExecutor.execute(() -> {
             Exception failure = null;
             try {
@@ -229,7 +281,20 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
             }
             final Exception finalFailure = failure;
             runOnUiThread(() -> {
-                findViewById(R.id.btnRetryAck).setEnabled(true);
+                // This callback lands after a network round trip of up to 45s
+                // (15s connect + 30s read), so the Activity may well be gone by
+                // now. Touching views or starting an Activity from a destroyed
+                // instance is what turned an ordinary ack failure into a crash.
+                // The durable state that matters was already committed before the
+                // call, so bailing out here loses nothing — the next launch
+                // resumes via MainActivity.route().
+                if (isFinishing() || isDestroyed()) {
+                    android.util.Log.i("ForcedDuressRotation",
+                            "acknowledgeRotation: activity gone before result — "
+                                    + "will resume on next launch");
+                    return;
+                }
+                if (btnRetryAck != null) btnRetryAck.setEnabled(true);
                 if (finalFailure instanceof RotationDeniedException) {
                     // Retrying can never succeed — the server's own gate already
                     // said the account is locked right now. Exit instead of

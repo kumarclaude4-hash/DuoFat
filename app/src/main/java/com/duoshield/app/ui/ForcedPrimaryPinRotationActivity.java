@@ -54,8 +54,13 @@ public class ForcedPrimaryPinRotationActivity extends AppCompatActivity {
             String pin     = etNewPin.getText() != null ? etNewPin.getText().toString() : "";
             String confirm = etConfirmPin.getText() != null ? etConfirmPin.getText().toString() : "";
 
-            if (pin.length() < 4 || pin.length() > 6) {
-                showError(tvError, "PIN must be 4–6 digits.");
+            // Bounds come from PinManager rather than being restated here — the same
+            // reasoning as the matching check on screen 2. PinManager.setPin() is the
+            // thing that actually enforces MIN_PIN_LEN/MAX_PIN_LEN, so the UI must not
+            // keep its own copy of those numbers and drift from it.
+            if (pin.length() < PinManager.MIN_PIN_LEN || pin.length() > PinManager.MAX_PIN_LEN) {
+                showError(tvError, "PIN must be " + PinManager.MIN_PIN_LEN + "–"
+                        + PinManager.MAX_PIN_LEN + " digits.");
                 return;
             }
             if (!pin.equals(confirm)) {
