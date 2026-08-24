@@ -35,6 +35,7 @@ import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.ChatThemeHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
+import com.duoshield.app.util.InlineThumb;
 import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
@@ -456,6 +457,10 @@ public class GroupChatActivity extends BaseActivity {
                 // Media fields (present only on image/video messages)
                 String  mediaPath = doc.getString("path");
                 String  mediaKey  = doc.getString("mediaKey");
+                // Inline thumbnail — a ~1.5 KB sealed JPEG carried inside the document so
+                // the bubble can paint before any B2 download starts. Null on legacy media
+                // and on albums, where each item carries its own thumb inside mediaItems.
+                String  mediaThumb = doc.getString("thumb");
                 String  docType   = doc.getString("type");
                 String mediaItems = doc.getString("mediaItems");
                 String caption    = doc.getString("caption");
@@ -517,6 +522,7 @@ public class GroupChatActivity extends BaseActivity {
                 if (mType != null) {
                     msg = new Message(id, groupId, sender, displayPlain, tsMs, false, mediaPath, mType);
                     msg.setMediaKey(mediaKey);
+                    if (mediaThumb != null) msg.setThumb(mediaThumb);
                     if (mediaItems != null && !mediaItems.isEmpty()) msg.setMediaItems(mediaItems);
                     if (caption != null && !caption.isEmpty()) msg.setCaption(caption);
                 } else {
@@ -531,6 +537,9 @@ public class GroupChatActivity extends BaseActivity {
                 if (mType != null) {
                     toRoom = new Message(id, groupId, sender, displayPlain, tsMs, false, mediaPath, mType);
                     toRoom.setMediaKey(mediaKey);
+                    // Persist the stamp too, so reopening the chat offline still paints a
+                    // preview instead of an empty bubble.
+                    if (mediaThumb != null) toRoom.setThumb(mediaThumb);
                     if (mediaItems != null && !mediaItems.isEmpty()) toRoom.setMediaItems(mediaItems);
                     if (caption != null && !caption.isEmpty()) toRoom.setCaption(caption);
                 } else {
@@ -750,8 +759,13 @@ public class GroupChatActivity extends BaseActivity {
         }
     }
 
+    /**
+     * @param sealedThumb inline thumbnail sealed under {@code mediaKey}, or {@code null}
+     *                    when generation failed — receivers then fall back to the
+     *                    existing download-and-decrypt path.
+     */
     private void onGroupUploadComplete(String storagePath, String mediaType,
-                                       String mediaKey) {
+                                       String mediaKey, String sealedThumb) {
         final java.util.List<String[]> completeItems;
         final String completeCaption;
         synchronized (groupMultiUploadLock) {
@@ -759,10 +773,10 @@ public class GroupChatActivity extends BaseActivity {
                 final String singleCaption = pendingGroupCaption;
                 pendingGroupCaption = null;
                 runOnUiThread(() -> sendGroupMediaMessage(
-                        storagePath, mediaType, mediaKey, singleCaption));
+                        storagePath, mediaType, mediaKey, singleCaption, sealedThumb));
                 return;
             }
-            pendingGroupItems.add(new String[]{storagePath, mediaType, mediaKey});
+            pendingGroupItems.add(new String[]{storagePath, mediaType, mediaKey, sealedThumb});
             int done = groupMultiCompleted.incrementAndGet();
             if (done < pendingGroupTotal) return;
             completeItems = new java.util.ArrayList<>(pendingGroupItems);
@@ -940,6 +954,11 @@ public class GroupChatActivity extends BaseActivity {
                             if (!isFinishing() && !isDestroyed() && tvGroupUploadPct != null)
                                 tvGroupUploadPct.setText("0%");
                         });
+                        // Pull the preview frame from the local file while the upload is still
+                        // in flight. This is the whole point for video: every group member
+                        // gets a visible frame without downloading a byte of a 500 MB object.
+                        final String sealedThumb = InlineThumb.sealedFromVideoUri(
+                                GroupChatActivity.this, fileUri, mediaKey);
                         String storagePath = B2StorageHelper.uploadFileFromDisk(
                                 encTmp, path, mime,
                                 pct -> runOnUiThread(() -> {
@@ -949,7 +968,8 @@ public class GroupChatActivity extends BaseActivity {
                         final String finalMediaKey = mediaKey;
                         runOnUiThread(() -> {
                             if (isFinishing() || isDestroyed()) return;
-                            onGroupUploadComplete(storagePath, mediaType, finalMediaKey);
+                            onGroupUploadComplete(storagePath, mediaType, finalMediaKey,
+                                    sealedThumb);
                         });
                     } finally {
                         //noinspection ResultOfMethodCallIgnored
@@ -976,6 +996,16 @@ public class GroupChatActivity extends BaseActivity {
                     });
 
                     B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
+
+                    // Build the stamp from the bytes already in hand — for images that is the
+                    // post-compression buffer, so the preview matches what recipients will
+                    // eventually see. Costs a few milliseconds and no network. Sealed under
+                    // the media key, so it is exactly as private as the object it previews.
+                    final String sealedThumb = "video".equals(mediaType)
+                            ? InlineThumb.sealedFromVideoUri(
+                                    GroupChatActivity.this, fileUri, enc.keyBase64)
+                            : InlineThumb.sealedFromImageBytes(plain, enc.keyBase64);
+
                     String storagePath = B2StorageHelper.uploadFile(
                             enc.data, path, mime,
                             pct -> runOnUiThread(() -> {
@@ -986,7 +1016,7 @@ public class GroupChatActivity extends BaseActivity {
                     final String mediaKey = enc.keyBase64;
                     runOnUiThread(() -> {
                         if (isFinishing() || isDestroyed()) return;
-                        onGroupUploadComplete(storagePath, mediaType, mediaKey);
+                        onGroupUploadComplete(storagePath, mediaType, mediaKey, sealedThumb);
                     });
                 }
             } catch (Exception e) {
@@ -1007,9 +1037,14 @@ public class GroupChatActivity extends BaseActivity {
      * Writes a group media message to Firestore after a successful B2 upload.
      * The message carries the B2 path and per-file AES key; the group AES key
      * decrypts the B2 ciphertext on each recipient's device.
+     *
+     * @param sealedThumb ~1.5 KB inline thumbnail, AES-GCM sealed under {@code mediaKey}
+     *                    and base64-encoded, produced from the local file before upload.
+     *                    Rides inside the message document so every recipient's bubble
+     *                    paints the instant the snapshot lands. {@code null} is fine.
      */
     private void sendGroupMediaMessage(String storagePath, String mediaType,
-                                       String mediaKey, String caption) {
+                                       String mediaKey, String caption, String sealedThumb) {
         if (groupKey == null) return;
         String msgId = UUID.randomUUID().toString();
         long   now   = System.currentTimeMillis();
@@ -1017,6 +1052,7 @@ public class GroupChatActivity extends BaseActivity {
         // Optimistic UI
         Message optimistic = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
         optimistic.setMediaKey(mediaKey);
+        optimistic.setThumb(sealedThumb);
         if (caption != null && !caption.isEmpty()) optimistic.setCaption(caption);
         optimistic.setStatus("pending");
         adapter.appendMessage(optimistic);
@@ -1035,6 +1071,9 @@ public class GroupChatActivity extends BaseActivity {
         doc.put("status",      "sent");
         doc.put("timestamp",   FieldValue.serverTimestamp());
         if (caption != null && !caption.isEmpty()) doc.put("caption", caption);
+        // Omitted entirely when absent — an empty string would cost bytes on every
+        // listener delivery, for every member of the group, for no benefit.
+        if (sealedThumb != null && !sealedThumb.isEmpty()) doc.put("thumb", sealedThumb);
 
         FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
         if (!guard.canWrite(1)) {
@@ -1051,6 +1090,7 @@ public class GroupChatActivity extends BaseActivity {
               // Persist to Room
               Message stored = new Message(msgId, groupId, myUid, "", now, false, storagePath, mediaType);
               stored.setMediaKey(mediaKey);
+              stored.setThumb(sealedThumb);
               if (caption != null && !caption.isEmpty()) stored.setCaption(caption);
               stored.setStatus("sent");
               executor.execute(() -> localDb.messageDao().insert(stored));
@@ -1088,6 +1128,12 @@ public class GroupChatActivity extends BaseActivity {
                 value.put("path", item[0]);
                 value.put("type", item[1]);
                 value.put("key", item[2]);
+                // item[3] is that item's own sealed stamp. An album grid is the worst case
+                // for the old behaviour — four video slots meant four full object downloads
+                // kicked off during a single scroll pass.
+                if (item.length > 3 && item[3] != null && !item[3].isEmpty()) {
+                    value.put("thumb", item[3]);
+                }
                 array.put(value);
             } catch (org.json.JSONException ignored) {}
         }
