@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Circular scrim behind the mic-off badge on the floating call PiP. Dark rather than the
+     lavender accent so it stays legible over any video frame. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#B3000000" />
+</shape>

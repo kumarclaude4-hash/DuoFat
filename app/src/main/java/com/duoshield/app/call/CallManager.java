@@ -93,8 +93,26 @@ public class CallManager {
     private AudioTrack localAudioTrack;
     /** Remote video track, retained so secondary screens can render a live PiP. */
     private VideoTrack remoteVideoTrack;
+    /**
+     * Remote audio track, retained so "Turn off sound" can silence playback at the WebRTC
+     * layer instead of fighting the system call volume.
+     */
+    private AudioTrack remoteAudioTrack;
     /** Current microphone mute state, mirrored so other screens can draw the badge. */
     private boolean micMuted = false;
+    /**
+     * True while local playback of the partner's audio is disabled ("Turn off sound").
+     * Kept separate from {@link #micMuted}: this only silences what <em>we</em> hear, the
+     * partner still receives our microphone.
+     */
+    private boolean outputMuted = false;
+
+    /**
+     * The one route controller for this call. Shared with {@link CallActivity} so the picker,
+     * the header button and {@link #setSpeakerOn(boolean)} all read and write the same state —
+     * separate instances would each keep their own mute bookkeeping and drift apart.
+     */
+    private AudioRouteController audioRoute;
 
     /**
      * The manager driving the call that is on screen right now, or {@code null} when no call
@@ -550,8 +568,12 @@ public class CallManager {
                     // Without this explicit enable() call, the local user hears the remote
                     // peer but the remote peer hears nothing — even though both sides
                     // have added their local audio tracks to the PeerConnection.
-                    track.setEnabled(true);
-                    Log.d(TAG, "Remote audio track received and enabled");
+                    // Honour a "Turn off sound" selection made before the track arrived,
+                    // otherwise the partner's audio would suddenly become audible again the
+                    // moment the remote track lands.
+                    remoteAudioTrack = (AudioTrack) track;
+                    track.setEnabled(!outputMuted);
+                    Log.d(TAG, "Remote audio track received, enabled=" + !outputMuted);
                 }
             }
         });
@@ -792,7 +814,7 @@ public class CallManager {
         });
     }
 
-    // ─── Callee flow ─────────────────────────────────────────────────────────
+    // ─── Callee flow ──────────────────────────────���──────────────────────────
 
     public void acceptCall(String myUid, String callId, boolean video) {
         this.myUid = myUid;
@@ -971,8 +993,50 @@ public class CallManager {
     /** Live remote track, or {@code null} until the partner's video arrives. */
     public VideoTrack getRemoteVideoTrack() { return remoteVideoTrack; }
 
+    /** Live remote audio track, or {@code null} until the partner's audio arrives. */
+    public AudioTrack getRemoteAudioTrack() { return remoteAudioTrack; }
+
     /** Whether the microphone is muted — drawn as a badge on the chat screen's PiP. */
     public boolean isMicMuted() { return micMuted; }
+
+    /**
+     * Silences (or restores) local playback of the partner's audio by disabling the remote
+     * track. This is what "Turn off sound" is: the outbound microphone is untouched, so the
+     * partner keeps hearing us.
+     *
+     * @return {@code true} when the track state was actually applied. {@code false} means the
+     *         remote track has not arrived yet — the flag is still remembered and applied in
+     *         {@code onAddTrack}, so the caller can treat this as "queued", not "failed".
+     */
+    public boolean setOutputMuted(boolean muted) {
+        outputMuted = muted;
+        if (remoteAudioTrack == null) return false;
+        try {
+            remoteAudioTrack.setEnabled(!muted);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "remote audio track mute failed", e);
+            return false;
+        }
+    }
+
+    /** True while the partner's audio is muted locally. */
+    public boolean isOutputMuted() { return outputMuted; }
+
+    /**
+     * The shared audio-route controller for this call, created on first use.
+     *
+     * <p>Handed to {@link CallActivity} so the bottom-sheet picker, the header speaker button
+     * and {@link #setSpeakerOn(boolean)} all mutate one object. The controller mutes playback
+     * through {@link #setOutputMuted(boolean)} rather than touching the call volume.
+     */
+    public AudioRouteController audioRoute() {
+        if (audioRoute == null) {
+            audioRoute = new AudioRouteController(context);
+            audioRoute.setOutputMuter(this::setOutputMuted);
+        }
+        return audioRoute;
+    }
 
     public void setCameraEnabled(boolean enabled) {
         if (localVideoTrack != null) localVideoTrack.setEnabled(enabled);
@@ -1002,7 +1066,7 @@ public class CallManager {
      * older releases.
      */
     public void setSpeakerOn(boolean on) {
-        AudioRouteController controller = new AudioRouteController(context);
+        AudioRouteController controller = audioRoute();
         AudioRouteController.Kind want = on
                 ? AudioRouteController.Kind.SPEAKER
                 : AudioRouteController.Kind.EARPIECE;
@@ -1059,6 +1123,7 @@ public class CallManager {
         // that renders a disposed track crashes in native code.
         if (active == this) active = null;
         remoteVideoTrack = null;
+        remoteAudioTrack = null;
 
         try {
             if (videoCapturer != null) { videoCapturer.stopCapture(); videoCapturer.dispose(); videoCapturer = null; }

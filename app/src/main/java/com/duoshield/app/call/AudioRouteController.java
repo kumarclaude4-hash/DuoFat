@@ -50,6 +50,25 @@ public class AudioRouteController {
         }
     }
 
+    /**
+     * The synthetic "Turn off sound" route. It is deliberately not part of
+     * {@link #availableRoutes()} — that list mirrors real framework devices — so callers that
+     * want to mute ask for this one explicitly.
+     */
+    public static Route mutedRoute() {
+        return new Route(Kind.MUTED, "Turn off sound", -1);
+    }
+
+    /**
+     * Hook used to silence playback at the media layer. Implemented by {@code CallManager},
+     * which disables the remote WebRTC audio track — see {@link #muteOutput()} for why that
+     * is the primary mechanism and stream volume is only a fallback.
+     */
+    public interface OutputMuter {
+        /** @return {@code true} when the media layer applied the state. */
+        boolean setOutputMuted(boolean muted);
+    }
+
     private final Context      context;
     private final AudioManager am;
 
@@ -57,10 +76,17 @@ public class AudioRouteController {
     private boolean outputMuted = false;
     /** STREAM_VOICE_CALL volume captured before muting, restored when leaving MUTED. */
     private int savedVoiceVolume = -1;
+    /** Media-layer mute, injected by the call session. Null outside an active call. */
+    private OutputMuter outputMuter;
 
     public AudioRouteController(Context context) {
         this.context = context.getApplicationContext();
         this.am = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
+    }
+
+    /** Wires the media-layer mute. Called by {@code CallManager} when it creates the controller. */
+    public void setOutputMuter(OutputMuter muter) {
+        this.outputMuter = muter;
     }
 
     // ── Session ───────────────────────────────────────────────────────────────
@@ -234,39 +260,58 @@ public class AudioRouteController {
     }
 
     /**
-     * Silences call playback by dropping STREAM_VOICE_CALL to zero.
+     * Silences call playback.
      *
-     * <p>The old implementation also muted the microphone, which silenced the caller for the
-     * <em>other</em> party — the opposite of "turn off sound". Outbound audio is left alone
-     * here; only what this device plays is muted.
+     * <p>The real mute happens at the media layer, by disabling the remote WebRTC audio track
+     * through {@link OutputMuter}. Dropping STREAM_VOICE_CALL to zero is kept only as a
+     * defensive fallback: it is a system-wide setting that fights the user's own volume keys,
+     * and some OEMs throw on volume changes during a call — hence the try/catch.
+     *
+     * <p>Note the old implementation also muted the <em>microphone</em>, which silenced this
+     * device for the other party — the opposite of "turn off sound". Outbound audio is left
+     * alone here; only what this device plays is muted.
      */
     private boolean muteOutput() {
-        if (am == null) return false;
-        try {
-            if (savedVoiceVolume < 0) {
-                savedVoiceVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+        boolean mediaMuted = outputMuter != null && outputMuter.setOutputMuted(true);
+
+        if (am != null) {
+            try {
+                if (savedVoiceVolume < 0) {
+                    savedVoiceVolume = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL);
+                }
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+            } catch (Exception e) {
+                // Expected on OEMs that restrict volume changes in-call — the track-disable
+                // above is what actually silences playback, so this is not a failure.
+                Log.w(TAG, "volume fallback unavailable", e);
             }
-            am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
-            outputMuted = true;
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "mute output failed", e);
-            return false;
         }
+
+        // Treat the selection as applied whenever either mechanism landed. Before the remote
+        // track arrives the muter reports false but remembers the flag, so also accept the
+        // case where a muter is attached at all.
+        outputMuted = mediaMuted || outputMuter != null || am != null;
+        return outputMuted;
     }
 
-    /** Restores the pre-mute call volume. No-op when the output was never muted. */
+    /** Restores playback and the pre-mute call volume. No-op when the output was never muted. */
     private void restoreVolume() {
-        if (am == null || !outputMuted) return;
-        try {
-            int restore = savedVoiceVolume > 0
-                    ? savedVoiceVolume
-                    : Math.max(1, am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL) / 2);
-            am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, restore, 0);
-        } catch (Exception ignored) { }
+        if (!outputMuted) return;
+        if (outputMuter != null) outputMuter.setOutputMuted(false);
+        if (am != null) {
+            try {
+                int restore = savedVoiceVolume > 0
+                        ? savedVoiceVolume
+                        : Math.max(1, am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL) / 2);
+                am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, restore, 0);
+            } catch (Exception ignored) { }
+        }
         outputMuted      = false;
         savedVoiceVolume = -1;
     }
+
+    /** Public unmute for callers that need to leave MUTED without picking a device. */
+    public void unmuteOutput() { restoreVolume(); }
 
     /** True while the "Turn off sound" route is active. */
     public boolean isOutputMuted() { return outputMuted; }

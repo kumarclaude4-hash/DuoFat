@@ -2,7 +2,6 @@ package com.duoshield.app.call;
 
 import android.content.Intent;
 import android.graphics.Color;
-import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
@@ -158,23 +157,31 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private PowerManager.WakeLock proximityWakeLock;
 
     // ── Wired headset routing ─────────────────────────────────────────────────
-    /** Re-routes audio when the user plugs/unplugs wired earphones mid-call. */
+    /**
+     * Re-routes audio when the user plugs/unplugs wired earphones mid-call.
+     *
+     * <p>This used to call {@code AudioManager.setSpeakerphoneOn()} itself <em>and</em> ask
+     * {@link CallManager} to route as well, so two code paths fought over the route and the
+     * legacy call was silently ignored on API 31+ anyway. Everything now goes through the one
+     * {@link AudioRouteController} owned by the call session.
+     */
     private final BroadcastReceiver headsetReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (!AudioManager.ACTION_HEADSET_PLUG.equals(intent.getAction())) return;
             int state = intent.getIntExtra("state", -1);
-            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (am == null) return;
+            AudioRouteController routes = audioRoutes();
+            if (routes == null) return;
+
             if (state == 1) {
-                // Headset plugged in — route to headset (earpiece/headphones), not speaker.
-                am.setSpeakerphoneOn(false);
+                // Headset plugged in — prefer it over the speaker.
+                applyRouteKind(AudioRouteController.Kind.WIRED);
                 isSpeakerOn = false;
-                if (callManager != null) callManager.setSpeakerOn(false);
             } else if (state == 0) {
-                // Headset unplugged — restore the speaker state from before it was plugged in.
-                am.setSpeakerphoneOn(isSpeakerOn);
-                if (callManager != null) callManager.setSpeakerOn(isSpeakerOn);
+                // Headset unplugged — fall back to the speaker state from before it was in.
+                applyRouteKind(isSpeakerOn
+                        ? AudioRouteController.Kind.SPEAKER
+                        : AudioRouteController.Kind.EARPIECE);
             }
             // Reflect the new audio route on the speaker button.
             runOnUiThread(CallActivity.this::updateSpeakerButtonIcon);
@@ -199,6 +206,12 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             }
         }
     };
+
+    // ── Audio output picker ───────────────────────────────────────────────────
+    /** Runtime request for BLUETOOTH_CONNECT, needed only to read Bluetooth device names. */
+    private static final int REQ_BLUETOOTH_CONNECT = 4711;
+    /** The open output sheet, kept so it can be rebuilt after a permission grant. */
+    private BottomSheetDialog audioOutputSheet;
 
     // ── State ─────────────────────────────────────────────────────────────────
     private boolean isMuted      = false;
@@ -279,6 +292,13 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
         bindViews();
         setupButtons();
+
+        // The manager must exist before setupAudio(): the route controller it owns is the
+        // single source of truth for audio routing, and setupAudio() picks the opening route
+        // through it.
+        callManager = new CallManager(this);
+        callManager.setListener(this);
+
         setupAudio();
 
         // Attach the in-call chat banner listener as early as we possibly can.
@@ -294,9 +314,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // so it attaches from doStartCall(). listenForInCallMessages() is idempotent, so
         // whichever path applies runs once and the other is a harmless no-op.
         listenForInCallMessages();
-
-        callManager = new CallManager(this);
-        callManager.setListener(this);
 
         // Start the foreground service — this keeps the process alive when the user
         // presses Home, preventing the OS from killing the WebRTC PeerConnection.
@@ -486,6 +503,16 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // released surface (which can crash the GL thread in libwebrtc).
         releaseVideoRenderers();
 
+        if (audioOutputSheet != null) {
+            if (audioOutputSheet.isShowing()) audioOutputSheet.dismiss();
+            audioOutputSheet = null;
+        }
+
+        // Release the route selection and restore the call volume *before* the tracks go away,
+        // while the controller can still unmute the remote audio track it disabled.
+        AudioRouteController routes = audioRoutes();
+        if (routes != null) routes.endSession();
+
         if (callManager != null) {
             CallManager.CallState state = callManager.getCurrentState();
             if (state != CallManager.CallState.ENDED && state != CallManager.CallState.FAILED) {
@@ -500,11 +527,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             }
         }
 
-        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (am != null) {
-            am.setMode(AudioManager.MODE_NORMAL);
-            am.setSpeakerphoneOn(false);
-        }
+        // Mode reset and device release are handled by endSession() above — doing it again
+        // here with the deprecated calls would be a no-op on API 31+ anyway.
         abandonAudioFocus();
     }
 
@@ -718,40 +742,17 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
         if (am == null) return;
 
-        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-
-        // BUG FIX — Bluetooth headset was ignored at call start:
-        // The old code blindly set speaker on/off based on call type, overriding any
-        // already-connected Bluetooth SCO device.  Now we check first: if a BT SCO
-        // device is connected, route there unconditionally (highest priority, matches
-        // WhatsApp / Signal behaviour).  Fall back to speaker (video) or earpiece (voice).
-        boolean btConnected = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                AudioDeviceInfo[] outputs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
-                for (AudioDeviceInfo d : outputs) {
-                    if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
-                        btConnected = true;
-                        break;
-                    }
-                }
-            } catch (SecurityException ignored) {
-                // BLUETOOTH_CONNECT not yet granted — will handle in picker
-            }
-        }
-
-        if (btConnected) {
-            // Start SCO session so the headset's mic is also used.
-            try { am.setBluetoothScoOn(true); am.startBluetoothSco(); } catch (Exception ignored) {}
-            am.setSpeakerphoneOn(false);
-            isSpeakerOn = false;
-        } else if (isVideo) {
-            // Video calls default to speaker (user is watching the screen).
-            am.setSpeakerphoneOn(true);
-            isSpeakerOn = true;
+        // Opening route: a connected headset (Bluetooth or wired) wins, otherwise speaker for
+        // video and earpiece for voice. The controller does that selection with
+        // setCommunicationDevice() on API 31+, where the legacy setSpeakerphoneOn() /
+        // startBluetoothSco() calls this method used to make were silently ignored — which is
+        // why an already-connected headset was bypassed at call start on modern devices.
+        AudioRouteController routes = audioRoutes();
+        if (routes != null) {
+            routes.beginSession(isVideo);
+            isSpeakerOn = routes.currentKind() == AudioRouteController.Kind.SPEAKER;
         } else {
-            // Voice calls default to earpiece so the user can hold the phone naturally.
-            am.setSpeakerphoneOn(false);
+            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
         }
         // Sync speaker button icon to reflect the initial audio route.
         updateSpeakerButtonIcon();
@@ -797,18 +798,89 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      */
     private void updateSpeakerButtonIcon() {
         if (btnSpeaker == null) return;
-        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-        if (am == null) return;
+        AudioRouteController routes = audioRoutes();
+        if (routes == null) return;
+        // Read the live route back from the framework rather than a local boolean, so the icon
+        // cannot drift from what the device is actually playing through.
         int iconRes;
-        if (am.isBluetoothScoOn()) {
-            iconRes = R.drawable.ic_bluetooth_audio;
-        } else if (am.isSpeakerphoneOn()) {
-            iconRes = R.drawable.ic_speaker_on;
-        } else {
-            // Earpiece / wired headset / muted
-            iconRes = R.drawable.ic_call_phone;
+        switch (routes.currentKind()) {
+            case BLUETOOTH: iconRes = R.drawable.ic_bluetooth_audio; break;
+            case SPEAKER:   iconRes = R.drawable.ic_speaker_on;      break;
+            case MUTED:     iconRes = R.drawable.ic_volume_off;      break;
+            default:        iconRes = R.drawable.ic_call_phone;      break;
         }
         btnSpeaker.setImageResource(iconRes);
+    }
+
+    // ── Audio route plumbing ──────────────────────────────────────────────────
+
+    /** The call session's shared route controller, or {@code null} before the call exists. */
+    private AudioRouteController audioRoutes() {
+        return callManager != null ? callManager.audioRoute() : null;
+    }
+
+    /**
+     * Applies the first available route of {@code kind}.
+     *
+     * @return {@code true} when the framework accepted it. Callers surface a failure to the
+     *         user instead of leaving a checkmark on a route that never took effect.
+     */
+    private boolean applyRouteKind(AudioRouteController.Kind kind) {
+        AudioRouteController routes = audioRoutes();
+        if (routes == null) return false;
+        // MUTED is synthetic — it has no framework device, so it is never in availableRoutes().
+        if (kind == AudioRouteController.Kind.MUTED) {
+            return routes.apply(AudioRouteController.mutedRoute());
+        }
+        for (AudioRouteController.Route r : routes.availableRoutes()) {
+            if (r.kind == kind) return routes.apply(r);
+        }
+        return false;
+    }
+
+    /** Row icon for a route family, matching the reference design's sheet. */
+    private static int iconForRoute(AudioRouteController.Kind kind) {
+        switch (kind) {
+            case SPEAKER:   return R.drawable.ic_speaker_on;
+            case BLUETOOTH: return R.drawable.ic_bluetooth_audio;
+            case MUTED:     return R.drawable.ic_volume_off;
+            case WIRED:
+            case EARPIECE:
+            default:        return R.drawable.ic_call_phone;
+        }
+    }
+
+    /**
+     * Asks for BLUETOOTH_CONNECT so Bluetooth rows can show the real device name.
+     *
+     * <p>Deliberately non-blocking: the picker is shown either way and the routes still work,
+     * the labels are just generic without the grant. Re-requested each time the sheet opens
+     * only while the permission is still missing.
+     */
+    private void requestBluetoothNamePermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return;
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) return;
+        try {
+            requestPermissions(
+                    new String[]{Manifest.permission.BLUETOOTH_CONNECT},
+                    REQ_BLUETOOTH_CONNECT);
+        } catch (Exception e) {
+            Log.w(TAG, "BLUETOOTH_CONNECT request failed", e);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_BLUETOOTH_CONNECT) return;
+        // Reopen the sheet on grant so the user immediately sees the named device rather than
+        // having to tap the button a second time.
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                && !isFinishing() && !isDestroyed()) {
+            showAudioOutputPicker();
+        }
     }
 
     private void abandonAudioFocus() {
@@ -846,9 +918,20 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      * checkmark on the right.
      */
     private void showAudioOutputPicker() {
-        AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+        AudioRouteController routes = audioRoutes();
+        if (routes == null) return;
+
+        // Bluetooth device *names* need BLUETOOTH_CONNECT on API 31+. Ask here rather than
+        // gating the whole picker on it: without the grant the route still works, the row is
+        // just labelled generically (see AudioRouteController.labelFor).
+        requestBluetoothNamePermission();
+
+        // Replace any sheet already on screen (e.g. the one open while the BLUETOOTH_CONNECT
+        // dialog was answered) so grants never stack two sheets.
+        if (audioOutputSheet != null && audioOutputSheet.isShowing()) audioOutputSheet.dismiss();
 
         BottomSheetDialog dialog = new BottomSheetDialog(this);
+        audioOutputSheet = dialog;
         View sheetView = getLayoutInflater().inflate(R.layout.bottom_sheet_audio_output, null);
         dialog.setContentView(sheetView);
 
@@ -861,83 +944,42 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
         LinearLayout container = sheetView.findViewById(R.id.audioOutputContainer);
 
-        boolean speakerActive    = am != null && am.isSpeakerphoneOn();
-        boolean bluetoothActive  = am != null && am.isBluetoothScoOn();
-        boolean earpieceActive   = !speakerActive && !bluetoothActive;
+        // Rows come from the framework's live device list, so a row can never be one the
+        // framework would refuse. The checkmark is read back from the active route (device id
+        // included, which distinguishes two paired headsets) instead of a local boolean.
+        AudioRouteController.Kind activeKind = routes.currentKind();
+        int activeDeviceId = routes.currentDeviceId();
 
-        // ── Speaker ──
-        addAudioOutputItem(container, R.drawable.ic_speaker_on, "Speaker",
-                speakerActive, () -> {
-                    if (am != null) { am.setSpeakerphoneOn(true); am.setBluetoothScoOn(false); }
-                    isSpeakerOn = true;
-                    callManager.setSpeakerOn(true);
-                    updateSpeakerButtonIcon();
-                    dialog.dismiss();
-                });
-
-        // ── Phone (earpiece) ──
-        addAudioOutputItem(container, R.drawable.ic_call_phone, "Phone",
-                earpieceActive, () -> {
-                    if (am != null) { am.setSpeakerphoneOn(false); am.setBluetoothScoOn(false); }
-                    isSpeakerOn = false;
-                    callManager.setSpeakerOn(false);
-                    updateSpeakerButtonIcon();
-                    dialog.dismiss();
-                });
-
-        // ── Bluetooth output devices ──
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && am != null) {
-            try {
-                AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
-                for (AudioDeviceInfo dev : devices) {
-                    int type = dev.getType();
-                    if (type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
-                            || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
-                        CharSequence name = dev.getProductName();
-                        String label = (name != null && name.length() > 0)
-                                ? name.toString() : "Bluetooth device";
-                        addAudioOutputItem(container, R.drawable.ic_bluetooth_audio,
-                                label, bluetoothActive, () -> {
-                                    try {
-                                        am.setBluetoothScoOn(true);
-                                        am.startBluetoothSco();
-                                        am.setSpeakerphoneOn(false);
-                                        isSpeakerOn = false;
-                                        callManager.setSpeakerOn(false);
-                                    } catch (Exception ignored) { }
-                                    updateSpeakerButtonIcon();
-                                    dialog.dismiss();
-                                });
-                    }
-                }
-            } catch (SecurityException ignored) {
-                // BLUETOOTH_CONNECT permission not granted — skip Bluetooth items
-            }
+        for (AudioRouteController.Route route : routes.availableRoutes()) {
+            boolean checked = route.kind == activeKind
+                    && (activeDeviceId < 0 || activeDeviceId == route.deviceId);
+            addAudioOutputItem(container, iconForRoute(route.kind), route.label,
+                    checked, () -> {
+                        if (routes.apply(route)) {
+                            isSpeakerOn = route.kind == AudioRouteController.Kind.SPEAKER;
+                        } else {
+                            // Surfacing this beats leaving a checkmark on a route that the
+                            // framework rejected — the exact failure mode this screen had.
+                            Toast.makeText(CallActivity.this,
+                                    "Couldn't switch to " + route.label,
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                        updateSpeakerButtonIcon();
+                        dialog.dismiss();
+                    });
         }
 
         // ── Turn off sound ──
+        // Silences only what *we* hear, by disabling the remote audio track. The previous
+        // version also muted the microphone, which cut our voice off for the partner — the
+        // opposite of what this row promises. The mic button is left untouched.
         addAudioOutputItem(container, R.drawable.ic_volume_off, "Turn off sound",
-                false, () -> {
-                    if (am != null) {
-                        am.setSpeakerphoneOn(false);
-                        try { am.stopBluetoothSco(); am.setBluetoothScoOn(false); } catch (Exception ignored) {}
-                        // BUG FIX — "Turn off sound" did nothing:
-                        // adjustStreamVolume(ADJUST_MUTE) on STREAM_VOICE_CALL is silently
-                        // ignored on most devices (AudioPolicy restricts it during calls).
-                        // setStreamVolume(0) is more reliable across Android versions / OEMs.
-                        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, 0, 0);
+                activeKind == AudioRouteController.Kind.MUTED, () -> {
+                    if (!applyRouteKind(AudioRouteController.Kind.MUTED)) {
+                        Toast.makeText(CallActivity.this,
+                                "Couldn't turn off sound", Toast.LENGTH_SHORT).show();
                     }
                     isSpeakerOn = false;
-                    // Also mute the outbound audio track — otherwise we keep sending mic
-                    // audio to the remote party even though our own speaker is silent.
-                    if (callManager != null) callManager.setMuted(true);
-                    isMuted = true;
-                    if (btnMute != null) {
-                        runOnUiThread(() -> {
-                            btnMute.setImageResource(R.drawable.ic_mic_off);
-                            btnMute.setAlpha(0.5f);
-                        });
-                    }
                     updateSpeakerButtonIcon();
                     dialog.dismiss();
                 });
@@ -1140,6 +1182,9 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         intent.putExtra(InCallChatActivity.EXTRA_CALL_ID,      callId);
         intent.putExtra(InCallChatActivity.EXTRA_MY_UID,       myUid);
         intent.putExtra(InCallChatActivity.EXTRA_PARTNER_NAME, partnerName);
+        // Drives whether the chat screen floats the video PiP — there is nothing to show on a
+        // voice-only call.
+        intent.putExtra(InCallChatActivity.EXTRA_IS_VIDEO, isVideo);
         startActivity(intent);
     }
 
