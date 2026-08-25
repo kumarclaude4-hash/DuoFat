@@ -1198,7 +1198,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 final String finalUrl = iUrl;
                 final String finalKey = iKey;
                 final String finalType = iType;
-                final String albumSender  = mine ? "You" : partnerName;
+                // bindMediaGrid does not receive bindMessage's `mine` flag, so derive
+                // ownership here from the myUid field the same way bindMessage does.
+                final boolean albumMine   = myUid != null && myUid.equals(msg.getSender());
+                final String albumSender  = albumMine ? "You" : partnerName;
                 final long   albumTs      = msg.getTimestamp();
                 // The caption belongs to the album message as a whole, so every slot carries
                 // it — matches the single-image and video launch sites, which pass all three.
