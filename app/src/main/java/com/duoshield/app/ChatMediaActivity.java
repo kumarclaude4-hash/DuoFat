@@ -1213,7 +1213,7 @@ public class ChatMediaActivity extends BaseActivity {
         // adapter.getLiveVoiceViews() instead of writing to the waveform/durationView/
         // playPauseBtn/bubble params captured at tap-time. The RecyclerView can recycle
         // that row to a different position (or a different message entirely) while this
-        // note keeps playing in the background — e.g. the user scrolls, or a new incoming
+        // note keeps playing in the background �� e.g. the user scrolls, or a new incoming
         // message forces a rebind of visible rows. Writing to the stale captured Views in
         // that case silently updates a View that's no longer on screen, which is why
         // playback used to show no moving progress indicator at all.
@@ -1683,13 +1683,6 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     /**
-     * Attaches the Firestore real-time snapshot listener.
-     * <p>
-     * F-07: Queries only messages newer than {@link #latestKnownTimestamp} so we
-     * never re-fetch the full conversation history on foreground.
-     * F-10: Records the Firestore read count via {@link FirebaseCostGuard}.
-     */
-    /**
      * Re-attaches the message listener after a stream error, with exponential backoff
      * capped at 30 s (1s, 2s, 4s, 8s, 16s, 30s, 30s…).
      *
@@ -1720,6 +1713,13 @@ public class ChatMediaActivity extends BaseActivity {
         }, delay);
     }
 
+    /**
+     * Attaches the Firestore real-time snapshot listener.
+     * <p>
+     * F-07: Queries only messages newer than {@link #latestKnownTimestamp} so we
+     * never re-fetch the full conversation history on foreground.
+     * F-10: Records the Firestore read count via {@link FirebaseCostGuard}.
+     */
     private void attachFirestoreListener() {
         if (msgListener != null) return; // guard against double-attach
         if (conversationId == null) return;
@@ -2684,7 +2684,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // BADGE
-    // ═════════════════════════════════════════════��════════════════
+    // ═══════════════════════════════════════��═════��════════════════
 
     private void clearBadge() {
         NotificationManagerCompat.from(this).cancelAll();
