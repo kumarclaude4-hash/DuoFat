@@ -80,6 +80,7 @@ import org.json.JSONObject;
 public class GroupChatActivity extends BaseActivity {
 
     private static final String TAG = "GroupChatActivity";
+    private static final String PREF_GROUP_CURSOR_PREFIX = "group_last_server_ts_";
 
     // ── State ─────────────────────────────────────────────────────────────────
     private String groupId;
@@ -204,6 +205,14 @@ public class GroupChatActivity extends BaseActivity {
         groupId = getIntent().getStringExtra("group_id");
 
         if (groupId == null || myUid == null) { finish(); return; }
+
+        // Only persisted, resolved Firestore server timestamps are valid cursors.
+        // Room messages include local-clock optimistic sends and must never seed this.
+        long persistedServerMs = prefs.getLong(PREF_GROUP_CURSOR_PREFIX + groupId, 0L);
+        if (persistedServerMs > 0L) {
+            latestKnownTimestamp = new com.google.firebase.Timestamp(
+                    new java.util.Date(persistedServerMs));
+        }
 
         // FLAG_SECURE is applied globally in BaseActivity.onCreate()
         // based on the "app_screenshot_enabled" preference.
@@ -506,6 +515,12 @@ public class GroupChatActivity extends BaseActivity {
                     if (latestKnownTimestamp == null ||
                             fts.compareTo(latestKnownTimestamp) > 0) {
                         latestKnownTimestamp = fts;
+                        final long serverMs = fts.toDate().getTime();
+                        executor.execute(() -> getSharedPreferences(
+                                "duoshield_prefs", MODE_PRIVATE)
+                                .edit()
+                                .putLong(PREF_GROUP_CURSOR_PREFIX + groupId, serverMs)
+                                .apply());
                     }
                 }
 
@@ -589,7 +604,7 @@ public class GroupChatActivity extends BaseActivity {
 
     // ═════════════════════════════════════════════════════════════════════════
     // Send message
-    // ═════════════════════════════════════════════════════════════════════════
+    // ════��════════════════════════════════════════════════════════════════════
 
     private void trySend() {
         if (groupKey == null) {
