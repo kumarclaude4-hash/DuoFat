@@ -251,6 +251,44 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     }
 
     /**
+     * Append a batch of messages with a single notify.
+     *
+     * <p>Speed: calling {@link #appendMessage(Message)} in a loop fires one
+     * {@code notifyItemRangeInserted} per message, so RecyclerView schedules a
+     * layout pass per message. On the initial 300-message window that is 300
+     * layout passes and is the main cause of the stutter when opening a chat.
+     * This does the same bookkeeping but notifies once for the whole range.
+     */
+    public void appendMessages(java.util.List<Message> batch) {
+        if (batch == null || batch.isEmpty()) return;
+        if (batch.size() == 1) { appendMessage(batch.get(0)); return; }
+
+        int insertStart = displayItems.size();
+        for (Message m : batch) {
+            if (m == null) continue;
+            messages.add(m);
+            if (DateHeaderHelper.needsHeader(lastHeaderTimestamp, m.getTimestamp())) {
+                displayItems.add(DateHeaderHelper.getLabel(m.getTimestamp()));
+                lastHeaderTimestamp = m.getTimestamp();
+            }
+            if (m.getId() != null) {
+                positionById.put(m.getId(), displayItems.size());
+                messagesById.put(m.getId(), m);
+                if (m.getSender() != null) senderByMsgId.put(m.getId(), m.getSender());
+            }
+            displayItems.add(m);
+        }
+        // Animate only the newest outgoing message in the batch, not every one.
+        Message last = batch.get(batch.size() - 1);
+        if (last != null && last.getId() != null
+                && myUid != null && myUid.equals(last.getSender())) {
+            pendingAnimMsgId = last.getId();
+        }
+        int inserted = displayItems.size() - insertStart;
+        if (inserted > 0) notifyItemRangeInserted(insertStart, inserted);
+    }
+
+    /**
      * Update a single message in-place (reaction, status, text, etc.).
      *
      * <p>displayItems holds references to the same Message objects as messages, so

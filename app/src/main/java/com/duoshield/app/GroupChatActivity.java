@@ -443,6 +443,9 @@ public class GroupChatActivity extends BaseActivity {
         if (latestKnownTimestamp != null) {
             q = q.startAfter(latestKnownTimestamp);
         }
+        // Bound the window so an absent cursor cannot pull unbounded history.
+        // Matches the 1:1 chat's 300-message seed.
+        q = q.limitToLast(300);
 
         msgListener = q.addSnapshotListener((snaps, e) -> {
             if (e != null) { Log.e(TAG, "Message listener error", e); return; }
@@ -480,8 +483,16 @@ public class GroupChatActivity extends BaseActivity {
                 if (knownIds.contains(id)) continue;
                 knownIds.add(id);
 
-                // Update latest timestamp for next listener re-attach
-                if (ts instanceof com.google.firebase.Timestamp) {
+                // Update latest timestamp for next listener re-attach.
+                //
+                // INVARIANT (same as ChatMediaActivity#advanceCursor): the cursor may
+                // only ever advance from a resolved *server* timestamp. The instanceof
+                // check already excludes our own optimistic echo, whose serverTimestamp()
+                // is still null — and hasPendingWrites() excludes it explicitly. Feeding
+                // a local clock value in here would make startAfter() filter out the
+                // partner's next message permanently on the next re-attach.
+                if (ts instanceof com.google.firebase.Timestamp
+                        && !doc.getMetadata().hasPendingWrites()) {
                     com.google.firebase.Timestamp fts = (com.google.firebase.Timestamp) ts;
                     if (latestKnownTimestamp == null ||
                             fts.compareTo(latestKnownTimestamp) > 0) {
@@ -591,7 +602,7 @@ public class GroupChatActivity extends BaseActivity {
         knownIds.add(msgId);
         scrollToBottom();
 
-        // ── Encrypt + write to Firestore ───────────────────────────────────
+        // ── Encrypt + write to Firestore ────────────────────────────────��──
         executor.execute(() -> {
             String cipher;
             try {
