@@ -5,9 +5,12 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+
+import com.duoshield.app.util.MotionBudget;
 
 /**
  * Drop-in replacement for TypingDotsView.
@@ -34,6 +37,10 @@ public class CipherDotsView extends View {
     private float density;
     private float dotRadius;
 
+    // Frame-pacing shared across the three dot animators (see MotionBudget). Capped on LOW.
+    private long frameIntervalMs = 0L;
+    private long lastFrameUptime = 0L;
+
     public CipherDotsView(Context ctx) { this(ctx, null); }
     public CipherDotsView(Context ctx, AttributeSet attrs) {
         super(ctx, attrs);
@@ -55,6 +62,10 @@ public class CipherDotsView extends View {
 
     public void startDotAnimation() {
         stopDotAnimation();
+        // Respect the OS "remove animations" setting: leave the dots static.
+        if (MotionBudget.staticOnly(getContext())) { invalidate(); return; }
+        frameIntervalMs = MotionBudget.frameIntervalMs(getContext());
+        lastFrameUptime = 0L;
         for (int i = 0; i < DOT_COUNT; i++) {
             final int idx = i;
             ValueAnimator va = ValueAnimator.ofFloat(0f, 1f);
@@ -65,7 +76,10 @@ public class CipherDotsView extends View {
             va.setInterpolator(new LinearInterpolator());
             va.addUpdateListener(anim -> {
                 dotFraction[idx] = (float) anim.getAnimatedValue();
-                invalidate();
+                if (MotionBudget.shouldDrawFrame(frameIntervalMs, lastFrameUptime)) {
+                    lastFrameUptime = SystemClock.uptimeMillis();
+                    invalidate();
+                }
             });
             va.start();
             animators[i] = va;

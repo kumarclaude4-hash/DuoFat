@@ -4,9 +4,12 @@ import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+
+import com.duoshield.app.util.MotionBudget;
 
 public class SignalPulseView extends View {
 
@@ -14,6 +17,10 @@ public class SignalPulseView extends View {
     private final float[] ringFrac = {0f, 0f, 0f};
     private final ValueAnimator[] animators = new ValueAnimator[3];
     private final float density;
+
+    // Frame-pacing shared across all three ring animators (see MotionBudget). Capped on LOW.
+    private long frameIntervalMs = 0L;
+    private long lastFrameUptime = 0L;
 
     public SignalPulseView(Context context) {
         this(context, null);
@@ -37,7 +44,10 @@ public class SignalPulseView extends View {
             anim.setStartDelay(delays[i]);
             anim.addUpdateListener(animation -> {
                 ringFrac[idx] = (float) animation.getAnimatedValue();
-                invalidate();
+                if (MotionBudget.shouldDrawFrame(frameIntervalMs, lastFrameUptime)) {
+                    lastFrameUptime = SystemClock.uptimeMillis();
+                    invalidate();
+                }
             });
             animators[i] = anim;
         }
@@ -70,6 +80,10 @@ public class SignalPulseView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        // Respect the OS "remove animations" setting: leave the rings static.
+        if (MotionBudget.staticOnly(getContext())) return;
+        frameIntervalMs = MotionBudget.frameIntervalMs(getContext());
+        lastFrameUptime = 0L;
         for (ValueAnimator anim : animators) {
             anim.start();
         }

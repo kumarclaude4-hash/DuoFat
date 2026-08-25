@@ -6,14 +6,22 @@ import android.graphics.Canvas;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+
+import com.duoshield.app.util.MotionBudget;
 
 public class KeyOrbitView extends View {
 
     private float rotationDeg = 0f;
     private ValueAnimator orbitAnim;
+
+    // Frame-pacing: on LOW-tier devices redraws are capped (see MotionBudget); the animator still
+    // advances rotationDeg every tick, only the GPU-bound invalidate() is throttled.
+    private long frameIntervalMs = 0L;
+    private long lastFrameUptime = 0L;
 
     private final Paint trackPaint    = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint centerPaint   = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -95,12 +103,22 @@ public class KeyOrbitView extends View {
 
     public void startOrbit() {
         if (orbitAnim != null && orbitAnim.isRunning()) return;
+        // Respect the OS "remove animations" setting: draw one static frame, no loop.
+        if (MotionBudget.staticOnly(getContext())) { invalidate(); return; }
+        frameIntervalMs = MotionBudget.frameIntervalMs(getContext());
+        lastFrameUptime = 0L;
         orbitAnim = ValueAnimator.ofFloat(0f, 360f);
         orbitAnim.setDuration(2000);
         orbitAnim.setRepeatCount(ValueAnimator.INFINITE);
         orbitAnim.setRepeatMode(ValueAnimator.RESTART);
         orbitAnim.setInterpolator(new LinearInterpolator());
-        orbitAnim.addUpdateListener(a -> { rotationDeg = (float) a.getAnimatedValue(); invalidate(); });
+        orbitAnim.addUpdateListener(a -> {
+            rotationDeg = (float) a.getAnimatedValue();
+            if (MotionBudget.shouldDrawFrame(frameIntervalMs, lastFrameUptime)) {
+                lastFrameUptime = SystemClock.uptimeMillis();
+                invalidate();
+            }
+        });
         orbitAnim.start();
     }
 
