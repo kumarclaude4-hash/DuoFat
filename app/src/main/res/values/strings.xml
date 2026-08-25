@@ -254,6 +254,12 @@
     <string name="voice_send_failed">Failed to send voice note. Tap to retry.</string>
     <string name="voice_playback_error">Playback error</string>
 
+    <!-- Oversized video compression -->
+    <string name="compressing_video_title">Compressing video</string>
+    <string name="compressing_video_body">This video is %1$s, which is over the send limit. Compressing to 720p… %2$d%%</string>
+    <string name="video_still_too_large">Still %1$s after compressing — over the %2$s limit. Please trim the video and try again.</string>
+    <string name="video_compressed_ok">Compressed from %1$s to %2$s</string>
+
     <!-- Settings -->
     <string name="settings_pin_set">App PIN set successfully.</string>
     <string name="settings_pin_cleared">App PIN cleared.</string>

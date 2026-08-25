@@ -107,6 +107,11 @@ public class GroupChatActivity extends BaseActivity {
     // ── Local DB ──────────────────────────────────────────────────────────────
     private AppDatabase   localDb;
     private ExecutorService executor;
+    /**
+     * Dedicated to video re-encoding so a multi-minute transcode cannot starve
+     * the queued uploads and Room writes running on {@link #executor}.
+     */
+    private ExecutorService transcodeExecutor;
 
     // ── Dedup guard ───────────────────────────────────────────────────────────
     private final Set<String> knownIds = new HashSet<>();
@@ -192,6 +197,7 @@ public class GroupChatActivity extends BaseActivity {
         db      = FirebaseFirestore.getInstance();
         localDb = AppDatabase.getInstance(this);
         executor = Executors.newSingleThreadExecutor();
+        transcodeExecutor = Executors.newSingleThreadExecutor();
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         myUid   = prefs.getString("my_uid", null);
@@ -326,6 +332,9 @@ public class GroupChatActivity extends BaseActivity {
     @Override protected void onDestroy() {
         super.onDestroy();
         if (executor != null && !executor.isShutdown()) executor.shutdownNow();
+        if (transcodeExecutor != null && !transcodeExecutor.isShutdown()) {
+            transcodeExecutor.shutdownNow();
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -595,7 +604,7 @@ public class GroupChatActivity extends BaseActivity {
         String msgId = UUID.randomUUID().toString();
         long   now   = System.currentTimeMillis();
 
-        // ── Optimistic UI ──────────────────────────────────────────────────
+        // ── Optimistic UI ─────────────────────────────────────────��────────
         Message optimistic = new Message(msgId, groupId, myUid, text, now, false);
         optimistic.setStatus("pending");
         adapter.appendMessage(optimistic);
@@ -911,6 +920,85 @@ public class GroupChatActivity extends BaseActivity {
         uploadGroupMediaWithRetry(fileUri, mediaType, 0);
     }
 
+    /**
+     * Last-chance path for a video that exceeds {@link MediaLimits#MAX_BYTES}:
+     * re-encode to 720p H.264 / 128 kbps AAC, then re-measure. If the result is
+     * still over the cap the send is rejected and the message states the size,
+     * so the outcome is never silent.
+     */
+    private void maybeTranscodeThenUploadGroup(Uri fileUri, long originalBytes) {
+        if (isFinishing() || isDestroyed()) return;
+
+        if (!VideoTranscoder.isSupported()) {
+            Toast.makeText(this,
+                    MediaLimits.tooLargeMessage(originalBytes, "This video")
+                            + " This device has no video encoder available to compress it.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        final VideoTranscoder.Cancel cancel = new VideoTranscoder.Cancel();
+        final androidx.appcompat.app.AlertDialog dialog =
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.compressing_video_title)
+                        .setMessage(getString(R.string.compressing_video_body,
+                                MediaLimits.format(originalBytes), 0))
+                        .setCancelable(false)
+                        .setNegativeButton(android.R.string.cancel, (d, w) -> cancel.cancel())
+                        .create();
+        dialog.show();
+
+        if (transcodeExecutor == null || transcodeExecutor.isShutdown()) return;
+        transcodeExecutor.execute(() -> {
+            final VideoTranscoder.Result result = VideoTranscoder.transcode(
+                    getApplicationContext(), fileUri, MediaLimits.MAX_BYTES,
+                    percent -> runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (dialog.isShowing()) {
+                            dialog.setMessage(getString(R.string.compressing_video_body,
+                                    MediaLimits.format(originalBytes), percent));
+                        }
+                    }),
+                    cancel);
+
+            runOnUiThread(() -> {
+                if (dialog.isShowing()) dialog.dismiss();
+
+                // Activity gone, or user cancelled: drop the partial output.
+                if (isFinishing() || isDestroyed() || cancel.isCancelled()) {
+                    if (result.output != null) result.output.delete();
+                    return;
+                }
+
+                if (!result.success) {
+                    Toast.makeText(GroupChatActivity.this,
+                            MediaLimits.tooLargeMessage(originalBytes, "This video")
+                                    + " Compression failed: " + result.error,
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                long compressed = MediaLimits.sizeOf(result.output);
+                if (MediaLimits.isOversize(compressed)) {
+                    result.output.delete();
+                    Toast.makeText(GroupChatActivity.this,
+                            getString(R.string.video_still_too_large,
+                                    MediaLimits.format(compressed),
+                                    MediaLimits.format(MediaLimits.MAX_BYTES)),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                Toast.makeText(GroupChatActivity.this,
+                        getString(R.string.video_compressed_ok,
+                                MediaLimits.format(originalBytes),
+                                MediaLimits.format(compressed)),
+                        Toast.LENGTH_SHORT).show();
+                uploadGroupMediaWithRetry(Uri.fromFile(result.output), "video", 0);
+            });
+        });
+    }
+
     private void uploadGroupMediaWithRetry(Uri fileUri, String mediaType, int retryCount) {
         if (isFinishing() || isDestroyed()) return;
         if (retryCount > 3) {
@@ -925,13 +1013,19 @@ public class GroupChatActivity extends BaseActivity {
             return;
         }
 
-        // Reject files over 500 MB before any upload work starts.
+        // Cap check before any read, compression, encryption, or upload work.
+        // Oversized videos are routed through the transcoder first; anything
+        // else over the ceiling is rejected with its measured size.
         if (retryCount == 0) {
             long size = getGroupFileSize(fileUri);
-            if (size > 500 * 1024 * 1024L) {
-                Toast.makeText(this,
-                        "File is too large (max 500 MB). Please choose a smaller file.",
-                        Toast.LENGTH_LONG).show();
+            if (MediaLimits.isOversize(size)) {
+                if ("video".equals(mediaType)) {
+                    maybeTranscodeThenUploadGroup(fileUri, size);
+                } else {
+                    Toast.makeText(this,
+                            MediaLimits.tooLargeMessage(size, "File"),
+                            Toast.LENGTH_LONG).show();
+                }
                 return;
             }
         }
@@ -1209,15 +1303,9 @@ public class GroupChatActivity extends BaseActivity {
     }
 
     /** Returns the file size in bytes from ContentResolver, or 0 if unavailable. */
+    /** Size of a picked Uri, or -1 when unresolvable. See {@link MediaLimits#sizeOf}. */
     private long getGroupFileSize(Uri uri) {
-        android.database.Cursor c = getContentResolver().query(
-                uri, new String[]{android.provider.OpenableColumns.SIZE}, null, null, null);
-        if (c == null) return 0;
-        try {
-            if (!c.moveToFirst()) return 0;
-            int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
-            return idx >= 0 ? c.getLong(idx) : 0;
-        } finally { c.close(); }
+        return MediaLimits.sizeOf(this, uri);
     }
 
     /** Reads all bytes from a content URI. Returns null on error. */
