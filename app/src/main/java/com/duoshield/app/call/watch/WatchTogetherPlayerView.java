@@ -8,6 +8,7 @@ import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -150,6 +151,20 @@ public class WatchTogetherPlayerView extends WebView {
         s.setAllowUniversalAccessFromFileURLs(false);
         s.setGeolocationEnabled(false);
 
+        // Present as an ordinary mobile browser.
+        //
+        // Android's stock WebView user agent carries the "; wv" marker (and a legacy
+        // "Version/4.0" token). YouTube's embed treats that as a non-browser client and
+        // answers a share of otherwise-embeddable videos with an error instead of a stream —
+        // which surfaced as "this video can't be played inside Watch Together" for videos
+        // that play fine in Chrome on the same device. Dropping the marker leaves a genuine,
+        // unmodified Chrome UA string; nothing else about the request changes.
+        String ua = s.getUserAgentString();
+        if (ua != null && !ua.isEmpty()) {
+            s.setUserAgentString(
+                    ua.replace("; wv)", ")").replace(" Version/4.0", ""));
+        }
+
         setBackgroundColor(0xFF000000);
 
         // Pin navigation to YouTube. Any attempt to navigate elsewhere is refused so the
@@ -171,6 +186,13 @@ public class WatchTogetherPlayerView extends WebView {
                 return request.isForMainFrame();
             }
         });
+
+        // An HTML5 media surface needs a WebChromeClient present. With none installed the
+        // WebView answers the embed's permission and presentation callbacks with the
+        // framework default of "denied", which the IFrame player can report as a playback
+        // error. This one grants nothing extra — it exists so those callbacks are answered
+        // by something rather than refused by omission.
+        setWebChromeClient(new WebChromeClient());
 
         // Expose the JS→Java bridge. Only the small, typed callback surface below is
         // reachable from the page.
