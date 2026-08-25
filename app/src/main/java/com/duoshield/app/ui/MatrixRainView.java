@@ -9,9 +9,19 @@ import android.text.TextPaint;
 import android.util.AttributeSet;
 import android.view.View;
 
+import com.duoshield.app.util.MotionBudget;
+
 import java.util.Random;
 
 public class MatrixRainView extends View {
+
+    /**
+     * Whether the rain is allowed to animate. False on LOW-tier devices (e.g. the Helio P35 in a
+     * Poco C51) and whenever the user has disabled system animations: the view then paints a
+     * single static frame and never schedules another tick, so this full-screen effect — the
+     * heaviest of all the decorative views — costs nothing after first layout.
+     */
+    private boolean animate = true;
 
     private static final char[] GLYPHS = "アイウエ01ΩΣ#βΔ≡Ψ".toCharArray();
 
@@ -51,6 +61,9 @@ public class MatrixRainView extends View {
         dropY = new float[cols];
         for (int i = 0; i < cols; i++) dropY[i] = -random.nextFloat() * h;
         sized = true;
+        // When the rain is disabled we still want one static frame painted once the view is
+        // measured, so the background reads as intentional rather than blank.
+        if (!animate) invalidate();
     }
 
     @Override
@@ -84,12 +97,24 @@ public class MatrixRainView extends View {
             textPaint.setAlpha(230);
             canvas.drawText(glyphBuf, 0, 1, x, dropY[col], textPaint);
 
-            dropY[col] += (3f + random.nextFloat() * 4f) * density;
-            if (dropY[col] > height + 20f * density && random.nextFloat() > 0.96f)
-                dropY[col] = -20f * density;
+            // Only advance the drops when animating; a disabled view stays on its first frame.
+            if (animate) {
+                dropY[col] += (3f + random.nextFloat() * 4f) * density;
+                if (dropY[col] > height + 20f * density && random.nextFloat() > 0.96f)
+                    dropY[col] = -20f * density;
+            }
         }
     }
 
-    @Override protected void onAttachedToWindow() { super.onAttachedToWindow(); handler.post(tickRunnable); }
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        animate = !MotionBudget.disableHeavyDecoration(getContext());
+        if (animate) {
+            handler.post(tickRunnable);
+        } else {
+            invalidate(); // paint a single static frame instead of looping
+        }
+    }
+
     @Override protected void onDetachedFromWindow() { super.onDetachedFromWindow(); handler.removeCallbacks(tickRunnable); }
 }

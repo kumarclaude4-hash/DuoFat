@@ -8,9 +8,12 @@ import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+
+import com.duoshield.app.util.MotionBudget;
 
 public class FingerprintScanView extends View {
 
@@ -34,6 +37,10 @@ public class FingerprintScanView extends View {
     private ValueAnimator scanAnimator;
     private float scanFraction = 0f;
     private float dp;
+
+    // Frame-pacing (see MotionBudget): redraws capped on LOW-tier devices.
+    private long frameIntervalMs = 0L;
+    private long lastFrameUptime = 0L;
 
     public FingerprintScanView(Context context) { super(context); init(); }
     public FingerprintScanView(Context context, AttributeSet attrs) { super(context, attrs); init(); }
@@ -120,12 +127,22 @@ public class FingerprintScanView extends View {
 
     public void startScan() {
         if (scanAnimator != null && scanAnimator.isRunning()) return;
+        // Respect the OS "remove animations" setting: draw one static frame, no loop.
+        if (MotionBudget.staticOnly(getContext())) { invalidate(); return; }
+        frameIntervalMs = MotionBudget.frameIntervalMs(getContext());
+        lastFrameUptime = 0L;
         scanAnimator = ValueAnimator.ofFloat(0f, 1f);
         scanAnimator.setDuration(2200);
         scanAnimator.setRepeatCount(ValueAnimator.INFINITE);
         scanAnimator.setRepeatMode(ValueAnimator.REVERSE);
         scanAnimator.setInterpolator(new LinearInterpolator());
-        scanAnimator.addUpdateListener(a -> { scanFraction = (float) a.getAnimatedValue(); invalidate(); });
+        scanAnimator.addUpdateListener(a -> {
+            scanFraction = (float) a.getAnimatedValue();
+            if (MotionBudget.shouldDrawFrame(frameIntervalMs, lastFrameUptime)) {
+                lastFrameUptime = SystemClock.uptimeMillis();
+                invalidate();
+            }
+        });
         scanAnimator.start();
     }
 

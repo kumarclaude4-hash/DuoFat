@@ -10,6 +10,8 @@ import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.View;
 
+import com.duoshield.app.util.MotionBudget;
+
 import java.util.Random;
 
 /**
@@ -31,6 +33,13 @@ public class DecryptGridView extends View {
     private final Random  random          = new Random();
 
     private int lockStep = 0;
+
+    /**
+     * Delay between glyph scrambles. Doubled on LOW-tier devices (see MotionBudget) so the grid
+     * still reads as "decrypting" but redraws half as often, and the whole loop is skipped when
+     * the user has disabled system animations.
+     */
+    private long scrambleIntervalMs = 80L;
 
     // Pre-allocated per-cell RectFs — set in onSizeChanged, reused in onDraw
     private final RectF[] cellRects = new RectF[9];
@@ -75,6 +84,17 @@ public class DecryptGridView extends View {
     public void startAnimation() {
         stopAnimation();
         lockStep = 0;
+        // Respect the OS "remove animations" setting: show the solved grid, no loops.
+        if (MotionBudget.staticOnly(getContext())) {
+            for (int i = 0; i < 9; i++) {
+                cellChars[i] = "\u2713";
+                locked[i]    = true;
+            }
+            invalidate();
+            return;
+        }
+        // Halve the scramble rate on LOW-tier devices.
+        scrambleIntervalMs = MotionBudget.frameIntervalMs(getContext()) > 0L ? 160L : 80L;
         for (int i = 0; i < 9; i++) {
             cellChars[i] = "?";
             locked[i]    = false;
@@ -108,7 +128,7 @@ public class DecryptGridView extends View {
                 }
             }
             invalidate();
-            scrambleHandler.postDelayed(this, 80);
+            scrambleHandler.postDelayed(this, scrambleIntervalMs);
         }
     };
 
