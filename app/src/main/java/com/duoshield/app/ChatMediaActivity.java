@@ -235,6 +235,11 @@ public class ChatMediaActivity extends BaseActivity {
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /**
+     * Dedicated to video re-encoding. Kept separate from {@link #executor} so a
+     * multi-minute transcode cannot starve queued uploads or receipt writes.
+     */
+    private final ExecutorService transcodeExecutor = Executors.newSingleThreadExecutor();
     private ListenerRegistration  msgListener;
     private ListenerRegistration  convListener;
 
@@ -996,6 +1001,22 @@ public class ChatMediaActivity extends BaseActivity {
             return;
         }
 
+        // Voice notes had no cap at all: a long recording was read fully into
+        // memory (readFileBytes) and only failed at the upload endpoint.
+        if (retryCount == 0) {
+            long voiceBytes = MediaLimits.sizeOf(f);
+            if (MediaLimits.isOversize(voiceBytes)) {
+                final String reject = MediaLimits.tooLargeMessage(voiceBytes, "This voice note");
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    uploadProgressContainer.setVisibility(View.GONE);
+                    Toast.makeText(ChatMediaActivity.this, reject, Toast.LENGTH_LONG).show();
+                });
+                f.delete();
+                return;
+            }
+        }
+
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
             uploadProgressContainer.setVisibility(View.VISIBLE);
@@ -1450,6 +1471,7 @@ public class ChatMediaActivity extends BaseActivity {
         super.onDestroy();
         if (!executor.isShutdown())   executor.shutdownNow();
         if (!dbExecutor.isShutdown()) dbExecutor.shutdownNow();
+        if (!transcodeExecutor.isShutdown()) transcodeExecutor.shutdownNow();
         // Clean up any decrypted voice temp file left from the last playback.
         if (currentVoiceTmpFile != null) {
             currentVoiceTmpFile.delete();
@@ -2390,7 +2412,7 @@ public class ChatMediaActivity extends BaseActivity {
                 .start();
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // ═════════════════���════════════════════════════════════════════
     // REPLY
     // ══════════════════════════════════════════════════════════════
 
@@ -2810,10 +2832,15 @@ public class ChatMediaActivity extends BaseActivity {
     private void uploadAlbumItemWithRetry(Uri fileUri, String mediaType, int retryCount) {
         if (isFinishing() || isDestroyed()) return;
         if (retryCount > 3) { onAlbumItemFailed(); return; }
-        if (retryCount == 0 && getFileSize(fileUri) > 500 * 1024 * 1024L) {
-            Toast.makeText(this, "One file is too large (max 500 MB).", Toast.LENGTH_SHORT).show();
-            onAlbumItemFailed();
-            return;
+        // Reject the offending item only — the rest of the album still uploads.
+        // The message names the item's size so the user knows which pick to drop.
+        if (retryCount == 0) {
+            String reject = MediaLimits.checkOversize(this, fileUri, "One item");
+            if (reject != null) {
+                Toast.makeText(this, reject, Toast.LENGTH_LONG).show();
+                onAlbumItemFailed();
+                return;
+            }
         }
         String ext  = "video".equals(mediaType) ? ".mp4" : ".jpg";
         String mime = "video".equals(mediaType) ? "video/mp4" : "image/jpeg";
@@ -2974,14 +3001,19 @@ public class ChatMediaActivity extends BaseActivity {
             return;
         }
 
-        // Reject files over 500 MB before any upload work starts.
-        // Applies to both images and videos — limit raised from 20 MB.
+        // Cap check before any read, compression, encryption, or upload work.
+        // Videos over the cap are handed to the transcoder first (see
+        // maybeTranscodeThenUpload); everything else is rejected outright.
         if (retryCount == 0) {
             long size = getFileSize(fileUri);
-            if (size > 500 * 1024 * 1024L) {
-                Toast.makeText(this,
-                        "File is too large (max 500 MB). Please choose a smaller file.",
-                        Toast.LENGTH_LONG).show();
+            if (MediaLimits.isOversize(size)) {
+                if ("video".equals(mediaType)) {
+                    maybeTranscodeThenUpload(fileUri, size);
+                } else {
+                    Toast.makeText(this,
+                            MediaLimits.tooLargeMessage(size, "File"),
+                            Toast.LENGTH_LONG).show();
+                }
                 return;
             }
         }
@@ -3185,15 +3217,97 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     /** Returns the file size in bytes from ContentResolver, or 0 if unavailable. */
+    /**
+     * Last-chance path for a video that exceeds {@link MediaLimits#MAX_BYTES}:
+     * re-encode it to 720p H.264 / 128 kbps AAC, then re-measure.
+     *
+     * <p>If the re-encoded file still exceeds the cap the send is rejected and
+     * the message states the resulting size, so the outcome is never silent.
+     * The transcode runs on its own executor rather than {@link #executor} so a
+     * long compression job cannot block queued uploads or Room writes.
+     */
+    private void maybeTranscodeThenUpload(Uri fileUri, long originalBytes) {
+        if (isFinishing() || isDestroyed()) return;
+
+        if (!VideoTranscoder.isSupported()) {
+            Toast.makeText(this,
+                    MediaLimits.tooLargeMessage(originalBytes, "This video")
+                            + " This device has no video encoder available to compress it.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        final VideoTranscoder.Cancel cancel = new VideoTranscoder.Cancel();
+        final androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.compressing_video_title)
+                .setMessage(getString(R.string.compressing_video_body,
+                        MediaLimits.format(originalBytes), 0))
+                .setCancelable(false)
+                .setNegativeButton(android.R.string.cancel, (d, w) -> cancel.cancel())
+                .create();
+        dialog.show();
+
+        if (transcodeExecutor.isShutdown()) return;
+        transcodeExecutor.execute(() -> {
+            final VideoTranscoder.Result result = VideoTranscoder.transcode(
+                    getApplicationContext(), fileUri, MediaLimits.MAX_BYTES,
+                    percent -> runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (dialog.isShowing()) {
+                            dialog.setMessage(getString(R.string.compressing_video_body,
+                                    MediaLimits.format(originalBytes), percent));
+                        }
+                    }),
+                    cancel);
+
+            runOnUiThread(() -> {
+                if (dialog.isShowing()) dialog.dismiss();
+
+                // Activity gone, or user cancelled: drop the partial output.
+                if (isFinishing() || isDestroyed() || cancel.isCancelled()) {
+                    if (result.output != null) result.output.delete();
+                    return;
+                }
+
+                if (!result.success) {
+                    Toast.makeText(ChatMediaActivity.this,
+                            MediaLimits.tooLargeMessage(originalBytes, "This video")
+                                    + " Compression failed: " + result.error,
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                long compressed = MediaLimits.sizeOf(result.output);
+                if (MediaLimits.isOversize(compressed)) {
+                    result.output.delete();
+                    Toast.makeText(ChatMediaActivity.this,
+                            getString(R.string.video_still_too_large,
+                                    MediaLimits.format(compressed),
+                                    MediaLimits.format(MediaLimits.MAX_BYTES)),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                Toast.makeText(ChatMediaActivity.this,
+                        getString(R.string.video_compressed_ok,
+                                MediaLimits.format(originalBytes),
+                                MediaLimits.format(compressed)),
+                        Toast.LENGTH_SHORT).show();
+                uploadMedia(Uri.fromFile(result.output), "video");
+            });
+        });
+    }
+
+    /**
+     * Size of a picked Uri in bytes, or -1 when it genuinely cannot be resolved.
+     *
+     * <p>Delegates to {@link MediaLimits#sizeOf} so every caller sees the same
+     * provider-SIZE → file-descriptor → raw-file probe chain. The old inline
+     * implementation returned 0 whenever the provider omitted SIZE, which read
+     * as "empty file" and silently bypassed the cap check.
+     */
     private long getFileSize(Uri uri) {
-        android.database.Cursor c = getContentResolver().query(
-                uri, new String[]{android.provider.OpenableColumns.SIZE}, null, null, null);
-        if (c == null) return 0;
-        try {
-            if (!c.moveToFirst()) return 0;
-            int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
-            return idx >= 0 ? c.getLong(idx) : 0;
-        } finally { c.close(); }
+        return MediaLimits.sizeOf(this, uri);
     }
 
     /**
