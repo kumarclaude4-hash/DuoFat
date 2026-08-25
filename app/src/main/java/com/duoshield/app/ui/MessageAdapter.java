@@ -1198,8 +1198,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 final String finalUrl = iUrl;
                 final String finalKey = iKey;
                 final String finalType = iType;
-                final String albumSender = mine ? "You" : partnerName;
+                final String albumSender  = mine ? "You" : partnerName;
                 final long   albumTs      = msg.getTimestamp();
+                // The caption belongs to the album message as a whole, so every slot carries
+                // it — matches the single-image and video launch sites, which pass all three.
+                final String albumCaption = msg.getCaption();
                 slots[i].setOnClickListener(v -> {
                     Intent intent;
                     if ("video".equals(finalType)) {
@@ -1212,12 +1215,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         // whole-blob. The viewer's false default is the accurate answer.
                         intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_SENDER_NAME, albumSender);
                         intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_TIMESTAMP, albumTs);
+                        intent.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_CAPTION, albumCaption);
                     } else {
                         intent = new Intent(ctx, com.duoshield.app.FullScreenImageActivity.class);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, finalUrl);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MEDIA_KEY, finalKey);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_SENDER_NAME, albumSender);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_TIMESTAMP, albumTs);
+                        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_CAPTION, albumCaption);
                     }
                     ctx.startActivity(intent);
                 });

@@ -40,8 +40,18 @@ public class FullScreenImageActivity extends BaseActivity {
 
     /** Currently displayed bitmap, kept so Rotate can re-render it in place. */
     private Bitmap  currentBitmap;
-    /** Cumulative user rotation applied via the Rotate button, in degrees. */
-    private int     rotationDegrees = 0;
+    /**
+     * The rotated bitmap actually on screen, used as a low-memory fallback when
+     * baking rotation into a full-resolution save/share would OOM.
+     */
+    private Bitmap  displayBitmap;
+    /**
+     * Cumulative user rotation applied via the Rotate button, in degrees.
+     *
+     * <p>Volatile because Save and Share read it from the background threads that
+     * do the decrypt/encode work, while the Rotate button writes it on the main thread.
+     */
+    private volatile int rotationDegrees = 0;
     /** Whether the top/bottom chrome is currently shown (toggled by a single tap). */
     private boolean chromeVisible = true;
 
@@ -134,10 +144,70 @@ public class FullScreenImageActivity extends BaseActivity {
         try {
             Bitmap rotated = Bitmap.createBitmap(currentBitmap, 0, 0,
                     currentBitmap.getWidth(), currentBitmap.getHeight(), m, true);
+            displayBitmap = rotated;
             photoView.setImageBitmap(rotated);
         } catch (OutOfMemoryError oom) {
             Toast.makeText(this, "Not enough memory to rotate", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /**
+     * Re-encodes {@code src} with the user's current rotation baked in, so a photo
+     * straightened with the Rotate button does not come out sideways again in the
+     * gallery or in the app it was shared to.
+     *
+     * <p>Rotation is applied to the freshly fetched full-resolution bytes rather than to
+     * the on-screen bitmap, because the displayed copy is deliberately downsampled to the
+     * view size ({@code inSampleSize}) — saving that would silently cost resolution.
+     *
+     * <p>A full-resolution decode is exactly the allocation the viewer avoids elsewhere, so
+     * an {@link OutOfMemoryError} on a low-RAM device is a real outcome, not a theoretical
+     * one. When it happens the already-rotated display bitmap is used instead: a correctly
+     * oriented smaller image beats a sideways large one. Only if there is no display bitmap
+     * either do the original bytes go through untouched.
+     *
+     * <p>Must be called off the main thread.
+     *
+     * @return rotated JPEG bytes, or {@code src} unchanged when no rotation is pending.
+     */
+    private byte[] withRotationBaked(byte[] src) {
+        final int degrees = rotationDegrees;
+        if (src == null || degrees == 0) return src;
+
+        android.graphics.Matrix m = new android.graphics.Matrix();
+        m.postRotate(degrees);
+        Bitmap full = null, rotated = null;
+        try {
+            full = BitmapFactory.decodeByteArray(src, 0, src.length);
+            if (full == null) return src;
+            rotated = Bitmap.createBitmap(full, 0, 0, full.getWidth(), full.getHeight(), m, true);
+            return compressJpeg(rotated);
+        } catch (OutOfMemoryError oom) {
+            android.util.Log.w("FullScreenImage",
+                    "Full-res rotate OOM — falling back to the display bitmap");
+            Bitmap shown = displayBitmap;
+            if (shown != null && !shown.isRecycled()) {
+                try {
+                    return compressJpeg(shown);
+                } catch (OutOfMemoryError ignored) {
+                    return src;
+                }
+            }
+            return src;
+        } catch (Exception e) {
+            android.util.Log.w("FullScreenImage", "Rotate-on-export failed — " + e.getMessage());
+            return src;
+        } finally {
+            // Only recycle the copies this method made; never the shared display bitmap.
+            if (rotated != null && rotated != full) rotated.recycle();
+            if (full != null && full != currentBitmap && full != displayBitmap) full.recycle();
+        }
+    }
+
+    private static byte[] compressJpeg(Bitmap bmp) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        bmp.compress(Bitmap.CompressFormat.JPEG, 95, out);
+        return out.toByteArray();
     }
 
     // ── Image loading (decrypt-first for B2 / Supabase) ───────────────────────
@@ -174,6 +244,7 @@ public class FullScreenImageActivity extends BaseActivity {
                 showProgress(false);
                 if (bmp != null) {
                     currentBitmap   = bmp;
+                    displayBitmap   = null;
                     rotationDegrees = 0;
                     photoView.setImageBitmap(bmp);
                 } else {
@@ -304,7 +375,9 @@ public class FullScreenImageActivity extends BaseActivity {
         }
     }
 
-    private void writeImageToGallery(byte[] plainBytes) {
+    /** Writes to the gallery. Runs on a background thread (rotation re-encodes here). */
+    private void writeImageToGallery(byte[] rawBytes) {
+        final byte[] plainBytes = withRotationBaked(rawBytes);
         try {
             ContentValues values = new ContentValues();
             values.put(MediaStore.Images.Media.DISPLAY_NAME,
@@ -338,7 +411,7 @@ public class FullScreenImageActivity extends BaseActivity {
         }
     }
 
-    // ── Share ─────────────────────────────────────────────────────────────────
+    // ── Share ────��────────────────────────────────────────────────────────────
 
     private void shareImage() {
         if (imageUrl == null) return;
@@ -348,8 +421,15 @@ public class FullScreenImageActivity extends BaseActivity {
             B2StorageHelper.loadMedia(this, imageUrl, mediaKey, new B2StorageHelper.MediaCallback() {
                 @Override public void onLoaded(byte[] plainBytes) {
                     if (isDestroyed() || isFinishing()) return;
-                    com.duoshield.app.util.SecureShareHelper.shareImage(
-                            FullScreenImageActivity.this, plainBytes);
+                    // Hop to a worker: withRotationBaked() does a full-res decode + JPEG
+                    // encode, and this callback can land on the main thread.
+                    Executors.newSingleThreadExecutor().execute(() -> {
+                        final byte[] out = withRotationBaked(plainBytes);
+                        if (isDestroyed() || isFinishing()) return;
+                        runOnUiThread(() ->
+                                com.duoshield.app.util.SecureShareHelper.shareImage(
+                                        FullScreenImageActivity.this, out));
+                    });
                 }
                 @Override public void onError(Exception e) {
                     if (isDestroyed() || isFinishing()) return;
@@ -364,7 +444,7 @@ public class FullScreenImageActivity extends BaseActivity {
                     java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
                     byte[] buf = new byte[4096]; int n;
                     while ((n = in.read(buf)) >= 0) baos.write(buf, 0, n);
-                    final byte[] bytes = baos.toByteArray();
+                    final byte[] bytes = withRotationBaked(baos.toByteArray());
                     if (isDestroyed() || isFinishing()) return;
                     runOnUiThread(() ->
                             com.duoshield.app.util.SecureShareHelper.shareImage(
