@@ -91,6 +91,22 @@ public class CallManager {
     private AudioSource audioSource;
     private VideoTrack localVideoTrack;
     private AudioTrack localAudioTrack;
+    /** Remote video track, retained so secondary screens can render a live PiP. */
+    private VideoTrack remoteVideoTrack;
+    /** Current microphone mute state, mirrored so other screens can draw the badge. */
+    private boolean micMuted = false;
+
+    /**
+     * The manager driving the call that is on screen right now, or {@code null} when no call
+     * is active.
+     *
+     * <p>Needed because the live WebRTC tracks and the shared EGL context belong to this
+     * object, while {@link InCallChatActivity} is a separate activity that has to render the
+     * same video into its floating PiP. Re-creating a capturer there would fight the running
+     * call for the camera, so the chat screen attaches an extra sink to these tracks instead.
+     * Cleared in {@link #cleanup(boolean)} so the reference can never outlive the tracks.
+     */
+    private static volatile CallManager active;
 
     private String callId;
     private String myUid;
@@ -327,6 +343,9 @@ public class CallManager {
      */
     public void prepareEgl() {
         initFactory();
+        // Publish before tracks exist: the chat screen re-reads the tracks each time it binds,
+        // so being visible early costs nothing and avoids a race on fast call setup.
+        active = this;
     }
 
     public String getCallId() {
@@ -523,6 +542,7 @@ public class CallManager {
                 if (track instanceof VideoTrack) {
                     VideoTrack remote = (VideoTrack) track;
                     remote.setEnabled(true);
+                    remoteVideoTrack = remote;
                     if (listener != null) listener.onRemoteVideoTrack(remote);
                 } else if (track instanceof AudioTrack) {
                     // Root-cause fix for one-way audio: the remote AudioTrack can arrive
@@ -936,8 +956,23 @@ public class CallManager {
     // ─── Controls ────────────────────────────────────────────────────────────
 
     public void setMuted(boolean muted) {
+        micMuted = muted;
         if (localAudioTrack != null) localAudioTrack.setEnabled(!muted);
     }
+
+    // ─── Shared access for secondary in-call screens ─────────────────────────
+
+    /** The manager driving the call currently on screen, or {@code null} when idle. */
+    public static CallManager getActive() { return active; }
+
+    /** Live local (camera) track, or {@code null} before capture starts / after release. */
+    public VideoTrack getLocalVideoTrack() { return localVideoTrack; }
+
+    /** Live remote track, or {@code null} until the partner's video arrives. */
+    public VideoTrack getRemoteVideoTrack() { return remoteVideoTrack; }
+
+    /** Whether the microphone is muted — drawn as a badge on the chat screen's PiP. */
+    public boolean isMicMuted() { return micMuted; }
 
     public void setCameraEnabled(boolean enabled) {
         if (localVideoTrack != null) localVideoTrack.setEnabled(enabled);
@@ -957,13 +992,22 @@ public class CallManager {
         }
     }
 
+    /**
+     * Routes call audio to the speaker or back to the earpiece.
+     *
+     * <p>This used to call {@code setSpeakerphoneOn()} directly, which Android 12+ ignores
+     * whenever a communication device is selected — the reason the speaker toggle did nothing
+     * on modern devices. Routing now goes through {@link AudioRouteController}, which uses
+     * {@code setCommunicationDevice()} on API 31+ and only falls back to the legacy call on
+     * older releases.
+     */
     public void setSpeakerOn(boolean on) {
-        // FIX #8: Both ternary branches were identical (MODE_IN_COMMUNICATION), making
-        // setMode() a no-op. The mode must stay MODE_IN_COMMUNICATION throughout the call;
-        // only the speaker routing changes via setSpeakerphoneOn().
-        AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
-        if (am != null) {
-            am.setSpeakerphoneOn(on);
+        AudioRouteController controller = new AudioRouteController(context);
+        AudioRouteController.Kind want = on
+                ? AudioRouteController.Kind.SPEAKER
+                : AudioRouteController.Kind.EARPIECE;
+        for (AudioRouteController.Route r : controller.availableRoutes()) {
+            if (r.kind == want) { controller.apply(r); return; }
         }
     }
 
@@ -1010,6 +1054,11 @@ public class CallManager {
         if (callDocListener != null) { callDocListener.remove(); callDocListener = null; }
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
         if (!releasePc) return;
+
+        // Stop handing these tracks out before they are disposed below — a secondary screen
+        // that renders a disposed track crashes in native code.
+        if (active == this) active = null;
+        remoteVideoTrack = null;
 
         try {
             if (videoCapturer != null) { videoCapturer.stopCapture(); videoCapturer.dispose(); videoCapturer = null; }

@@ -400,54 +400,68 @@
         android:layout_height="wrap_content"
         android:visibility="gone">
 
-        <!-- Thumbnail preview of what's being sent -->
-        <ImageView
-            android:id="@+id/ivUploadThumb"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:scaleType="centerCrop"
-            android:visibility="gone"/>
-
-        <!-- Dark overlay on top of thumbnail -->
-        <View
-            android:id="@+id/uploadThumbDim"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:background="#99000000"
-            android:visibility="gone"/>
-
-        <!-- No-thumbnail fallback background -->
+        <!-- Slim bar background — always drawn, thumbnail or not -->
         <View
             android:id="@+id/uploadPlainBg"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="72dp"
+            android:layout_height="match_parent"
             android:background="#CC191620"/>
 
-        <!-- Progress centred over thumbnail/fallback -->
+        <!-- Compact single-line status row: thumb + spinner + label -->
         <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="72dp"
-            android:layout_gravity="center"
-            android:orientation="vertical"
-            android:gravity="center">
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="14dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <!-- Thumbnail of what's being sent (small, WhatsApp-style) -->
+            <FrameLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="10dp">
+
+                <ImageView
+                    android:id="@+id/ivUploadThumb"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:scaleType="centerCrop"
+                    android:background="@drawable/bg_media_rounded"
+                    android:clipToOutline="true"
+                    android:outlineProvider="background"
+                    android:contentDescription="Media being sent"
+                    android:visibility="gone"/>
+
+                <View
+                    android:id="@+id/uploadThumbDim"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="#66000000"
+                    android:visibility="gone"/>
+            </FrameLayout>
 
             <ProgressBar
                 android:id="@+id/uploadProgress"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:indeterminate="true"
                 android:indeterminateTint="@color/accent"/>
 
             <TextView
                 android:id="@+id/tvUploadPct"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
                 android:text="0%"
                 android:textColor="#FFFFFF"
-                android:textSize="11sp"
+                android:textSize="12sp"
+                android:maxLines="1"
+                android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
-                android:layout_marginTop="5dp"/>
+                android:layout_marginStart="10dp"/>
         </LinearLayout>
     </FrameLayout>
 

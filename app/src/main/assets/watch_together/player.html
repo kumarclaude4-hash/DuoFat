@@ -53,7 +53,7 @@
       background: #000;
       overflow: hidden;
     }
-    #player, iframe {
+    #stage, #player, iframe {
       width: 100%;
       height: 100%;
       border: 0;
@@ -62,7 +62,7 @@
   </style>
 </head>
 <body>
-  <div id="player"></div>
+  <div id="stage"><div id="player"></div></div>
 
   <script>
     (function () {
@@ -71,6 +71,16 @@
       // Position tick cadence. 500ms is frequent enough for the Java side to hold a
       // fresh local position for drift comparison, without burning battery.
       var TICK_INTERVAL_MS = 500;
+
+      /**
+       * Origin declared to the IFrame API. MUST match the base URL
+       * WatchTogetherPlayerView loads this page with, or YouTube treats the embed as
+       * unattributable and refuses playable videos. See createPlayer().
+       */
+      var PLAYER_ORIGIN = 'https://www.youtube.com';
+
+      /** Settling time before a rebuilt embed is constructed. See handleError(). */
+      var RETRY_DELAY_MS = 400;
 
       var player = null;
       var ready = false;
@@ -87,6 +97,14 @@
       // null means "nothing was requested", which is distinct from 0 / false.
       var pendingVolume = null;
       var pendingMuted = null;
+
+      /**
+       * The most recent cue, and the video a rebuild has already been spent on. Together
+       * these bound the retry in handleError() to one attempt per video, so a video that
+       * genuinely cannot play here cannot put the page in a rebuild loop.
+       */
+      var lastCue = null;
+      var retriedForVideoId = null;
 
       function bridge() {
         return (typeof DuoShieldWT !== 'undefined') ? DuoShieldWT : null;
@@ -147,8 +165,11 @@
          */
         cue: function (videoId, posMs, playing, rate) {
           if (!videoId) return;
+          // Remembered so handleError() can rebuild the embed and resume the same video at
+          // the same position rather than losing the session to a transient failure.
+          lastCue = { videoId: videoId, posMs: posMs, playing: playing, rate: rate };
           if (!ready || !player) {
-            pending = { videoId: videoId, posMs: posMs, playing: playing, rate: rate };
+            pending = lastCue;
             return;
           }
           // Ticking must be (re)started by every command that can resume playback, not
@@ -250,10 +271,29 @@
 
       // ── YouTube IFrame API lifecycle ──────────────────────────────────────
 
-      window.onYouTubeIframeAPIReady = function () {
+      /**
+       * Builds (or rebuilds) the embed.
+       *
+       * The `origin` / `widget_referrer` / `enablejsapi` trio is NOT optional and is the
+       * reason this used to fail on almost every video. The page is served to the WebView
+       * via loadDataWithBaseURL, so the iframe request carries no ordinary Referer header.
+       * Without an explicit origin YouTube cannot attribute the embed to a permitted
+       * referrer and answers with error 153 — "cannot be played in an embedded player" —
+       * for videos that are in fact perfectly embeddable. Declaring the origin (matching
+       * the WebView's base URL) makes the embed a first-class, attributable one and the
+       * rejections stop.
+       */
+      function createPlayer() {
+        var stage = document.getElementById('stage');
+        // YT.Player replaces its target element with an iframe, so a rebuild needs a fresh
+        // target rather than the consumed one.
+        if (stage && !document.getElementById('player')) {
+          stage.innerHTML = '<div id="player"></div>';
+        }
         player = new YT.Player('player', {
           height: '100%',
           width: '100%',
+          host: PLAYER_ORIGIN,
           playerVars: {
             // No YouTube chrome we do not need; playback is driven by DuoShield UI.
             autoplay: 0,
@@ -263,7 +303,12 @@
             rel: 0,
             fs: 0,
             playsinline: 1,
-            iv_load_policy: 3
+            iv_load_policy: 3,
+            // See createPlayer()'s javadoc: these three are what keep YouTube from
+            // refusing embeddable videos with error 153 inside a WebView.
+            enablejsapi: 1,
+            origin: PLAYER_ORIGIN,
+            widget_referrer: PLAYER_ORIGIN
           },
           events: {
             onReady: function () {
@@ -304,13 +349,48 @@
               }
             },
             onError: function (e) {
-              var b = bridge();
-              if (b && b.onPlayerError) {
-                safe(function () { b.onPlayerError(e.data); });
-              }
+              handleError((e && typeof e.data === 'number') ? e.data : -1);
             }
           }
         });
+      }
+
+      /**
+       * Absorbs the recoverable failures instead of surrendering the surface to Java.
+       *
+       * Codes 2 / 5 / 100 / 153 are all conditions a rebuilt embed routinely survives: a
+       * request that raced the iframe's own initialization, an HTML5 player that came up
+       * wrong, or an embed YouTube declined to attribute on the first attempt. The old
+       * behaviour reported every one of them straight to Java, which latched the video as
+       * permanently unplayable and told the user to pick a different one — for a video that
+       * plays fine on the second try.
+       *
+       * One rebuild per video, then give up honestly. 101/150 (owner disallowed embedding)
+       * is genuinely final and is reported immediately; retrying it would only stall the
+       * user in front of a black rectangle.
+       */
+      function handleError(code) {
+        var retryable = (code === 2 || code === 5 || code === 100 || code === 153);
+        if (retryable && lastCue && retriedForVideoId !== lastCue.videoId) {
+          retriedForVideoId = lastCue.videoId;
+          var again = lastCue;
+          ready = false;
+          stopTicking();
+          safe(function () { if (player && player.destroy) player.destroy(); });
+          player = null;
+          // Replayed by onReady, exactly like a cue that arrived before construction.
+          pending = again;
+          setTimeout(function () { safe(createPlayer); }, RETRY_DELAY_MS);
+          return;
+        }
+        var b = bridge();
+        if (b && b.onPlayerError) {
+          safe(function () { b.onPlayerError(code); });
+        }
+      }
+
+      window.onYouTubeIframeAPIReady = function () {
+        createPlayer();
       };
     })();
   </script>
