@@ -530,7 +530,8 @@ public class ChatMediaActivity extends BaseActivity {
         adapter.setOnVoiceSpeedToggleListener(this::onVoiceSpeedToggle);
         LinearLayoutManager llm = new LinearLayoutManager(this);
         llm.setStackFromEnd(true);
-        llm.setInitialPrefetchItemCount(12);
+        llm.setInitialPrefetchItemCount(
+                DevicePerformanceTier.get(this).recyclerViewPrefetchCount());
         recyclerView.setLayoutManager(llm);
         // setHasFixedSize(true): RecyclerView dimensions are fixed to the screen;
         // adding/removing messages doesn't change the RecyclerView's own size.

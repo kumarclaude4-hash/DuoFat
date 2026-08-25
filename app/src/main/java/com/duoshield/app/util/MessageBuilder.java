@@ -16,7 +16,6 @@ import org.signal.libsignal.protocol.message.CiphertextMessage;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Executors;
 
 /**
  * Utility for sending text messages outside of {@code ChatMediaActivity}
@@ -56,7 +55,7 @@ public class MessageBuilder {
             return;
         }
 
-        Executors.newSingleThreadExecutor().execute(() -> {
+        SharedExecutors.executeSerial(ctx, () -> {
             try {
                 SignalCipherHelper.EncryptResult r =
                         SignalCipherHelper.encrypt(ctx, partnerUid, text);
@@ -148,7 +147,7 @@ public class MessageBuilder {
             return;
         }
 
-        Executors.newSingleThreadExecutor().execute(() -> {
+        SharedExecutors.executeSerial(ctx, () -> {
             String msgId  = UUID.randomUUID().toString();
             long   now    = System.currentTimeMillis();
 

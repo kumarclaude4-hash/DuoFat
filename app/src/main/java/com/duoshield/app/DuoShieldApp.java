@@ -12,6 +12,7 @@ import com.duoshield.app.util.AppLockManager;
 import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.StorageCleanupWorker;
 import com.duoshield.app.util.TempFileCleaner;
+import androidx.work.Constraints;
 import androidx.work.ExistingPeriodicWorkPolicy;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
@@ -131,9 +132,7 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
         // files and the B2 media cache.
         try {
             DevicePerformanceTier tier = DevicePerformanceTier.get(this);
-            long firestoreCacheBytes = tier == DevicePerformanceTier.LOW
-                    ? 50L * 1024 * 1024   // 50 MB for Helio P35 / G36 / 2–4 GB class
-                    : 100L * 1024 * 1024; // 100 MB for MID and HIGH
+            long firestoreCacheBytes = tier.firestoreCacheBytes();
             FirebaseFirestoreSettings settings = new FirebaseFirestoreSettings.Builder()
                     .setLocalCacheSettings(
                         PersistentCacheSettings.newBuilder()
@@ -225,7 +224,12 @@ public class DuoShieldApp extends Application implements Configuration.Provider 
                         "StorageCleanup",
                         ExistingPeriodicWorkPolicy.KEEP,
                         new PeriodicWorkRequest.Builder(
-                                StorageCleanupWorker.class, 1, TimeUnit.DAYS).build());
+                                StorageCleanupWorker.class, 1, TimeUnit.DAYS)
+                                .setConstraints(new Constraints.Builder()
+                                        .setRequiresBatteryNotLow(true)
+                                        .setRequiresStorageNotLow(true)
+                                        .build())
+                                .build());
 
                 // Rotate Signal signed pre-key when it is older than 7 days (checked daily).
                 SignedPreKeyScheduler.schedule(this);

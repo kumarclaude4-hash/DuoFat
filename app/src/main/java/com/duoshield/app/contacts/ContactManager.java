@@ -23,7 +23,7 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import com.duoshield.app.util.SharedExecutors;
 import java.util.regex.Pattern;
 
 /**
@@ -239,7 +239,7 @@ public class ContactManager {
         FirebaseAuth.getInstance().getCurrentUser().getIdToken(false)
             .addOnSuccessListener(result -> {
                 String idToken = result.getToken();
-                Executors.newSingleThreadExecutor().execute(() -> {
+                SharedExecutors.executeIo(context, () -> {
                     try {
                         String computedChatId = callCreateChatServer(
                                 idToken, myUid, partnerUid, myDisplayName, partnerName);

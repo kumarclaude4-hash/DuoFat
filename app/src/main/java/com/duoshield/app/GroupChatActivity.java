@@ -282,7 +282,7 @@ public class GroupChatActivity extends BaseActivity {
         LinearLayoutManager groupLlm = new LinearLayoutManager(this);
         groupLlm.setStackFromEnd(true);
         groupLlm.setInitialPrefetchItemCount(
-                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 4 : 12);
+                DevicePerformanceTier.get(this).recyclerViewPrefetchCount());
         recyclerView.setLayoutManager(groupLlm);
         recyclerView.setHasFixedSize(true);
         // Smaller off-screen view cache on LOW so cached rows do not pin decoded thumbnails

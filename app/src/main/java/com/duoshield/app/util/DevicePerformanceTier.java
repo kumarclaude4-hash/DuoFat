@@ -260,6 +260,43 @@ public enum DevicePerformanceTier {
         return this == LOW ? 2 : 4;
     }
 
+    /** Maximum queued short jobs before producers apply backpressure. */
+    public int shortJobQueueCapacity() {
+        return this == LOW ? 32 : 96;
+    }
+
+    /** Initial adjacent-item prefetch count for linear message lists. */
+    public int recyclerViewPrefetchCount() {
+        return this == LOW ? 2 : 8;
+    }
+
+    /** Maximum preview thumbnails kept active at once by album/send UIs. */
+    public int mediaPreviewCount() {
+        return this == LOW ? 6 : 16;
+    }
+
+    /** Maximum concurrent link-preview requests and retained entries. */
+    public int linkPreviewConcurrency() {
+        return this == LOW ? 1 : 3;
+    }
+
+    public int linkPreviewCacheEntries() {
+        return this == LOW ? 24 : 80;
+    }
+
+    /** Bitmap and decoded-resource budgets consumed by the Glide module. */
+    public long glideBitmapPoolBytes() {
+        return (this == LOW ? 8L : 32L) * 1024L * 1024L;
+    }
+
+    public long glideMemoryCacheBytes() {
+        return (this == LOW ? 6L : 16L) * 1024L * 1024L;
+    }
+
+    public long glideDiskCacheBytes() {
+        return (this == LOW ? 50L : 150L) * 1024L * 1024L;
+    }
+
     /** Firestore's persistent cache budget. */
     public long firestoreCacheBytes() {
         return (this == LOW ? 32L : 100L) * 1024L * 1024L;

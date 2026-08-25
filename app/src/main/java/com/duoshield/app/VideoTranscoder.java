@@ -13,6 +13,7 @@ import android.opengl.EGL14;
 import android.opengl.EGLConfig;
 import android.opengl.EGLContext;
 import android.opengl.EGLDisplay;
+import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
@@ -459,7 +460,7 @@ public final class VideoTranscoder {
         }
 
         void setPresentationTime(long nsecs) {
-            EGL14.eglPresentationTimeANDROID(display, surface, nsecs);
+            EGLExt.eglPresentationTimeANDROID(display, surface, nsecs);
         }
 
         void swapBuffers() {
