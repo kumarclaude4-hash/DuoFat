@@ -10,6 +10,7 @@ import android.provider.MediaStore;
 import android.view.View;
 import android.widget.ImageButton;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.bumptech.glide.Glide;
@@ -24,13 +25,25 @@ import java.util.concurrent.Executors;
 
 public class FullScreenImageActivity extends BaseActivity {
 
-    public static final String EXTRA_URL       = "image_url";
-    public static final String EXTRA_MEDIA_KEY = "media_key";
+    public static final String EXTRA_URL         = "image_url";
+    public static final String EXTRA_MEDIA_KEY   = "media_key";
+    public static final String EXTRA_SENDER_NAME = "sender_name";
+    public static final String EXTRA_TIMESTAMP   = "timestamp";
+    public static final String EXTRA_CAPTION     = "caption";
 
     private PhotoView   photoView;
     private ProgressBar progressBar;
+    private View        topBar;
+    private View        bottomBar;
     private String      imageUrl;
     private String      mediaKey;
+
+    /** Currently displayed bitmap, kept so Rotate can re-render it in place. */
+    private Bitmap  currentBitmap;
+    /** Cumulative user rotation applied via the Rotate button, in degrees. */
+    private int     rotationDegrees = 0;
+    /** Whether the top/bottom chrome is currently shown (toggled by a single tap). */
+    private boolean chromeVisible = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,8 +52,12 @@ public class FullScreenImageActivity extends BaseActivity {
 
         photoView   = findViewById(R.id.photo_view);
         progressBar = findViewById(R.id.progress_bar);
+        topBar      = findViewById(R.id.top_bar);
+        bottomBar   = findViewById(R.id.bottom_bar);
         imageUrl    = getIntent().getStringExtra(EXTRA_URL);
         mediaKey    = getIntent().getStringExtra(EXTRA_MEDIA_KEY);
+
+        bindHeader();
 
         ImageButton btnClose = findViewById(R.id.btn_close);
         if (btnClose != null) btnClose.setOnClickListener(v -> finish());
@@ -51,7 +68,76 @@ public class FullScreenImageActivity extends BaseActivity {
         ImageButton btnShare = findViewById(R.id.btn_share);
         if (btnShare != null) btnShare.setOnClickListener(v -> shareImage());
 
+        View.OnClickListener rotate = v -> rotateImage();
+        ImageButton btnRotate = findViewById(R.id.btn_rotate);
+        if (btnRotate != null) btnRotate.setOnClickListener(rotate);
+        ImageButton btnRotateAction = findViewById(R.id.btn_rotate_action);
+        if (btnRotateAction != null) btnRotateAction.setOnClickListener(rotate);
+
+        // Single tap on the photo toggles the chrome (immersive, like WhatsApp/Telegram).
+        // PhotoView surfaces this via its own tap listener so it never fights pinch/zoom.
+        if (photoView != null) {
+            photoView.setOnPhotoTapListener((view, x, y) -> toggleChrome());
+            photoView.setOnOutsidePhotoTapListener(view -> toggleChrome());
+        }
+
         if (imageUrl != null && photoView != null) loadImageIntoViewer();
+    }
+
+    /** Fills the top bar with the sender name and a friendly relative timestamp. */
+    private void bindHeader() {
+        String sender = getIntent().getStringExtra(EXTRA_SENDER_NAME);
+        long   ts     = getIntent().getLongExtra(EXTRA_TIMESTAMP, 0L);
+        String caption = getIntent().getStringExtra(EXTRA_CAPTION);
+
+        TextView title = findViewById(R.id.tv_title);
+        if (title != null && sender != null && !sender.trim().isEmpty()) {
+            title.setText(sender);
+        }
+        TextView subtitle = findViewById(R.id.tv_subtitle);
+        if (subtitle != null && ts > 0) {
+            subtitle.setText(com.duoshield.app.util.MediaMetaFormatter.relativeDateTime(ts));
+            subtitle.setVisibility(View.VISIBLE);
+        }
+        TextView cap = findViewById(R.id.tv_caption);
+        if (cap != null && caption != null && !caption.trim().isEmpty()) {
+            cap.setText(caption.trim());
+            cap.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /** Shows/hides the top & bottom chrome with a short fade. */
+    private void toggleChrome() {
+        chromeVisible = !chromeVisible;
+        animateBar(topBar, chromeVisible);
+        animateBar(bottomBar, chromeVisible);
+    }
+
+    private void animateBar(View bar, boolean show) {
+        if (bar == null) return;
+        bar.animate().cancel();
+        if (show) {
+            bar.setVisibility(View.VISIBLE);
+            bar.animate().alpha(1f).setDuration(180).start();
+        } else {
+            bar.animate().alpha(0f).setDuration(180)
+                    .withEndAction(() -> bar.setVisibility(View.GONE)).start();
+        }
+    }
+
+    /** Rotates the shown image 90° clockwise per tap — handy for sideways photos. */
+    private void rotateImage() {
+        if (currentBitmap == null || photoView == null) return;
+        rotationDegrees = (rotationDegrees + 90) % 360;
+        android.graphics.Matrix m = new android.graphics.Matrix();
+        m.postRotate(rotationDegrees);
+        try {
+            Bitmap rotated = Bitmap.createBitmap(currentBitmap, 0, 0,
+                    currentBitmap.getWidth(), currentBitmap.getHeight(), m, true);
+            photoView.setImageBitmap(rotated);
+        } catch (OutOfMemoryError oom) {
+            Toast.makeText(this, "Not enough memory to rotate", Toast.LENGTH_SHORT).show();
+        }
     }
 
     // ── Image loading (decrypt-first for B2 / Supabase) ───────────────────────
@@ -87,9 +173,12 @@ public class FullScreenImageActivity extends BaseActivity {
                 if (isDestroyed() || isFinishing()) return;
                 showProgress(false);
                 if (bmp != null) {
+                    currentBitmap   = bmp;
+                    rotationDegrees = 0;
                     photoView.setImageBitmap(bmp);
                 } else {
-                    // fallback — let Glide try (may still work for some formats)
+                    // fallback — let Glide try (may still work for some formats).
+                    // Rotate stays disabled here because we never hold the raw bitmap.
                     Glide.with(FullScreenImageActivity.this).load(plainBytes).into(photoView);
                 }
             });
