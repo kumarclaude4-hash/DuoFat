@@ -256,8 +256,24 @@ public class ChatMediaActivity extends BaseActivity {
     private boolean decryptRetryScheduled = false;
     // F-07: O(1) duplicate guard replaces the O(n) for-loop inside the snapshot listener.
     private final Set<String>     knownIds              = new java.util.HashSet<>();
-    // F-07: latest message timestamp we have locally; used for Firestore startAfter().
+    // F-07: Firestore startAfter() cursor.
+    //
+    // INVARIANT: this value may ONLY ever be advanced from a resolved *server*
+    // timestamp (FieldValue.serverTimestamp() having landed). It must never be
+    // fed from System.currentTimeMillis() or from a Room row, because those carry
+    // the local device clock.
+    //
+    // Why this matters: the cursor is baked into the query at attach time as
+    // startAfter(cursor). ensureSignalSession() and onResume() both re-attach the
+    // listener. If the cursor had ever been set from a local clock that runs ahead
+    // of Google's servers, the partner's next message carries a *lower* server
+    // timestamp and Firestore filters it out permanently — the message never
+    // arrives until the chat is reopened and real time overtakes the skew. That
+    // was the "first message doesn't reflect immediately" bug.
     private long                  latestKnownTimestamp  = 0;
+    // Persisted per-conversation so a cold start still streams deltas rather than
+    // refetching history. Written only from server timestamps, same invariant.
+    private static final String   PREF_CURSOR_PREFIX    = "msg_cursor_";
     // Tracks the last "last_read_<partnerUid>" timestamp seen from the conv doc.
     // Used to gate retroactive blue-tick updates so we only fire when the field changes.
     private long                  lastPartnerReadMs     = 0;
@@ -1595,12 +1611,24 @@ public class ChatMediaActivity extends BaseActivity {
                         pendingDecryptQueue.add(m);
                     }
                     knownIds.add(m.getId());
-                    if (m.getTimestamp() > latestKnownTimestamp) {
-                        latestKnownTimestamp = m.getTimestamp();
-                    }
+                    // NOTE: deliberately does NOT advance latestKnownTimestamp.
+                    // Room rows mix server time (received messages) with local clock
+                    // time (our own sends, written as System.currentTimeMillis()), so
+                    // they are unusable as a Firestore cursor. Seeding the cursor from
+                    // here is what caused incoming messages to be filtered out.
+                    // Room's job is to seed knownIds + the adapter, which it still does;
+                    // knownIds makes any overlap with the Firestore window harmless.
+                }
+                // Restore the cursor from the persisted server-time value instead.
+                long persistedCursor = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
+                        .getLong(PREF_CURSOR_PREFIX + conversationId, 0L);
+                if (persistedCursor > latestKnownTimestamp) {
+                    latestKnownTimestamp = persistedCursor;
                 }
                 runOnUiThread(() -> {
-                    for (Message m : local) adapter.appendMessage(m);
+                    // Speed: one batched insert + one layout pass for the whole
+                    // 300-message seed instead of 300 separate notify calls.
+                    adapter.appendMessages(local);
                     if (!local.isEmpty()) {
                         recyclerView.scrollToPosition(adapter.getItemCount() - 1);
                     }
@@ -1638,6 +1666,29 @@ public class ChatMediaActivity extends BaseActivity {
      * never re-fetch the full conversation history on foreground.
      * F-10: Records the Firestore read count via {@link FirebaseCostGuard}.
      */
+    /**
+     * Advances the Firestore cursor, but ONLY from a resolved server timestamp.
+     *
+     * <p>Returns silently when {@code serverTs} is null, which is exactly the case
+     * for the optimistic local echo of our own write (serverTimestamp() not yet
+     * resolved). Letting that echo's local-clock fallback into the cursor is what
+     * broke realtime delivery.
+     */
+    private void advanceCursor(com.google.firebase.Timestamp serverTs, boolean hasPendingWrites) {
+        if (serverTs == null) return;      // unresolved server time — not a valid cursor
+        if (hasPendingWrites) return;      // our own unconfirmed local echo
+        long serverMs = serverTs.toDate().getTime();
+        if (serverMs <= latestKnownTimestamp) return;
+        latestKnownTimestamp = serverMs;
+        // Persist so a cold start resumes from here instead of refetching history.
+        final long toPersist = serverMs;
+        final String convo = conversationId;
+        dbExecutor.execute(() -> getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
+                .edit()
+                .putLong(PREF_CURSOR_PREFIX + convo, toPersist)
+                .apply());
+    }
+
     private void attachFirestoreListener() {
         if (msgListener != null) return; // guard against double-attach
 
@@ -1649,6 +1700,9 @@ public class ChatMediaActivity extends BaseActivity {
         if (latestKnownTimestamp > 0) {
             q = q.startAfter(new java.util.Date(latestKnownTimestamp));
         }
+        // Bound the window so an absent/zero cursor cannot pull unbounded history.
+        // Mirrors the 300-message Room seed above; older history renders from Room.
+        q = q.limitToLast(300);
 
         msgListener = q.addSnapshotListener((snaps, e) -> {
             if (snaps == null) return;
@@ -1662,6 +1716,10 @@ public class ChatMediaActivity extends BaseActivity {
             boolean newMessageAdded = false;
             boolean signalMsgQueued = false; // tracks if any Signal msgs were queued this snapshot
             List<Message> newIncoming = new ArrayList<>();
+            // Speed: collect this snapshot's new messages and insert them in one
+            // adapter batch instead of one appendMessage() (and one layout pass)
+            // per document. Matters most on the initial 300-message window.
+            List<Message> pendingAppends = new ArrayList<>();
 
             for (DocumentChange dc : snaps.getDocumentChanges()) {
                 if (dc.getType() == DocumentChange.Type.ADDED) {
@@ -1685,11 +1743,16 @@ public class ChatMediaActivity extends BaseActivity {
                     String  rpPrv   = dc.getDocument().getString("replyPreview");
                     Long    expAt   = dc.getDocument().getLong("expiresAt");
                     Boolean fwdFlag = dc.getDocument().getBoolean("forwarded");
+                    // Local-clock fallback is for DISPLAY ordering of the optimistic
+                    // bubble only. It must never reach the Firestore cursor — see
+                    // advanceCursor() and the latestKnownTimestamp invariant.
                     long    ts      = System.currentTimeMillis();
 
                     com.google.firebase.Timestamp serverTs =
                             dc.getDocument().getTimestamp("timestamp");
                     if (serverTs != null) ts = serverTs.toDate().getTime();
+                    // True while our own write is still unconfirmed locally.
+                    boolean pendingWrite = dc.getDocument().getMetadata().hasPendingWrites();
 
                     if (id == null) continue;
 
@@ -1719,7 +1782,7 @@ public class ChatMediaActivity extends BaseActivity {
                             tombstone.setDeleted(true);
                             if (!isExpired(tombstone)) {
                                 knownIds.add(id);
-                                if (ts > latestKnownTimestamp) latestKnownTimestamp = ts;
+                                advanceCursor(serverTs, pendingWrite);
                                 adapter.appendMessage(tombstone);
                                 newMessageAdded = true;
                             }
@@ -1836,8 +1899,8 @@ public class ChatMediaActivity extends BaseActivity {
                         pendingDecryptQueue.removeIf(p -> id.equals(p.getId()));
                     } else {
                         knownIds.add(id);
-                        if (ts > latestKnownTimestamp) latestKnownTimestamp = ts;
-                        adapter.appendMessage(m);
+                        advanceCursor(serverTs, pendingWrite);
+                        pendingAppends.add(m);
                         newMessageAdded = true;
                         if (!myUid.equals(from)) newIncoming.add(m);
                     }
@@ -1929,6 +1992,12 @@ public class ChatMediaActivity extends BaseActivity {
                         }
                     }
                 }
+            }
+
+            // Speed: one batched insert for the whole snapshot. Must run before the
+            // scroll/badge logic below, which reads adapter.getItemCount().
+            if (!pendingAppends.isEmpty()) {
+                adapter.appendMessages(pendingAppends);
             }
 
             // Async-decrypt any Signal Protocol messages queued in this snapshot
@@ -2695,7 +2764,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Album (multi-media) send — groups multiple photos/videos into one message
-    // ──────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────���───────────────────────────────────────
 
     /**
      * Shows a caption-input dialog, then uploads all URIs and sends a single
