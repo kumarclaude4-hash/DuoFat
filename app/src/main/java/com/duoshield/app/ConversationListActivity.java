@@ -35,6 +35,7 @@ import com.duoshield.app.util.ContactBackupHelper;
 import com.duoshield.app.util.DevicePerformanceTier;
 import com.duoshield.app.util.FcmTokenHelper;
 import com.duoshield.app.util.FirebaseCostGuard;
+import com.duoshield.app.util.MotionBudget;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
@@ -57,6 +58,7 @@ public class ConversationListActivity extends BaseActivity {
     private SwipeRefreshLayout  swipeRefresh;
     private View                shimmerContainer;
     private View                archivedBanner;
+    private ObjectAnimator      shimmerAnimator;
     private boolean             firstLoadDone   = false;
     private boolean             showArchived    = false;
 
@@ -141,12 +143,14 @@ public class ConversationListActivity extends BaseActivity {
             });
         }
 
-        if (shimmerContainer != null) {
-            ObjectAnimator pulse = ObjectAnimator.ofFloat(shimmerContainer, "alpha", 0.4f, 1.0f);
-            pulse.setDuration(900);
-            pulse.setRepeatMode(ObjectAnimator.REVERSE);
-            pulse.setRepeatCount(ObjectAnimator.INFINITE);
-            pulse.start();
+        if (shimmerContainer != null && !MotionBudget.disableHeavyDecoration(this)) {
+            shimmerAnimator = ObjectAnimator.ofFloat(shimmerContainer, "alpha", 0.4f, 1.0f);
+            shimmerAnimator.setDuration(900);
+            shimmerAnimator.setRepeatMode(ObjectAnimator.REVERSE);
+            shimmerAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+            shimmerAnimator.start();
+        } else if (shimmerContainer != null) {
+            shimmerContainer.setAlpha(1.0f);
         }
 
         android.widget.Button btnEmptyAdd = findViewById(R.id.btnEmptyAddContact);
@@ -169,13 +173,14 @@ public class ConversationListActivity extends BaseActivity {
         });
 
         LinearLayoutManager convLlm = new LinearLayoutManager(this);
-        convLlm.setInitialPrefetchItemCount(8);
+        convLlm.setInitialPrefetchItemCount(
+                DevicePerformanceTier.get(this).recyclerViewPrefetchCount());
         recyclerView.setLayoutManager(convLlm);
         recyclerView.setHasFixedSize(true);
         // Smaller off-screen view cache on LOW so cached rows do not pin decoded avatars
         // against the reduced Glide bitmap pool. See ChatMediaActivity for the reasoning.
         recyclerView.setItemViewCacheSize(
-                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
+                DevicePerformanceTier.get(this).recyclerViewCacheSize());
         recyclerView.setAdapter(adapter);
         db = FirebaseFirestore.getInstance();
 
@@ -680,8 +685,13 @@ public class ConversationListActivity extends BaseActivity {
     }
 
     @Override protected void onDestroy() {
-        super.onDestroy();
+        if (shimmerAnimator != null) {
+            shimmerAnimator.cancel();
+            shimmerAnimator.removeAllListeners();
+            shimmerAnimator = null;
+        }
         if (executor != null && !executor.isShutdown()) executor.shutdownNow();
+        super.onDestroy();
     }
 
     @Override protected void onResume() {

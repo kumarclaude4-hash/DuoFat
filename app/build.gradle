@@ -193,14 +193,21 @@ android {
                 'META-INF/LICENSE.txt',
                 'META-INF/NOTICE',
                 'META-INF/NOTICE.txt',
-                'META-INF/*.kotlin_module'
+                'META-INF/*.kotlin_module',
+                // libsignal-client bundles desktop runtime artifacts in its JAR.
+                // Android can never load these; excluding them changes no app code
+                // or cryptographic behavior and avoids shipping macOS/Windows payloads.
+                '**/*.dylib',
+                '**/*.dll'
             ]
         }
-        // Store .so files uncompressed so the OS can mmap them directly from
-        // the APK without extracting to disk (pairs with extractNativeLibs=false
-        // in the manifest).  Saves ~30 MB of disk space and reduces RAM overhead
-        // on install — important on mid-range devices with limited storage.
+        // Keep only libsignal's production Android JNI library. The testing JNI
+        // artifact exposes test-only native hooks and is never referenced by main code.
+        // Production libsignal, WebRTC and SQLCipher libraries remain untouched.
+        // Store retained .so files uncompressed so Android can mmap them directly
+        // from the APK (pairs with extractNativeLibs=false in the manifest).
         jniLibs {
+            excludes += ['**/libsignal_jni_testing.so']
             useLegacyPackaging = false
         }
     }

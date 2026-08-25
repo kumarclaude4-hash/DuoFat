@@ -334,10 +334,12 @@ public class CallManager {
 
     public CallManager(Context context) {
         this.context = context.getApplicationContext();
-        // Resolve the device tier up front so the very first startCapture() already uses a
-        // resolution this hardware can sustain, rather than opening at 720p and clawing back.
-        this.qualityCeiling = ladderStartForTier(DevicePerformanceTier.get(this.context));
-        this.qualityStep = this.qualityCeiling;
+        // Live call quality is intentionally tier-independent. DevicePerformanceTier governs
+        // app/UI resource budgets only; capture resolution, frame rate and bitrate keep the
+        // existing maximum-quality call target on every supported phone.
+        DevicePerformanceTier.get(this.context); // Resolve once for non-sensitive diagnostics.
+        this.qualityCeiling = LADDER_HIGH_START;
+        this.qualityStep = LADDER_HIGH_START;
         this.repo = new CallSignalRepository();
     }
 
@@ -1252,12 +1254,12 @@ public class CallManager {
         lastFramesTs               = -1L;
         healthyPolls               = 0;
         isRelayCall                = false; // determined on first stats poll
-        // Re-derive the ceiling on every CONNECTED transition: if the device is already warm
-        // from a previous call, effectiveTier() demotes it a rung before we even start.
-        qualityCeiling = ladderStartForTier(DevicePerformanceTier.effectiveTier(context));
-        qualityStep = Math.max(qualityStep, qualityCeiling);
+        // Device and thermal tiers must not alter live call quality. Keep the existing top rung
+        // on every CONNECTED transition; generic WebRTC BWE and hardware failure handling remain.
+        qualityCeiling = LADDER_HIGH_START;
+        qualityStep = LADDER_HIGH_START;
         registerThermalListener();
-        applyBitrateConstraints(); // cap bitrate immediately on connect
+        applyBitrateConstraints();
         statsHandler.postDelayed(statsPollRunnable, STATS_POLL_INTERVAL_MS);
         Log.d(TAG, "TURN stats polling started (tier="
                 + DevicePerformanceTier.getCachedOrDefault() + ", rung=" + qualityStep + ")");
@@ -1418,7 +1420,9 @@ public class CallManager {
      * encoded 720p30 with no thermal protection whatsoever.
      */
     private boolean thermalWatchdogEnabled() {
-        return qualityCeiling >= LADDER_MID_START;
+        // Generic encoder/thermal failure safety applies equally to every device. Tier selection
+        // never opts a phone into lower live-call quality; all calls start at the top rung.
+        return isVideo;
     }
 
     /**

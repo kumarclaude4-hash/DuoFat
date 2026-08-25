@@ -6,6 +6,7 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.duoshield.app.R;
@@ -31,6 +32,38 @@ public class InCallChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
     public InCallChatAdapter(List<InCallChatMessage> messages, String partnerName) {
         this.messages    = messages;
         this.partnerName = partnerName != null ? partnerName : "";
+        setHasStableIds(true);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        String id = messages.get(position).id;
+        return id != null ? id.hashCode() : RecyclerView.NO_ID;
+    }
+
+    /** Replaces a snapshot with stable-ID DiffUtil dispatch instead of rebinding every row. */
+    public void submitMessages(List<InCallChatMessage> updated) {
+        final List<InCallChatMessage> old = new java.util.ArrayList<>(messages);
+        final List<InCallChatMessage> next = updated != null
+                ? new java.util.ArrayList<>(updated) : new java.util.ArrayList<>();
+        DiffUtil.DiffResult result = DiffUtil.calculateDiff(new DiffUtil.Callback() {
+            @Override public int getOldListSize() { return old.size(); }
+            @Override public int getNewListSize() { return next.size(); }
+            @Override public boolean areItemsTheSame(int oldPos, int newPos) {
+                return java.util.Objects.equals(old.get(oldPos).id, next.get(newPos).id);
+            }
+            @Override public boolean areContentsTheSame(int oldPos, int newPos) {
+                InCallChatMessage a = old.get(oldPos);
+                InCallChatMessage b = next.get(newPos);
+                return a.timestamp == b.timestamp
+                        && a.isMine == b.isMine
+                        && java.util.Objects.equals(a.senderId, b.senderId)
+                        && java.util.Objects.equals(a.text, b.text);
+            }
+        });
+        messages.clear();
+        messages.addAll(next);
+        result.dispatchUpdatesTo(this);
     }
 
     @Override

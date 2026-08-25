@@ -8,7 +8,6 @@ import com.duoshield.app.crypto.signal.SignalCipherHelper;
 import com.google.firebase.firestore.FirebaseFirestore;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Executors;
 
 public class EditMessageHelper {
 
@@ -39,7 +38,7 @@ public class EditMessageHelper {
             return;
         }
         Handler ui = new Handler(Looper.getMainLooper());
-        Executors.newSingleThreadExecutor().execute(() -> {
+        SharedExecutors.executeSerial(ctx, () -> {
             try {
                 SignalCipherHelper.EncryptResult r =
                         SignalCipherHelper.encrypt(ctx, partnerUid, newText);

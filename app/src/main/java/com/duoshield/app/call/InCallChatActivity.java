@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.duoshield.app.R;
+import com.duoshield.app.util.DevicePerformanceTier;
 
 import org.webrtc.EglBase;
 import org.webrtc.RendererCommon;
@@ -180,8 +181,15 @@ public class InCallChatActivity extends AppCompatActivity {
         adapter = new InCallChatAdapter(messages, partnerName);
         LinearLayoutManager llm = new LinearLayoutManager(this);
         llm.setStackFromEnd(true);
+        DevicePerformanceTier tier = DevicePerformanceTier.effectiveTier(this);
+        llm.setInitialPrefetchItemCount(tier.recyclerViewPrefetchCount());
         rvMessages.setLayoutManager(llm);
+        rvMessages.setHasFixedSize(true);
+        rvMessages.setItemViewCacheSize(tier.recyclerViewCacheSize());
         rvMessages.setAdapter(adapter);
+        if (rvMessages.getItemAnimator() != null) {
+            rvMessages.getItemAnimator().setChangeDuration(0L);
+        }
 
         // Header navigation
         View btnMinimize = findViewById(R.id.btnMinimizeChat);
@@ -442,9 +450,8 @@ public class InCallChatActivity extends AppCompatActivity {
                     }
 
                     runOnUiThread(() -> {
-                        messages.clear();
-                        messages.addAll(updated);
-                        adapter.notifyDataSetChanged();
+                        if (isFinishing() || isDestroyed()) return;
+                        adapter.submitMessages(updated);
                         if (!messages.isEmpty()) {
                             rvMessages.scrollToPosition(messages.size() - 1);
                         }

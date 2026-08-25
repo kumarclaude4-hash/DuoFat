@@ -191,13 +191,32 @@ jobs:
             exit 1
           fi
 
-          # Checksums, with bare filenames so `sha256sum -c SHA256SUMS` works in
-          # whatever directory a user downloads into.
+          # The APK intentionally keeps production JNI libraries uncompressed so
+          # Android 13 can mmap them directly instead of extracting a second copy.
+          # For bandwidth-limited sideloading, wrap each already-signed APK in a
+          # lossless ZIP. This reduces downloads below 50 MB without changing a
+          # byte of the installable APK or sacrificing call/encryption behavior.
+          for apk in "${APKS[@]}"; do
+            archive="${apk%.apk}.zip"
+            rm -f "$archive"
+            if ! zip -9 -j "$archive" "$apk"; then
+              echo "::error::Failed to create $archive."
+              exit 1
+            fi
+            if ! unzip -t "$archive" >/dev/null; then
+              echo "::error::$archive failed integrity validation."
+              exit 1
+            fi
+          done
+
+          # Checksums use bare filenames so `sha256sum -c SHA256SUMS` works in
+          # whatever directory a user downloads into. Include both original APKs
+          # and compact ZIP delivery artifacts.
           #
           # Failure here must fail the release. Publishing an empty or partial
           # SHA256SUMS would be worse than publishing none: it looks like
           # verification is available while actually verifying nothing.
-          if ! ( cd "$APK_DIR" && sha256sum *.apk > SHA256SUMS ); then
+          if ! ( cd "$APK_DIR" && sha256sum *.apk *.zip > SHA256SUMS ); then
             echo "::error::sha256sum failed — refusing to publish a release without valid checksums."
             exit 1
           fi
@@ -338,14 +357,16 @@ jobs:
           cat > release-verify-body.md <<'EOF'
           ## Installation
 
-          Pick the APK for your device architecture:
+          Pick the download for your device architecture:
 
-          | File | Architecture | Devices |
-          |---|---|---|
-          | `app-arm64-v8a-release.apk` | 64-bit | Most phones from 2017 onwards |
-          | `app-armeabi-v7a-release.apk` | 32-bit | Older / budget devices |
+          | Compact download | Installable APK inside | Architecture | Devices |
+          |---|---|---|---|
+          | `app-arm64-v8a-release.zip` | `app-arm64-v8a-release.apk` | 64-bit | Most phones from 2017 onwards |
+          | `app-armeabi-v7a-release.zip` | `app-armeabi-v7a-release.apk` | 32-bit | Older / budget devices |
 
-          Enable **Install from unknown sources** in Settings → Security, then tap the APK to install.
+          The ZIP is a lossless bandwidth-saving wrapper around the signed APK. Extract it,
+          enable **Install from unknown sources** in Settings → Security, then tap the APK.
+          The original APK files remain attached for users who prefer direct downloads.
 
           ## Verifying this download
 
@@ -390,6 +411,7 @@ jobs:
           body_path: release-verify-body.md
           files: |
             app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.zip
             app/build/outputs/apk/release/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
