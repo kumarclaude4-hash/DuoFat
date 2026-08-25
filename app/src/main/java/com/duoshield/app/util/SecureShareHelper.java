@@ -50,4 +50,46 @@ public class SecureShareHelper {
             }
         }).start();
     }
+
+    /**
+     * Shares an already-decrypted video that lives at {@code plainFile}.
+     *
+     * <p>Copies the plaintext into the FileProvider-scoped {@code shared/media/} subdir
+     * (same posture as {@link #shareImage}) rather than exposing the player's live
+     * scratch/cache file directly — the shared copy is disposable and swept by
+     * {@link TempFileCleaner}, and the grant stays scoped to one file rather than the
+     * whole cache dir. Copy runs on a background thread since a video can be large.
+     */
+    public static void shareVideo(Context ctx, File plainFile) {
+        if (plainFile == null || !plainFile.exists() || plainFile.length() == 0) {
+            android.util.Log.w("SecureShareHelper", "shareVideo: source file missing/empty");
+            return;
+        }
+        new Thread(() -> {
+            File out = new File(SharedCacheDir.media(ctx),
+                    "share_" + System.currentTimeMillis() + ".mp4");
+            try (java.io.FileInputStream in = new java.io.FileInputStream(plainFile);
+                 FileOutputStream fos = new FileOutputStream(out)) {
+                byte[] buf = new byte[256 * 1024];
+                int n;
+                while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
+            } catch (Exception e) {
+                android.util.Log.e("SecureShareHelper", "Failed to write share video temp file", e);
+                return;
+            }
+            try {
+                Uri uri = FileProvider.getUriForFile(ctx,
+                    ctx.getPackageName() + ".provider", out);
+                Intent intent = new Intent(Intent.ACTION_SEND);
+                intent.setType("video/mp4");
+                intent.putExtra(Intent.EXTRA_STREAM, uri);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(Intent.createChooser(intent, "Share Video")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e) {
+                android.util.Log.e("SecureShareHelper", "Failed to launch video share chooser", e);
+            }
+        }).start();
+    }
 }

@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.ImageButton;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.media3.common.MediaItem;
@@ -46,9 +47,15 @@ public class MediaViewerActivity extends BaseActivity {
      */
     public static final String EXTRA_CHUNKED  = "media_chunked";
 
+    public static final String EXTRA_SENDER_NAME = "sender_name";
+    public static final String EXTRA_TIMESTAMP   = "timestamp";
+    public static final String EXTRA_CAPTION     = "caption";
+
     private ExoPlayer   player;
     private PlayerView  playerView;
     private ProgressBar progressBar;
+    private View        topBar;
+    private TextView    captionView;
     private String      mediaRef;
     private String      mediaKey;
     private boolean     chunked;
@@ -71,17 +78,117 @@ public class MediaViewerActivity extends BaseActivity {
 
         playerView  = findViewById(R.id.player_view);
         progressBar = findViewById(R.id.progress);
+        topBar      = findViewById(R.id.top_bar);
+        captionView = findViewById(R.id.tv_caption);
         mediaRef    = getIntent().getStringExtra(EXTRA_URL);
         mediaKey    = getIntent().getStringExtra(EXTRA_MEDIA_KEY);
         chunked     = getIntent().getBooleanExtra(EXTRA_CHUNKED, false);
 
+        bindHeader();
+
         ImageButton btnClose    = findViewById(R.id.btn_close);
         ImageButton btnDownload = findViewById(R.id.btn_download);
+        ImageButton btnShare    = findViewById(R.id.btn_share);
 
         if (btnClose    != null) btnClose.setOnClickListener(v -> finish());
         if (btnDownload != null) btnDownload.setOnClickListener(v -> saveVideoToGallery());
+        if (btnShare    != null) btnShare.setOnClickListener(v -> shareVideo());
+
+        // Keep the custom top bar / caption in lock-step with ExoPlayer's own controller
+        // so a single tap reveals or hides all chrome together (WhatsApp/Telegram feel).
+        if (playerView != null) {
+            playerView.setControllerVisibilityListener(
+                    (PlayerView.ControllerVisibilityListener) visibility -> {
+                        boolean show = visibility == View.VISIBLE;
+                        syncChrome(show);
+                    });
+        }
 
         if (mediaRef != null) loadAndPlay();
+    }
+
+    /** Fills the top bar with the sender name, a friendly timestamp, and any caption. */
+    private void bindHeader() {
+        String sender  = getIntent().getStringExtra(EXTRA_SENDER_NAME);
+        long   ts      = getIntent().getLongExtra(EXTRA_TIMESTAMP, 0L);
+        String caption = getIntent().getStringExtra(EXTRA_CAPTION);
+
+        TextView title = findViewById(R.id.tv_title);
+        if (title != null && sender != null && !sender.trim().isEmpty()) {
+            title.setText(sender);
+        }
+        TextView subtitle = findViewById(R.id.tv_subtitle);
+        if (subtitle != null && ts > 0) {
+            subtitle.setText(com.duoshield.app.util.MediaMetaFormatter.relativeDateTime(ts));
+            subtitle.setVisibility(View.VISIBLE);
+        }
+        if (captionView != null && caption != null && !caption.trim().isEmpty()) {
+            captionView.setText(caption.trim());
+            captionView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /** Fades the custom chrome in/out to match the player controller's visibility. */
+    private void syncChrome(boolean show) {
+        View[] bars = { topBar, captionView };
+        for (View bar : bars) {
+            if (bar == null) continue;
+            // Never reveal an empty caption strip.
+            if (bar == captionView && captionView.getVisibility() == View.GONE
+                    && captionView.getText().length() == 0) {
+                continue;
+            }
+            bar.animate().cancel();
+            if (show) {
+                bar.setVisibility(View.VISIBLE);
+                bar.animate().alpha(1f).setDuration(150).start();
+            } else {
+                bar.animate().alpha(0f).setDuration(150)
+                        .withEndAction(() -> bar.setVisibility(View.GONE)).start();
+            }
+        }
+    }
+
+    /**
+     * Shares the decrypted video. Reuses {@link #playbackFile} when it exists (the
+     * disk-to-disk fast path), otherwise downloads + decrypts to a scratch file first,
+     * mirroring {@link #saveVideoToGallery()}.
+     */
+    private void shareVideo() {
+        if (mediaRef == null) return;
+
+        File ready = playbackFile;
+        if (ready != null && ready.exists() && ready.length() > 0) {
+            com.duoshield.app.util.SecureShareHelper.shareVideo(this, ready);
+            return;
+        }
+        if (!B2StorageHelper.isB2Path(mediaRef)) {
+            Toast.makeText(this, "Cannot share this video", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(this, "Preparing…", Toast.LENGTH_SHORT).show();
+        File scratch;
+        try {
+            scratch = File.createTempFile("vid_share_", ".mp4", getCacheDir());
+        } catch (Exception e) {
+            Toast.makeText(this, "Share failed", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        B2StorageHelper.loadMediaToFile(this, mediaRef, mediaKey, scratch, chunked,
+                new B2StorageHelper.FileCallback() {
+                    @Override public void onReady(File plainFile) {
+                        if (isDestroyed() || isFinishing()) return;
+                        com.duoshield.app.util.SecureShareHelper.shareVideo(
+                                MediaViewerActivity.this, plainFile);
+                    }
+                    @Override public void onError(Exception e) {
+                        //noinspection ResultOfMethodCallIgnored
+                        scratch.delete();
+                        if (isDestroyed() || isFinishing()) return;
+                        Toast.makeText(MediaViewerActivity.this,
+                                "Share failed", Toast.LENGTH_SHORT).show();
+                    }
+                });
     }
 
     // ── Load + play ───────────────────────────────────────────────────────────
