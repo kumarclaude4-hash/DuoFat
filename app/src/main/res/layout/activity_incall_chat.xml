@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  Root is a FrameLayout so the floating call PiP can sit above the chat column, matching the
+  reference design where the video keeps playing in a small window while messages are read.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="@color/ds_background">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
 
     <!-- ── Header row ── -->
     <LinearLayout
@@ -157,3 +165,66 @@
     </LinearLayout>
 
 </LinearLayout>
+
+    <!--
+      ── Floating call PiP ──
+      Shows the partner's video (self-view as fallback), tap to swap, drag to reposition.
+      Hidden for voice-only calls and until a renderable track exists — see
+      InCallChatActivity.bindPip(). The renderer is initialised and released in code, so this
+      view must never be reused across activity instances.
+    -->
+    <FrameLayout
+        android:id="@+id/callPipContainer"
+        android:layout_width="96dp"
+        android:layout_height="136dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="72dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/bg_pip"
+        android:clipToOutline="true"
+        android:elevation="8dp"
+        android:visibility="gone"
+        android:contentDescription="Call video, tap to switch between you and your partner">
+
+        <org.webrtc.SurfaceViewRenderer
+            android:id="@+id/pipVideoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_pip_border"
+            android:importantForAccessibility="no" />
+
+        <!-- Mic-off badge — mirrors CallManager.isMicMuted() -->
+        <ImageView
+            android:id="@+id/ivPipMuteBadge"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="6dp"
+            android:padding="4dp"
+            android:background="@drawable/bg_pip_badge"
+            android:src="@drawable/ic_mic_off"
+            app:tint="#FFFFFF"
+            android:visibility="gone"
+            android:contentDescription="Microphone muted" />
+
+        <TextView
+            android:id="@+id/tvPipLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="6dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:background="@drawable/bg_pip_label"
+            android:text="You"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+    </FrameLayout>
+
+</FrameLayout>
