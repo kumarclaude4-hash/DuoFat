@@ -252,12 +252,43 @@ public class ChatMediaActivity extends BaseActivity {
     // Tracks the Signal sigType (WHISPER_TYPE=2 / PREKEY_TYPE=3) for each queued message.
     // Messages without an entry (legacy ECDH) default to 0.
     private final Map<String, Integer> queuedSigTypes = new HashMap<>();
-    // Guards a single re-derive attempt when ECDH decryption fails with a non-null (wrong) key.
-    private boolean decryptRetryScheduled = false;
+    // Bounds re-derive attempts when decryption fails with a non-null (wrong) key.
+    // ensureSignalSession() re-enters retryPendingDecryption() on success, so this cap is
+    // what stops a permanently undecryptable message from looping the X3DH handshake.
+    private int rederiveAttempts = 0;
+    private static final int MAX_REDERIVE_ATTEMPTS = 3;
     // F-07: O(1) duplicate guard replaces the O(n) for-loop inside the snapshot listener.
     private final Set<String>     knownIds              = new java.util.HashSet<>();
     // F-07: latest message timestamp we have locally; used for Firestore startAfter().
     private long                  latestKnownTimestamp  = 0;
+
+    /**
+     * Safety margin subtracted from {@link #latestKnownTimestamp} when building the
+     * {@code startAfter()} cursor, to absorb clock skew between this device and the
+     * Firestore server. Re-reading a minute of history is cheap and de-duplicated by
+     * {@link #knownIds}; a cursor set even marginally too late drops live messages
+     * silently and permanently. Always prefer the overlap.
+     */
+    private static final long CURSOR_OVERLAP_MS = 60_000L;
+
+    /** Consecutive snapshot-listener failures, for exponential re-attach backoff. */
+    private int listenerRetryAttempt = 0;
+    /** True while a re-attach is already queued, so errors cannot pile up timers. */
+    private boolean listenerReattachQueued = false;
+    private final Handler listenerRetryHandler = new Handler(Looper.getMainLooper());
+    /**
+     * Set once a Signal session has been established for this activity instance, so
+     * {@code onResume()} can re-attach the listener directly instead of running the
+     * full X3DH handshake again (which parked the UI behind {@code keyPending} for up
+     * to 10 s and blocked the pending-decrypt queue on every return to the chat).
+     */
+    private volatile boolean signalSessionReady = false;
+    /**
+     * True between {@code onResume()} and {@code onStop()}. Gates the backoff re-attach
+     * so a timer that fires after the chat is backgrounded does not resurrect a listener
+     * that {@code onStop()} intentionally tore down.
+     */
+    private volatile boolean isChatForeground = false;
     // Tracks the last "last_read_<partnerUid>" timestamp seen from the conv doc.
     // Used to gate retroactive blue-tick updates so we only fire when the field changes.
     private long                  lastPartnerReadMs     = 0;
@@ -1400,9 +1431,25 @@ public class ChatMediaActivity extends BaseActivity {
         applyWallpaper();
         // Refresh bubble style/colour and font size in case the user changed them in Settings.
         if (adapter != null) adapter.notifyBubbleStyleChanged();
+        isChatForeground = true;
         // Restart Firestore listeners that were detached in onStop (e.g. after opening Settings)
         if (conversationId != null) {
-            if (msgListener  == null) ensureSignalSession(); // ensures session then starts listener
+            if (msgListener == null) {
+                // FIRST-PAINT FIX: only run the X3DH handshake when we do not already have a
+                // session for this activity instance. ensureSignalSession() raises
+                // keyPending, which blocks BOTH listenForMessages() and
+                // retryPendingDecryption() until the callback lands (or the 10 s watchdog
+                // fires). Paying that on every single resume meant messages that arrived
+                // while the chat was backgrounded sat undecrypted, and the listener stayed
+                // detached, for as long as the handshake took.
+                if (signalSessionReady) {
+                    listenerRetryAttempt = 0;
+                    listenForMessages();
+                    retryPendingDecryption();
+                } else {
+                    ensureSignalSession(); // ensures session then starts listener
+                }
+            }
             if (convListener == null) listenForConvUpdates();
         }
         // Mark this user as online in the active conversation so the partner's conversation
@@ -1417,6 +1464,10 @@ public class ChatMediaActivity extends BaseActivity {
 
     @Override protected void onStop() {
         super.onStop();
+        isChatForeground = false;
+        // Cancel any queued re-attach so it cannot fire against a stopped activity.
+        listenerRetryHandler.removeCallbacksAndMessages(null);
+        listenerReattachQueued = false;
         if (msgListener  != null) { msgListener.remove();  msgListener  = null; }
         if (convListener != null) { convListener.remove(); convListener = null; }
         if (typingThrottle != null) typingThrottle.clear();
@@ -1638,20 +1689,76 @@ public class ChatMediaActivity extends BaseActivity {
      * never re-fetch the full conversation history on foreground.
      * F-10: Records the Firestore read count via {@link FirebaseCostGuard}.
      */
+    /**
+     * Re-attaches the message listener after a stream error, with exponential backoff
+     * capped at 30 s (1s, 2s, 4s, 8s, 16s, 30s, 30s…).
+     *
+     * <p>Firestore snapshot listeners are terminal on error — the SDK retries the
+     * underlying network connection, but an error surfaced to the callback (permission
+     * denied while the conversation doc is still being created, an expired auth token,
+     * a resource-exhausted quota bounce) kills the registration for good. Without this,
+     * the chat looks connected but is permanently deaf.
+     */
+    private void scheduleListenerReattach() {
+        if (isFinishing() || isDestroyed()) return;
+        if (listenerReattachQueued) return;
+        listenerReattachQueued = true;
+
+        // Drop the dead registration so attachFirestoreListener()'s double-attach guard
+        // does not mistake it for a live one.
+        if (msgListener != null) { msgListener.remove(); msgListener = null; }
+
+        long delay = Math.min(30_000L, 1000L * (1L << Math.min(listenerRetryAttempt, 5)));
+        listenerRetryAttempt++;
+
+        listenerRetryHandler.postDelayed(() -> {
+            listenerReattachQueued = false;
+            if (isFinishing() || isDestroyed()) return;
+            // onStop() nulls the listener deliberately; only reconnect while resumed.
+            if (!isChatForeground) return;
+            attachFirestoreListener();
+        }, delay);
+    }
+
     private void attachFirestoreListener() {
         if (msgListener != null) return; // guard against double-attach
+        if (conversationId == null) return;
 
         com.google.firebase.firestore.Query q =
                 db.collection("chats").document(conversationId)
                   .collection("messages").orderBy("timestamp");
 
-        // F-07: skip messages we already hold locally
+        // F-07: skip messages we already hold locally.
+        //
+        // CURSOR-SKEW FIX: the cursor is pulled back by CURSOR_OVERLAP_MS before it is
+        // used. `latestKnownTimestamp` is now only ever advanced from a *resolved server*
+        // timestamp (see the ADDED handler), but the local device clock and the Firestore
+        // server clock still disagree by an unbounded amount, and Room rows written by the
+        // FCM service can carry either. Re-delivering a minute of already-seen messages
+        // costs a handful of reads and is completely harmless because `knownIds` dedupes
+        // every ADDED event — whereas a cursor even one millisecond too far in the future
+        // silently drops the partner's next message for the whole lifetime of the
+        // listener. That was the "reply doesn't appear until I back out and re-open the
+        // chat" bug: re-entering rebuilt the cursor from Room and hid the real fault.
         if (latestKnownTimestamp > 0) {
-            q = q.startAfter(new java.util.Date(latestKnownTimestamp));
+            long cursor = latestKnownTimestamp - CURSOR_OVERLAP_MS;
+            if (cursor > 0) q = q.startAfter(new java.util.Date(cursor));
         }
 
         msgListener = q.addSnapshotListener((snaps, e) -> {
+            if (e != null) {
+                // A Firestore snapshot listener is TERMINAL on error: it never retries by
+                // itself. The old code did `if (snaps == null) return;` which swallowed the
+                // error and left a dead listener attached, so the chat stopped receiving
+                // messages until the activity was recreated. Re-attach with backoff.
+                Log.w(TAG, "message listener error — re-attaching", e);
+                scheduleListenerReattach();
+                return;
+            }
             if (snaps == null) return;
+
+            // A snapshot arrived, so the stream is healthy again — reset the backoff.
+            listenerRetryAttempt = 0;
 
             // F-10: record Firestore reads for quota tracking
             int snapSize = snaps.size();
@@ -1719,7 +1826,10 @@ public class ChatMediaActivity extends BaseActivity {
                             tombstone.setDeleted(true);
                             if (!isExpired(tombstone)) {
                                 knownIds.add(id);
-                                if (ts > latestKnownTimestamp) latestKnownTimestamp = ts;
+                                // Server-resolved timestamps only — see the ADDED handler below.
+                                if (serverTs != null && ts > latestKnownTimestamp) {
+                                    latestKnownTimestamp = ts;
+                                }
                                 adapter.appendMessage(tombstone);
                                 newMessageAdded = true;
                             }
@@ -1836,7 +1946,16 @@ public class ChatMediaActivity extends BaseActivity {
                         pendingDecryptQueue.removeIf(p -> id.equals(p.getId()));
                     } else {
                         knownIds.add(id);
-                        if (ts > latestKnownTimestamp) latestKnownTimestamp = ts;
+                        // Only a RESOLVED server timestamp may move the cursor. Our own
+                        // just-sent message is delivered by latency compensation with
+                        // `timestamp == null`, and the old code fell back to
+                        // System.currentTimeMillis() for it — pushing the cursor to the
+                        // local wall clock. On a device whose clock runs even slightly
+                        // ahead of Google's, every subsequent startAfter() query then
+                        // filtered out the partner's replies permanently.
+                        if (serverTs != null && ts > latestKnownTimestamp) {
+                            latestKnownTimestamp = ts;
+                        }
                         adapter.appendMessage(m);
                         newMessageAdded = true;
                         if (!myUid.equals(from)) newIncoming.add(m);
@@ -2695,7 +2814,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Album (multi-media) send — groups multiple photos/videos into one message
-    // ──────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────���───────────────────────────────────────
 
     /**
      * Shows a caption-input dialog, then uploads all URIs and sends a single
@@ -3516,6 +3635,7 @@ public class ChatMediaActivity extends BaseActivity {
                     org.signal.libsignal.protocol.SignalProtocolAddress address,
                     DuoShieldSignalStore store) {
                 keyPending = false;
+                signalSessionReady = true;
                 if (msgListener != null) { msgListener.remove(); msgListener = null; }
                 listenForMessages();
                 retryPendingDecryption();
@@ -3527,6 +3647,9 @@ public class ChatMediaActivity extends BaseActivity {
             public void onError(String reason) {
                 Log.w(TAG, "ensureSignalSession: " + reason);
                 keyPending = false;
+                // Deliberately NOT setting signalSessionReady: the next resume should try
+                // the handshake again rather than assume a usable session exists.
+                if (msgListener != null) { msgListener.remove(); msgListener = null; }
                 listenForMessages(); // start listener even without a fresh session
                 retryPendingDecryption();
             }
@@ -3690,12 +3813,19 @@ public class ChatMediaActivity extends BaseActivity {
                 pendingDecryptQueue.addAll(reQueue);
                 queuedSigTypes.putAll(reQueueSigs);
 
-                // Legacy ECDH: if messages failed with a non-null key, schedule one re-derive
+                // Legacy ECDH: if messages failed with a non-null key, schedule a re-derive.
+                // Bounded to MAX_REDERIVE_ATTEMPTS because ensureSignalSession() ends up
+                // calling back into retryPendingDecryption(), so an unconditional retry
+                // here is an infinite handshake loop whenever a message is genuinely
+                // undecryptable. The old one-shot latch avoided the loop but never reset,
+                // so a single early failure disabled recovery for the rest of the session.
                 boolean anyEcdhFailed = reQueue.stream().anyMatch(
                         p -> !reQueueSigs.containsKey(p.getId()));
-                if (anyEcdhFailed && !decryptRetryScheduled) {
-                    decryptRetryScheduled = true;
-                    Log.w(TAG, "retryPendingDecryption: ECDH key stale — scheduling re-derive");
+                if (anyEcdhFailed && rederiveAttempts < MAX_REDERIVE_ATTEMPTS) {
+                    rederiveAttempts++;
+                    Log.w(TAG, "retryPendingDecryption: ECDH key stale — re-derive "
+                            + rederiveAttempts + "/" + MAX_REDERIVE_ATTEMPTS);
+                    signalSessionReady = false;
                     ensureSignalSession();
                 }
             });
