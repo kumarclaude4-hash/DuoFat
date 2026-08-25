@@ -281,13 +281,14 @@ public class GroupChatActivity extends BaseActivity {
         adapter = new MessageAdapter(new java.util.ArrayList<>(), myUid, null, null, this::retryMessage);
         LinearLayoutManager groupLlm = new LinearLayoutManager(this);
         groupLlm.setStackFromEnd(true);
-        groupLlm.setInitialPrefetchItemCount(12);
+        groupLlm.setInitialPrefetchItemCount(
+                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 4 : 12);
         recyclerView.setLayoutManager(groupLlm);
         recyclerView.setHasFixedSize(true);
         // Smaller off-screen view cache on LOW so cached rows do not pin decoded thumbnails
         // against the reduced Glide bitmap pool. See ChatMediaActivity for the reasoning.
         recyclerView.setItemViewCacheSize(
-                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
+                DevicePerformanceTier.get(this).recyclerViewCacheSize());
         recyclerView.setAdapter(adapter);
         ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
 
@@ -746,7 +747,7 @@ public class GroupChatActivity extends BaseActivity {
 
     // ═════════════════════════════════════════════════════════════════════════
     // Media / camera support
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════���═══════════════════════════════
 
     private void launchGroupMediaPreview(java.util.List<Uri> uris, String mediaType) {
         if (uris == null || uris.isEmpty()) return;

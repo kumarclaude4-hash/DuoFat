@@ -230,6 +230,41 @@ public enum DevicePerformanceTier {
         return ordinal() <= other.ordinal();
     }
 
+    /** Maximum messages bound into a chat list during its initial render. */
+    public int initialChatWindow() {
+        return this == LOW ? 120 : 300;
+    }
+
+    /** RecyclerView holders retained beyond the visible children. */
+    public int recyclerViewCacheSize() {
+        return this == LOW ? 4 : 10;
+    }
+
+    /** Maximum simultaneous media preparation/upload operations. */
+    public int mediaConcurrency() {
+        return this == LOW ? 1 : 3;
+    }
+
+    /** Long edge used for list-row image requests. */
+    public int listImageEdgePx() {
+        return this == LOW ? 720 : 1280;
+    }
+
+    /** Bound for shared short-lived CPU work. Calls use their own real-time threads. */
+    public int shortCpuWorkerCount() {
+        return this == LOW ? 1 : Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+    }
+
+    /** Bound for shared blocking I/O work. */
+    public int shortIoWorkerCount() {
+        return this == LOW ? 2 : 4;
+    }
+
+    /** Firestore's persistent cache budget. */
+    public long firestoreCacheBytes() {
+        return (this == LOW ? 32L : 100L) * 1024L * 1024L;
+    }
+
     // ---------------------------------------------------------------------------------------
     // CPU probing
     // ---------------------------------------------------------------------------------------
