@@ -544,7 +544,7 @@ public class ChatMediaActivity extends BaseActivity {
         // GC pauses to avoid re-binds that cost far less. Views evicted from the cache still
         // land in the RecycledViewPool, so this costs a rebind, never an inflate.
         recyclerView.setItemViewCacheSize(
-                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
+                DevicePerformanceTier.get(this).recyclerViewCacheSize());
         recyclerView.setAdapter(adapter);
         if (recyclerView.getItemAnimator() != null) {
             recyclerView.getItemAnimator().setChangeDuration(0);
@@ -1357,7 +1357,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // LIFECYCLE
-    // ══════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════════════════════���
 
     @Override
     public void onRequestPermissionsResult(int requestCode,
@@ -1618,7 +1618,9 @@ public class ChatMediaActivity extends BaseActivity {
                 // of messages into memory on first open. Older history is already in Room
                 // and can be paginated later; Firestore streams only new messages.
                 List<Message> local = AppDatabase.getInstance(this)
-                        .messageDao().getLatestMessages(conversationId, 300);
+                        .messageDao().getLatestMessages(
+                                conversationId,
+                                DevicePerformanceTier.get(this).initialChatWindow());
                 // getLatestMessages returns DESC; reverse to ASC for display
                 java.util.Collections.reverse(local);
 

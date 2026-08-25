@@ -80,6 +80,7 @@ import org.json.JSONObject;
 public class GroupChatActivity extends BaseActivity {
 
     private static final String TAG = "GroupChatActivity";
+    private static final String PREF_GROUP_CURSOR_PREFIX = "group_last_server_ts_";
 
     // ── State ─────────────────────────────────────────────────────────────────
     private String groupId;
@@ -205,6 +206,14 @@ public class GroupChatActivity extends BaseActivity {
 
         if (groupId == null || myUid == null) { finish(); return; }
 
+        // Only persisted, resolved Firestore server timestamps are valid cursors.
+        // Room messages include local-clock optimistic sends and must never seed this.
+        long persistedServerMs = prefs.getLong(PREF_GROUP_CURSOR_PREFIX + groupId, 0L);
+        if (persistedServerMs > 0L) {
+            latestKnownTimestamp = new com.google.firebase.Timestamp(
+                    new java.util.Date(persistedServerMs));
+        }
+
         // FLAG_SECURE is applied globally in BaseActivity.onCreate()
         // based on the "app_screenshot_enabled" preference.
 
@@ -272,13 +281,14 @@ public class GroupChatActivity extends BaseActivity {
         adapter = new MessageAdapter(new java.util.ArrayList<>(), myUid, null, null, this::retryMessage);
         LinearLayoutManager groupLlm = new LinearLayoutManager(this);
         groupLlm.setStackFromEnd(true);
-        groupLlm.setInitialPrefetchItemCount(12);
+        groupLlm.setInitialPrefetchItemCount(
+                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 4 : 12);
         recyclerView.setLayoutManager(groupLlm);
         recyclerView.setHasFixedSize(true);
         // Smaller off-screen view cache on LOW so cached rows do not pin decoded thumbnails
         // against the reduced Glide bitmap pool. See ChatMediaActivity for the reasoning.
         recyclerView.setItemViewCacheSize(
-                DevicePerformanceTier.get(this) == DevicePerformanceTier.LOW ? 8 : 20);
+                DevicePerformanceTier.get(this).recyclerViewCacheSize());
         recyclerView.setAdapter(adapter);
         ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
 
@@ -506,6 +516,12 @@ public class GroupChatActivity extends BaseActivity {
                     if (latestKnownTimestamp == null ||
                             fts.compareTo(latestKnownTimestamp) > 0) {
                         latestKnownTimestamp = fts;
+                        final long serverMs = fts.toDate().getTime();
+                        executor.execute(() -> getSharedPreferences(
+                                "duoshield_prefs", MODE_PRIVATE)
+                                .edit()
+                                .putLong(PREF_GROUP_CURSOR_PREFIX + groupId, serverMs)
+                                .apply());
                     }
                 }
 
@@ -589,7 +605,7 @@ public class GroupChatActivity extends BaseActivity {
 
     // ═════════════════════════════════════════════════════════════════════════
     // Send message
-    // ═════════════════════════════════════════════════════════════════════════
+    // ════��════════════════════════════════════════════════════════════════════
 
     private void trySend() {
         if (groupKey == null) {
@@ -731,7 +747,7 @@ public class GroupChatActivity extends BaseActivity {
 
     // ═════════════════════════════════════════════════════════════════════════
     // Media / camera support
-    // ═════════════════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════���═══════════════════════════════
 
     private void launchGroupMediaPreview(java.util.List<Uri> uris, String mediaType) {
         if (uris == null || uris.isEmpty()) return;

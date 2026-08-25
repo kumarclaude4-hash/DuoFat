@@ -10,6 +10,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -70,6 +71,24 @@ public class MediaSendPreviewActivity extends AppCompatActivity {
         btnClose.setOnClickListener(v -> { setResult(RESULT_CANCELED); finish(); });
 
         View.OnClickListener sendListener = v -> {
+            // Validate again at the final send boundary, before the calling activity
+            // starts thumbnailing, encryption, or upload work. A single oversized
+            // video is allowed through because its caller routes it to VideoTranscoder;
+            // album items cannot be transcoded independently and are rejected by index.
+            for (int i = 0; i < selectedUris.size(); i++) {
+                long bytes = MediaLimits.sizeOf(this, Uri.parse(selectedUris.get(i)));
+                boolean singleVideoCandidate = selectedUris.size() == 1
+                        && "video".equals(selectedMediaType);
+                if (MediaLimits.isOversize(bytes) && !singleVideoCandidate) {
+                    String label = selectedUris.size() > 1
+                            ? "Item " + (i + 1) : "This file";
+                    Toast.makeText(this,
+                            MediaLimits.tooLargeMessage(bytes, label),
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+
             String caption = captionInput.getText() != null
                     ? captionInput.getText().toString().trim() : "";
             Intent result = new Intent();
