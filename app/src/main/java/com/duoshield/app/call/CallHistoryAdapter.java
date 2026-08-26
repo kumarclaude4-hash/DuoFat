@@ -37,11 +37,31 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
         void onLongClick(CallRecord record);
     }
 
+    /** Fired when the user taps the play button on a recorded call. */
+    public interface OnPlayRecordingListener {
+        void onPlayRecording(CallRecord record);
+    }
+
     private List<CallRecord> items = new ArrayList<>();
     private final OnItemLongClickListener longClickListener;
+    private final OnPlayRecordingListener playListener;
 
-    public CallHistoryAdapter(OnItemLongClickListener longClickListener) {
+    /** id of the row currently playing, so its button can show a "stop" glyph. {@code null} = none. */
+    private String playingId = null;
+
+    public CallHistoryAdapter(OnItemLongClickListener longClickListener,
+                              OnPlayRecordingListener playListener) {
         this.longClickListener = longClickListener;
+        this.playListener      = playListener;
+    }
+
+    /**
+     * Marks which row (if any) is currently playing and repaints so the play/stop glyphs update.
+     * Pass {@code null} to clear.
+     */
+    public void setPlayingId(String id) {
+        this.playingId = id;
+        notifyDataSetChanged();
     }
 
     public void setItems(List<CallRecord> newItems) {

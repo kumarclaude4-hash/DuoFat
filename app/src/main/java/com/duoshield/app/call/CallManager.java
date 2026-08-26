@@ -1352,18 +1352,29 @@ public class CallManager {
         // callbacks from the audio device module, both of which are destroyed below — letting it
         // outlive them risks a native-layer crash on a freed track.
         //
-        // cancel() rather than stop(): the call is already gone, so there is no UI left to hand a
-        // finished file to, and a partial recording of a dropped call is not worth keeping.
+        // If a user-initiated recording is still running when the call ends, finalize it with
+        // stop() rather than cancel() so the audio captured so far is saved (the listener set in
+        // startRecording still delivers the finished file). stop() closes the ingest gate
+        // synchronously, so onData()/onWebRtcAudioRecordSamplesReady() become no-ops before the
+        // tracks are freed below; the encoder thread then drains only already-copied PCM and never
+        // touches native state. When nothing is recording, cancel() is a cheap no-op.
         if (callRecorder != null) {
-            if (callRecorder.isRecording() && callId != null && myUid != null) {
-                // Clear our own flag so a crash or abrupt hangup cannot leave the peer staring
-                // at a "recording" banner for a call that no longer exists.
-                repo.setRecording(callId, myUid, false);
+            if (callRecorder.isRecording()) {
+                if (callId != null && myUid != null) {
+                    // Clear our own flag so a crash or abrupt hangup cannot leave the peer staring
+                    // at a "recording" banner for a call that no longer exists.
+                    repo.setRecording(callId, myUid, false);
+                }
+                if (remoteAudioTrack != null) {
+                    try { remoteAudioTrack.removeSink(callRecorder); } catch (Exception ignored) {}
+                }
+                callRecorder.stop();
+            } else {
+                if (remoteAudioTrack != null) {
+                    try { remoteAudioTrack.removeSink(callRecorder); } catch (Exception ignored) {}
+                }
+                callRecorder.cancel();
             }
-            if (remoteAudioTrack != null) {
-                try { remoteAudioTrack.removeSink(callRecorder); } catch (Exception ignored) {}
-            }
-            callRecorder.cancel();
             callRecorder = null;
         }
 

@@ -24,8 +24,12 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.db.CallRecord;
+import com.duoshield.app.util.B2StorageHelper;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -111,10 +115,37 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View                btnBack;
     private ImageView           btnChat;
     private ImageView           btnWatch;
+    private ImageView           btnRecord;
 
     // TURN quota warning banner
     private View     bannerTurnWarning;
     private TextView tvTurnWarningText;
+
+    // Recording indicator banner + state
+    private View     bannerRecording;
+    private TextView tvRecordingText;
+    /** True while the peer has told us they are recording (via {@link CallManager.CallListener}). */
+    private boolean  peerRecording = false;
+
+    /**
+     * Stable id shared by this call's history row and its recording. Generated once up-front so
+     * {@link #onRecordingFinished} and {@link #saveCallRecord} agree on which row to attach the
+     * recording to, regardless of which runs first.
+     */
+    private final String callHistoryId = UUID.randomUUID().toString();
+    /** Recording result stashed until the history row is inserted (mid-call stop case). */
+    private volatile String pendingRecordingPath = null;
+    private volatile String pendingRecordingKey  = null;
+    private volatile int    pendingRecordingDurationSec = 0;
+
+    /**
+     * Serial, process-lifetime executor for {@code call_history} writes (insert + recording
+     * patch). Being a single thread it runs submissions in FIFO order, which is what makes the
+     * insert-then-patch and patch-then-insert orderings both converge correctly. It is static and
+     * independent of {@link #historyExecutor} because a recording can finalise during teardown,
+     * after the per-activity executor is shut down.
+     */
+    private static final ExecutorService CALL_HISTORY_IO = Executors.newSingleThreadExecutor();
 
     // New-message banner (Google Meet-style pill)
     private View     bannerNewMessage;
@@ -573,6 +604,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnWatch              = findViewById(R.id.btnWatch);
 
         // TURN banner
+        btnRecord             = findViewById(R.id.btnRecord);
+
+        bannerRecording   = findViewById(R.id.bannerRecording);
+        tvRecordingText   = findViewById(R.id.tvRecordingText);
+
         bannerTurnWarning = findViewById(R.id.bannerTurnWarning);
         tvTurnWarningText = findViewById(R.id.tvTurnWarningText);
         ImageView btnDismiss = findViewById(R.id.btnTurnWarningDismiss);
@@ -659,8 +695,134 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             btnWatch.setOnClickListener(v -> openWatchTogether());
         }
 
+        // Record call — toggles local recording. The peer is notified via signalling.
+        if (btnRecord != null) {
+            btnRecord.setOnClickListener(v -> toggleRecording());
+        }
+
         // Draggable PiP — WhatsApp-style free drag, snaps to edge on release.
         setupPipDrag();
+    }
+
+    // ── Call recording ──────────────────────────────────────────────────────────
+
+    /**
+     * Starts or stops local recording. The finished, encrypted file is attached to the call
+     * history row for this call once the encoder drains (see {@link #onRecordingFinished}).
+     */
+    private void toggleRecording() {
+        if (callManager == null) return;
+
+        if (callManager.isRecording()) {
+            callManager.stopRecording();
+            refreshRecordingUi();
+            return;
+        }
+
+        boolean started = callManager.startRecording(new CallAudioRecorder.Listener() {
+            @Override public void onStopped(String filePath, int durationSeconds) {
+                onRecordingFinished(filePath, durationSeconds);
+                runOnUiThread(CallActivity.this::refreshRecordingUi);
+            }
+            @Override public void onError(String message) {
+                runOnUiThread(() -> {
+                    Toast.makeText(CallActivity.this, "Recording failed: " + message,
+                            Toast.LENGTH_LONG).show();
+                    refreshRecordingUi();
+                });
+            }
+            @Override public void onMaxDurationReached() {
+                runOnUiThread(() -> Toast.makeText(CallActivity.this,
+                        "Recording stopped — maximum length reached", Toast.LENGTH_LONG).show());
+            }
+        });
+
+        if (!started) {
+            Toast.makeText(this, "Couldn't start recording", Toast.LENGTH_SHORT).show();
+        }
+        refreshRecordingUi();
+    }
+
+    /**
+     * Repaints the record button and the recording banner. The banner is shown whenever
+     * <i>either</i> side is recording; the button reflects only our own state.
+     */
+    private void refreshRecordingUi() {
+        boolean localRecording = callManager != null && callManager.isRecording();
+
+        if (btnRecord != null) {
+            btnRecord.setImageResource(R.drawable.ic_record);
+            btnRecord.setColorFilter(localRecording ? 0xFFFF4B4B : 0xFFFFFFFF);
+            btnRecord.setAlpha(localRecording ? 1f : 0.9f);
+        }
+
+        boolean anyRecording = localRecording || peerRecording;
+        if (bannerRecording != null) {
+            bannerRecording.setVisibility(anyRecording ? View.VISIBLE : View.GONE);
+        }
+        if (tvRecordingText != null) {
+            String text;
+            if (localRecording && peerRecording)      text = "You and the other person are recording";
+            else if (localRecording)                  text = "Recording";
+            else                                       text = "The other person is recording";
+            tvRecordingText.setText(text);
+        }
+    }
+
+    /**
+     * Encrypts a finished recording and attaches it to this call's history row.
+     *
+     * <p>Runs on a fresh daemon thread rather than {@link #historyExecutor}, because this can be
+     * invoked during teardown (the recorder is finalised in {@code CallManager.cleanup()} when a
+     * recording is still running at hang-up) after {@code historyExecutor} has been shut down in
+     * {@link #onDestroy}. It uses the application context for the same reason.
+     *
+     * <p>The plaintext {@code .m4a} produced by the encoder is read, AES-256-GCM sealed with a
+     * fresh key, written to {@code filesDir/call_recordings/<callHistoryId>.enc}, and the plaintext
+     * deleted. The key and path are both stashed (so an insert that runs later picks them up) and
+     * pushed via {@link com.duoshield.app.db.CallHistoryDao#updateRecording} (so a row that already
+     * exists is patched). Whichever of insert/finish runs second wins, and both point at the same
+     * {@link #callHistoryId}.
+     */
+    private void onRecordingFinished(String plaintextPath, int durationSeconds) {
+        if (plaintextPath == null) return;
+        final Context appCtx = getApplicationContext();
+        CALL_HISTORY_IO.execute(() -> {
+            File plain = new File(plaintextPath);
+            try {
+                if (!plain.exists() || plain.length() == 0) return;
+
+                byte[] clear = new byte[(int) plain.length()];
+                try (RandomAccessFile raf = new RandomAccessFile(plain, "r")) {
+                    raf.readFully(clear);
+                }
+
+                B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(clear);
+                java.util.Arrays.fill(clear, (byte) 0);
+
+                File dir = new File(appCtx.getFilesDir(), "call_recordings");
+                //noinspection ResultOfMethodCallIgnored
+                dir.mkdirs();
+                File out = new File(dir, callHistoryId + ".enc");
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    fos.write(enc.data);
+                }
+
+                pendingRecordingPath        = out.getAbsolutePath();
+                pendingRecordingKey         = enc.keyBase64;
+                pendingRecordingDurationSec = durationSeconds;
+
+                // Patch the row if it already exists (end-of-call case). A no-op otherwise; the
+                // pending fields above cover the insert that runs afterwards (mid-call stop case).
+                AppDatabase.getInstance(appCtx).callHistoryDao().updateRecording(
+                        callHistoryId, pendingRecordingPath, pendingRecordingKey, durationSeconds);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to persist call recording", e);
+            } finally {
+                //noinspection ResultOfMethodCallIgnored
+                plain.delete();
+            }
+        });
     }
 
     // ── Draggable local-video PiP ─────────────────────────────────────────────
@@ -1255,7 +1417,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         });
     }
 
-    // ── TURN quota warning ────────────────────────────────────────────────────
+    // ── TURN quota warning ────────────────────────────────────────��───────────
 
     /**
      * Shows or updates the TURN quota warning banner.
@@ -1352,6 +1514,14 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         });
     }
 
+    @Override
+    public void onPeerRecordingChanged(boolean peerRecording) {
+        runOnUiThread(() -> {
+            this.peerRecording = peerRecording;
+            refreshRecordingUi();
+        });
+    }
+
     // ── Status UI ─────────────────────────────────────────────────────────────
 
     private void updateStatusUi(CallManager.CallState state) {
@@ -1399,7 +1569,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         String direction = isCaller ? CallRecord.DIRECTION_OUTGOING : CallRecord.DIRECTION_INCOMING;
 
         CallRecord record = new CallRecord();
-        record.id              = UUID.randomUUID().toString();
+        record.id              = callHistoryId;
         record.partnerId       = partnerId;
         record.partnerName     = partnerName != null ? partnerName : partnerId;
         record.isVideo         = isVideo;
@@ -1407,8 +1577,18 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         record.outcome         = outcome;
         record.startedAt       = callStartMs > 0 ? callStartMs : now;
         record.durationSeconds = durationSec;
-        historyExecutor.execute(() ->
-                AppDatabase.getInstance(getApplicationContext()).callHistoryDao().insert(record));
+        // A recording that finished mid-call (before this row existed) stashed its result; attach
+        // it here. A recording still finalising at call end patches the row afterwards via
+        // updateRecording(), so both orderings converge on the same id.
+        record.recordingPath            = pendingRecordingPath;
+        record.recordingKey             = pendingRecordingKey;
+        record.recordingDurationSeconds = pendingRecordingDurationSec;
+
+        final Context appCtx = getApplicationContext();
+        // Shared serial executor (not historyExecutor, which is shut down during teardown): keeps
+        // this insert correctly ordered against any updateRecording() patch for the same row.
+        CALL_HISTORY_IO.execute(() ->
+                AppDatabase.getInstance(appCtx).callHistoryDao().insert(record));
     }
 
     // ── Foreground service lifecycle ──────────────────────────────────────────

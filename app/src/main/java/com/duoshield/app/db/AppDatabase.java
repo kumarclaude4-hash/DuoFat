@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 25
+    version = 26
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -125,7 +125,8 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
+                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25,
+                MIGRATION_25_26)
             .build();
     }
 
@@ -357,6 +358,22 @@ public abstract class AppDatabase extends RoomDatabase {
     static final Migration MIGRATION_24_25 = new Migration(24, 25) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN reactions TEXT");
+        }
+    };
+
+    /**
+     * v26: local call-recording storage. Adds three columns to {@code call_history}:
+     * {@code recordingPath} and {@code recordingKey} are nullable (a call that was not recorded
+     * genuinely has neither, and NULL is the honest representation — no backfill needed), while
+     * {@code recordingDurationSeconds} defaults to 0 for the same "old rows hold no recording"
+     * reason as other counter columns. Non-destructive: existing call-log rows keep working
+     * unchanged and simply report no recording.
+     */
+    static final Migration MIGRATION_25_26 = new Migration(25, 26) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE call_history ADD COLUMN recordingPath TEXT");
+            db.execSQL("ALTER TABLE call_history ADD COLUMN recordingKey TEXT");
+            db.execSQL("ALTER TABLE call_history ADD COLUMN recordingDurationSeconds INTEGER NOT NULL DEFAULT 0");
         }
     };
 
