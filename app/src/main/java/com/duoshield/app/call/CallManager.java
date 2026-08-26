@@ -40,6 +40,7 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
+import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -102,6 +103,18 @@ public class CallManager {
 
     private EglBase eglBase;
     private PeerConnectionFactory factory;
+    /**
+     * Explicit audio device module, retained so the mic-capture tap installed in
+     * {@link #initFactory()} stays wired for the life of the factory and can be released
+     * cleanly. The default factory builds one internally; we build our own only to gain the
+     * {@code SamplesReadyCallback} used for call recording.
+     */
+    private JavaAudioDeviceModule audioDeviceModule;
+    /**
+     * Active call recorder, or {@code null} when not recording. Read on the real-time audio
+     * threads (mic tap + remote sink), so it is {@code volatile}.
+     */
+    private volatile CallAudioRecorder audioRecorder;
     private PeerConnection peerConnection;
     private CameraVideoCapturer videoCapturer;
     private SurfaceTextureHelper surfaceTextureHelper;
@@ -186,7 +199,7 @@ public class CallManager {
 
     private CallState currentState = CallState.IDLE;
 
-    // ── Bandwidth tracking ───────────────────────────────────────────��────────
+    // ── Bandwidth tracking ───────────────────────────────────────────���────────
     /** Interval between WebRTC stats polls while connected. */
     private static final long STATS_POLL_INTERVAL_MS = 10_000L;
     /** Cumulative transport bytes (sent + received) accumulated this call. */
@@ -472,15 +485,80 @@ public class CallManager {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initOptions);
 
+        // Build the audio device module explicitly so the call-recording feature can tap the
+        // microphone capture path. The SamplesReadyCallback delivers post-processing
+        // (AEC/NS/AGC) mic PCM — the exact audio the remote peer receives — and forwards it to
+        // the active recorder. When no recording is in progress the callback is a cheap no-op,
+        // so the tap has no effect on ordinary calls. Hardware AEC/NS remain enabled, matching
+        // the constraints the default module would have applied.
+        audioDeviceModule = JavaAudioDeviceModule.builder(context)
+                .setUseHardwareAcousticEchoCanceler(true)
+                .setUseHardwareNoiseSuppressor(true)
+                .setSamplesReadyCallback(audioSamples -> {
+                    CallAudioRecorder rec = audioRecorder;
+                    if (rec != null) {
+                        rec.onLocalSamples(audioSamples.getData(),
+                                audioSamples.getSampleRate(),
+                                audioSamples.getChannelCount());
+                    }
+                })
+                .createAudioDeviceModule();
+
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         factory = PeerConnectionFactory.builder()
                 .setOptions(options)
+                .setAudioDeviceModule(audioDeviceModule)
                 .setVideoEncoderFactory(new DefaultVideoEncoderFactory(
                         eglBase.getEglBaseContext(), true, true))
                 .setVideoDecoderFactory(new DefaultVideoDecoderFactory(
                         eglBase.getEglBaseContext()))
                 .createPeerConnectionFactory();
     }
+
+    // ─── Call recording (audio only) ───────────────────────────────────────────
+
+    /**
+     * Starts recording the call to {@code outputPath} (an {@code .m4a}). Captures both the
+     * local microphone (via the device-module tap) and the remote peer (via an
+     * {@link org.webrtc.AudioTrackSink}), mixed to a single mono AAC track.
+     *
+     * <p>Consent signaling is the caller's responsibility — {@link CallActivity} writes the
+     * recording flag to the call document so both parties are notified.
+     *
+     * @return {@code true} if recording is now active.
+     */
+    public boolean startRecording(String outputPath) {
+        if (audioRecorder != null) return true;
+        if (outputPath == null) return false;
+        CallAudioRecorder rec = new CallAudioRecorder(outputPath);
+        rec.start();
+        audioRecorder = rec;
+        AudioTrack remote = remoteAudioTrack;
+        if (remote != null) {
+            try { remote.addSink(rec.getRemoteSink()); }
+            catch (Throwable t) { Log.w(TAG, "addSink (remote audio) failed: " + t.getMessage()); }
+        }
+        return true;
+    }
+
+    /**
+     * Stops recording and finalises the file.
+     *
+     * @return the recording path if a non-empty file was produced, else {@code null}.
+     */
+    public String stopRecording() {
+        CallAudioRecorder rec = audioRecorder;
+        if (rec == null) return null;
+        audioRecorder = null;
+        AudioTrack remote = remoteAudioTrack;
+        if (remote != null) {
+            try { remote.removeSink(rec.getRemoteSink()); } catch (Throwable ignored) {}
+        }
+        boolean hasData = rec.stop();
+        return hasData ? rec.getOutputPath() : null;
+    }
+
+    public boolean isRecording() { return audioRecorder != null; }
 
     // ─── ICE server config ───────────────────────────────────────────────────
 
@@ -662,6 +740,13 @@ public class CallManager {
                     remoteAudioTrack = (AudioTrack) track;
                     track.setEnabled(!outputMuted);
                     Log.d(TAG, "Remote audio track received, enabled=" + !outputMuted);
+                    // If recording began before the remote track landed, attach the sink now so
+                    // the peer's voice is captured for the whole recording, not just the tail.
+                    CallAudioRecorder rec = audioRecorder;
+                    if (rec != null) {
+                        try { remoteAudioTrack.addSink(rec.getRemoteSink()); }
+                        catch (Throwable t) { Log.w(TAG, "late addSink failed: " + t.getMessage()); }
+                    }
                 }
             }
         });
@@ -1235,6 +1320,18 @@ public class CallManager {
         if (callDocListener != null) { callDocListener.remove(); callDocListener = null; }
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
         if (!releasePc) return;
+
+        // Safety net: if a recording is still running when the call tears down (e.g. the peer
+        // hung up without the user stopping it first), finalise it now so the MediaCodec/
+        // MediaMuxer are released and the file trailer is written before the track disappears.
+        CallAudioRecorder rec = audioRecorder;
+        if (rec != null) {
+            audioRecorder = null;
+            if (remoteAudioTrack != null) {
+                try { remoteAudioTrack.removeSink(rec.getRemoteSink()); } catch (Throwable ignored) {}
+            }
+            try { rec.stop(); } catch (Throwable ignored) {}
+        }
 
         // Stop handing these tracks out before they are disposed below — a secondary screen
         // that renders a disposed track crashes in native code.
