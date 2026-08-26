@@ -256,7 +256,11 @@ dependencies {
     // gradle/verification-metadata.xml in the same change.
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
-    implementation 'androidx.gridlayout:gridlayout:1.0.0'
+    // NOTE: androidx.gridlayout is deliberately NOT declared. Nothing references
+    // androidx.gridlayout. The apparent uses are two different classes:
+    // GridLayoutManager belongs to recyclerview (above), and <GridLayout> in layout
+    // XML resolves to the framework android.widget.GridLayout, in the platform since
+    // API 14. minSdk is 26, so the compat backport can never be loaded.
 
 
     // Security — EncryptedSharedPreferences
