@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 24
+    version = 25
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -125,7 +125,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23, MIGRATION_23_24)
+                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
             .build();
     }
 
@@ -344,6 +344,22 @@ public abstract class AppDatabase extends RoomDatabase {
      * default is the truth for old rows, not a sentinel standing in for one, so the upgrade is
      * non-destructive and existing media keeps decrypting through the unchanged legacy path.
      */
+    /**
+     * v25: per-user message reactions.
+     *
+     * <p>Adds a nullable {@code reactions} column holding a JSON uid → emoji object. The
+     * original {@code reaction} column (added back in {@link #MIGRATION_4_5}) is deliberately
+     * left in place rather than migrated or dropped: it still carries reactions written by
+     * peers running older builds, and {@code Message.getReactionsMap()} reconciles the two at
+     * read time. Nullable — and no backfill — because "no reactions" and "empty map" are the
+     * same state here, so old rows need no rewriting.
+     */
+    static final Migration MIGRATION_24_25 = new Migration(24, 25) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN reactions TEXT");
+        }
+    };
+
     static final Migration MIGRATION_23_24 = new Migration(23, 24) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("ALTER TABLE messages ADD COLUMN chunked INTEGER NOT NULL DEFAULT 0");

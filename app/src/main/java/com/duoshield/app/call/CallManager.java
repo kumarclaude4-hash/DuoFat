@@ -186,7 +186,7 @@ public class CallManager {
 
     private CallState currentState = CallState.IDLE;
 
-    // ── Bandwidth tracking ────────────────────────────────────────────────────
+    // ── Bandwidth tracking ───────────────────────────────────────────��────────
     /** Interval between WebRTC stats polls while connected. */
     private static final long STATS_POLL_INTERVAL_MS = 10_000L;
     /** Cumulative transport bytes (sent + received) accumulated this call. */
@@ -856,6 +856,9 @@ public class CallManager {
                 return;
             }
 
+            // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
+            handleTimerAnchor(snap);
+
             // Callee wrote a restart offer into the doc — apply it.
             Object restartObj = snap.get("restartOffer");
             if (restartObj instanceof java.util.Map && remoteDescSet && peerConnection != null) {
@@ -1008,6 +1011,9 @@ public class CallManager {
                 cleanup(true);
                 return;
             }
+
+            // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
+            handleTimerAnchor(snap);
 
             // Caller requested an ICE restart — create a new answer.
             Object restartFlagObj = snap.get("iceRestartRequested");
@@ -1225,6 +1231,7 @@ public class CallManager {
     private void cleanup(boolean releasePc) {
         connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
         iceRestartHandler.removeCallbacks(iceRestartRunnable);
+        anchorFallbackHandler.removeCallbacksAndMessages(null);
         if (callDocListener != null) { callDocListener.remove(); callDocListener = null; }
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
         if (!releasePc) return;

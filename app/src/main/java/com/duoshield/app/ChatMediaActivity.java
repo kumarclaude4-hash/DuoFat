@@ -883,7 +883,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // CALLING
-    // ══════════════════��═══════════════════════════════════════════
+    // ══════════════════���═══════════════════════════════════════════
 
     private void requestCallPermissions(boolean isVideo) {
         pendingCallIsVideo = isVideo;
@@ -1501,7 +1501,7 @@ public class ChatMediaActivity extends BaseActivity {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════���═════════
     // FIRESTORE LISTENERS
     // ════════════════════════════════════════════════════════��═════
 
@@ -1978,6 +1978,25 @@ public class ChatMediaActivity extends BaseActivity {
 
                     String  reaction   = dc.getDocument().getString("reaction");
                     String  status     = dc.getDocument().getString("status");
+
+                    // Per-user reactions map (uid -> emoji). Serialised to a JSON string for
+                    // Room. Note this is read unconditionally below, unlike the legacy scalar:
+                    // an absent/emptied map is itself meaningful (someone removed their
+                    // reaction) and must propagate, so we cannot skip on null.
+                    String reactionsJson = null;
+                    Object rawReactions  = dc.getDocument().get("reactions");
+                    if (rawReactions instanceof java.util.Map) {
+                        org.json.JSONObject ro = new org.json.JSONObject();
+                        for (java.util.Map.Entry<?, ?> en
+                                : ((java.util.Map<?, ?>) rawReactions).entrySet()) {
+                            if (en.getKey() == null || en.getValue() == null) continue;
+                            String emo = String.valueOf(en.getValue());
+                            if (emo.isEmpty()) continue;
+                            try { ro.put(String.valueOf(en.getKey()), emo); }
+                            catch (org.json.JSONException ignored) { }
+                        }
+                        reactionsJson = ro.length() > 0 ? ro.toString() : null;
+                    }
                     Boolean isEdited   = dc.getDocument().getBoolean("edited");
 
                     // Parse readAt — server timestamp written by DeliveryReceiptHelper.markRead()
@@ -1986,13 +2005,28 @@ public class ChatMediaActivity extends BaseActivity {
                     final long readAtMs = readAtTs != null ? readAtTs.toDate().getTime() : 0L;
 
                     if (id != null) {
-                        final String finalReaction = reaction;
-                        final String finalStatus   = status;
+                        final String finalReaction  = reaction;
+                        final String finalStatus    = status;
+                        final String finalReactions = reactionsJson;
+                        final boolean hadReactionsField =
+                                dc.getDocument().contains("reactions");
                         adapter.updateMessage(id, msg -> {
                             if (finalReaction != null) msg.setReaction(finalReaction);
+                            // Applied unconditionally when the field is present, so clearing
+                            // a reaction actually reaches the other party. The old
+                            // `if (x != null)` guard made removals unsyncable.
+                            if (hadReactionsField) msg.setReactions(finalReactions);
                             if (finalStatus   != null) msg.setStatus(finalStatus);
                             if (readAtMs > 0)          msg.setReadAt(readAtMs);
                         });
+                        // Persist reactions to Room so they survive an app restart.
+                        if (hadReactionsField) {
+                            final String rId   = id;
+                            final String rJson = finalReactions;
+                            dbExecutor.execute(() ->
+                                AppDatabase.getInstance(ChatMediaActivity.this)
+                                        .messageDao().updateReactions(rId, rJson));
+                        }
                         // Persist status to Room so ticks survive app restarts.
                         if (finalStatus != null) {
                             final String persistId     = id;
@@ -2166,7 +2200,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ═══════════════════════════��������═════════════════════════════════
     // MESSAGE ACTION DIALOG
-    // ══════════════════════════════════════════════════════════════
+    // ══════════════���═══════════════════════════════════════════════
 
     private void showMessageActionDialog(Message msg) {
         boolean pinned  = isPinned(msg);
@@ -2678,7 +2712,7 @@ public class ChatMediaActivity extends BaseActivity {
             }).show();
     }
 
-    // ══════════════════════════════════════════════════════════════
+    // ═════════════════════════════════════════════��════════════════
     // BADGE
     // ═════════════════════════════════════════════��════════════════
 
