@@ -168,6 +168,18 @@ public class CallSignalRepository {
                 });
     }
 
+    // ── Recording consent signaling ──────────────────────────────────────────
+
+    /**
+     * Publishes this device's recording state under {@code recording.<uid>} so the peer's
+     * snapshot listener can surface a "recording in progress" banner. Consent-by-notification:
+     * both parties always see when either side is recording.
+     */
+    public void writeRecordingState(String callId, String uid, boolean recording) {
+        callRef(callId).update("recording." + uid, recording)
+                .addOnFailureListener(e -> Log.w(TAG, "writeRecordingState failed (non-fatal): " + e.getMessage()));
+    }
+
     // ── ICE restart signaling ─────────────────────────────────────────────────
 
     /**
