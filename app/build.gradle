@@ -228,8 +228,24 @@ android {
         // Keep only libsignal's production Android JNI library. The testing JNI
         // artifact exposes test-only native hooks and is never referenced by main code.
         // Production libsignal, WebRTC and SQLCipher libraries remain untouched.
-        // Store retained .so files uncompressed so Android can mmap them directly
-        // from the APK (pairs with extractNativeLibs=false in the manifest).
+        //
+        // useLegacyPackaging = true DEFLATEs the retained .so files instead of
+        // storing them raw. This is a distribution-channel decision, not a
+        // performance one: uncompressed + extractNativeLibs=false is correct only
+        // when Play serves the app, because Play re-compresses over the wire and
+        // the raw payload costs nothing on download. This app ships as a directly
+        // downloaded APK, so storing raw meant every user paid for the full
+        // uncompressed lib/ directory on every download.
+        //
+        // The two settings are a PAIR and must change together — the platform
+        // requires uncompressed, page-aligned libs to mmap out of the APK, so
+        // compressed libs are only valid with extractNativeLibs=true (set in
+        // AndroidManifest.xml). Flipping one without the other is a broken build.
+        //
+        // Runtime cost is zero: decompression happens once at install time, and
+        // the loader mmaps the extracted .so afterward exactly as it would have
+        // mmap'd it from the APK. Steady-state speed and RSS are unchanged. The
+        // trade paid is installed disk footprint, not execution speed.
         //
         // NOTE: this rule governs the AAR-supplied jni/<abi>/ libraries only. The
         // desktop binaries at the libsignal-client JAR root are resources, not
@@ -237,7 +253,7 @@ android {
         // them here expecting them to match.
         jniLibs {
             excludes += ['**/libsignal_jni_testing.so']
-            useLegacyPackaging = false
+            useLegacyPackaging = true
         }
     }
 }
