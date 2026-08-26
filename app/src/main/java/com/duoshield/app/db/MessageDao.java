@@ -58,6 +58,11 @@ public interface MessageDao {
     @Query("UPDATE messages SET starred = :starred WHERE id = :messageId")
     void updateStarred(String messageId, boolean starred);
 
+    // Persists the per-user reactions map (JSON uid -> emoji) so reactions survive an app
+    // restart, the same way updateStatus keeps delivery ticks. Pass null to clear.
+    @Query("UPDATE messages SET reactions = :json WHERE id = :messageId")
+    void updateReactions(String messageId, String json);
+
     @Query("UPDATE messages SET isDeleted = 1 WHERE id = :messageId")
     void deleteMessage(String messageId);
 

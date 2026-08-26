@@ -250,7 +250,24 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     };
 
     private final Handler  durationHandler = new Handler(Looper.getMainLooper());
+    /**
+     * Absolute local-clock instant the call connected, derived from the shared Firestore
+     * {@code connectedAt} anchor (see {@link CallManager#onCallTimerAnchor}) so both devices
+     * display the same elapsed time. Zero until the anchor resolves.
+     */
     private long           callStartMs     = 0;
+    /**
+     * Guards {@link #durationTick} so it is posted exactly once per call. The CONNECTED state
+     * is re-entered on every ICE restart; without this the runnable would stack and the timer
+     * would visibly tick several times per second.
+     */
+    private boolean        durationTickScheduled = false;
+    /**
+     * True once CONNECTED has been reached at least once. Tracked separately from
+     * {@code callStartMs} because the shared anchor arrives asynchronously — a call that ends
+     * before it lands is still an answered call, not a missed one.
+     */
+    private boolean        wasConnected    = false;
     private final Runnable durationTick    = new Runnable() {
         @Override
         public void run() {
@@ -1310,6 +1327,23 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         runOnUiThread(() -> localVideoView.setMirror(mirror));
     }
 
+    /**
+     * Receives the shared call-start instant, already translated into this device's clock, and
+     * starts the duration ticker. Because the anchor is absolute rather than "time since I saw
+     * CONNECTED", both parties show the same value and a reconnect resumes at the correct
+     * elapsed time instead of restarting from 00:00.
+     */
+    @Override
+    public void onCallTimerAnchor(long callStartLocalMs) {
+        runOnUiThread(() -> {
+            callStartMs = callStartLocalMs;
+            if (!durationTickScheduled) {
+                durationTickScheduled = true;
+                durationHandler.post(durationTick);
+            }
+        });
+    }
+
     @Override
     public void onError(String message) {
         runOnUiThread(() -> {
@@ -1327,20 +1361,22 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             case INCOMING_RINGING: statusText = "Incoming call…"; break;
             case CONNECTING:       statusText = "Connecting…"; break;
             case CONNECTED:
-                statusText  = "";
-                callStartMs = System.currentTimeMillis();
-                durationHandler.post(durationTick);
+                // The timer is NOT started here: it waits for the shared server anchor in
+                // onCallTimerAnchor() so both devices count from the same instant.
+                statusText   = "";
+                wasConnected = true;
                 break;
             case ENDED:
                 statusText = "Call ended";
                 durationHandler.removeCallbacksAndMessages(null);
-                // callStartMs > 0 means CONNECTED was reached at least once.
-                saveCallRecord(callStartMs > 0 ? CallRecord.OUTCOME_ANSWERED : CallRecord.OUTCOME_MISSED);
+                durationTickScheduled = false;
+                saveCallRecord(wasConnected ? CallRecord.OUTCOME_ANSWERED : CallRecord.OUTCOME_MISSED);
                 finish();
                 return;
             case FAILED:
                 statusText = "Call failed — network unavailable";
                 durationHandler.removeCallbacksAndMessages(null);
+                durationTickScheduled = false;
                 saveCallRecord(CallRecord.OUTCOME_FAILED);
                 Toast.makeText(this, "Call failed — check your network", Toast.LENGTH_LONG).show();
                 new Handler(Looper.getMainLooper()).postDelayed(this::finish, 2000);

@@ -636,7 +636,7 @@ public final class BackupManager {
         });
     }
 
-    // ── Panic sync (duress) ───────────────────────────────────────────────────
+    // ── Panic sync (duress) ─────────────────────────────────────────���─────────
 
     /**
      * Synchronous, time-bounded incremental backup called on the duress path.
@@ -798,7 +798,7 @@ public final class BackupManager {
     }
 
 
-    // ── Contact backup / restore ──────────────────────────────────────────────
+    // ── Contact backup / restore ────────────────────────────────────────────��─
 
     /**
      * Encrypts a metadata string field (contact/group display name, etc.) before
@@ -1159,6 +1159,7 @@ public final class BackupManager {
         o.put("replyToId",     nvl(m.getReplyToId()));
         o.put("replyPreview",  nvl(m.getReplyPreview()));
         o.put("reaction",      nvl(m.getReaction()));
+        o.put("reactions",     nvl(m.getReactions()));
         o.put("status",        nvl(m.getStatus()));
         o.put("isDeleted",     m.isDeleted());
         o.put("forwarded",     m.isForwarded());
@@ -1185,12 +1186,14 @@ public final class BackupManager {
         String rId   = o.optString("replyToId",    null);
         String rPrev = o.optString("replyPreview", null);
         String react = o.optString("reaction",     null);
+        String reacts= o.optString("reactions",    null);
         String stat  = o.optString("status",       null);
         String mKey  = o.optString("mediaKey",     null);
 
         if (rId   != null && !rId.isEmpty())   m.setReplyToId(rId);
         if (rPrev != null && !rPrev.isEmpty())  m.setReplyPreview(rPrev);
         if (react != null && !react.isEmpty())  m.setReaction(react);
+        if (reacts!= null && !reacts.isEmpty()) m.setReactions(reacts);
         if (stat  != null && !stat.isEmpty())   m.setStatus(stat);
         if (mKey  != null && !mKey.isEmpty())   m.setMediaKey(mKey);
 

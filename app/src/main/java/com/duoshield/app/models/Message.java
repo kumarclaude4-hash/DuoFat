@@ -148,6 +148,125 @@ public class Message {
         }
     }
 
+    /**
+     * Per-user reactions as a JSON object mapping uid to a single emoji, e.g.
+     * {@code {"uidA":"\uD83D\uDC4D","uidB":"\u2764\uFE0F"}}.
+     *
+     * <p>This replaces the single-valued {@link #reaction} column, which could only ever hold
+     * one emoji for the whole message — so the second person to react silently overwrote the
+     * first, and neither could tell whose reaction they were looking at or remove only their
+     * own. The legacy column is kept for rows (and peers) written before this field existed;
+     * see {@link #getReactionsMap()} for how the two are reconciled.
+     *
+     * <p>Stored as JSON text rather than a normalised child table because reactions are always
+     * read and written together with their message and never queried independently.
+     */
+    @ColumnInfo(name = "reactions")  public String reactions;
+
+    /** In-memory cache of the parsed JSON — avoids re-parsing on every adapter bind. */
+    @Ignore
+    private java.util.LinkedHashMap<String, String> reactionsCache;
+
+    public String getReactions() { return reactions; }
+
+    public void setReactions(String v) {
+        reactions      = v;
+        reactionsCache = null;   // invalidate — next read re-parses
+    }
+
+    /**
+     * Parsed uid → emoji map, never null.
+     *
+     * <p>Falls back to the legacy single {@link #reaction} value under the sentinel uid
+     * {@link #LEGACY_REACTION_UID} when the map is absent, so a message reacted to by an older
+     * client still shows its emoji and the local user can still clear it.
+     */
+    public java.util.Map<String, String> getReactionsMap() {
+        if (reactionsCache != null) return reactionsCache;
+        java.util.LinkedHashMap<String, String> map = new java.util.LinkedHashMap<>();
+        if (reactions != null && !reactions.isEmpty()) {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject(reactions);
+                for (java.util.Iterator<String> it = o.keys(); it.hasNext(); ) {
+                    String uid   = it.next();
+                    String emoji = o.optString(uid, "");
+                    if (!emoji.isEmpty()) map.put(uid, emoji);
+                }
+            } catch (org.json.JSONException ignored) {
+                // Malformed JSON: treat as no reactions rather than crashing a bind.
+            }
+        }
+        if (map.isEmpty() && reaction != null && !reaction.isEmpty()) {
+            map.put(LEGACY_REACTION_UID, reaction);
+        }
+        reactionsCache = map;
+        return map;
+    }
+
+    /**
+     * Sentinel key for a reaction carried in the legacy {@link #reaction} column, where the
+     * reacting user was never recorded. Surfacing it under a reserved uid (rather than
+     * discarding it) keeps old reactions visible and removable.
+     */
+    @Ignore
+    public static final String LEGACY_REACTION_UID = "__legacy__";
+
+    /** This user's current reaction, or null if they have not reacted. */
+    public String getReactionFor(String uid) {
+        return getReactionsMap().get(uid);
+    }
+
+    /** Sets (or replaces) {@code uid}'s reaction. */
+    public void setReactionFor(String uid, String emoji) {
+        java.util.Map<String, String> map =
+                new java.util.LinkedHashMap<>(getReactionsMap());
+        map.put(uid, emoji);
+        writeReactionsMap(map);
+    }
+
+    /**
+     * Clears {@code uid}'s reaction. Also drops any legacy value, because a user removing
+     * "their" reaction on an old message means removing the one shown to them.
+     */
+    public void removeReactionFor(String uid) {
+        java.util.Map<String, String> map =
+                new java.util.LinkedHashMap<>(getReactionsMap());
+        map.remove(uid);
+        map.remove(LEGACY_REACTION_UID);
+        writeReactionsMap(map);
+        reaction = null;
+    }
+
+    private void writeReactionsMap(java.util.Map<String, String> map) {
+        if (map.isEmpty()) {
+            reactions = null;
+        } else {
+            reactions = new org.json.JSONObject(map).toString();
+        }
+        reactionsCache = null;
+    }
+
+    /**
+     * Display summary for the reaction pill: each distinct emoji once, in insertion order,
+     * with a count appended when more than one person picked the same one (e.g. {@code "👍2❤️"}).
+     * Empty string when nobody has reacted.
+     */
+    public String getReactionSummary() {
+        java.util.Map<String, String> map = getReactionsMap();
+        if (map.isEmpty()) return "";
+        java.util.LinkedHashMap<String, Integer> counts = new java.util.LinkedHashMap<>();
+        for (String emoji : map.values()) {
+            Integer c = counts.get(emoji);
+            counts.put(emoji, c == null ? 1 : c + 1);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, Integer> e : counts.entrySet()) {
+            sb.append(e.getKey());
+            if (e.getValue() > 1) sb.append(e.getValue());
+        }
+        return sb.toString();
+    }
+
     public Message() {}
 
     /** 6-arg convenience constructor (no media). */
