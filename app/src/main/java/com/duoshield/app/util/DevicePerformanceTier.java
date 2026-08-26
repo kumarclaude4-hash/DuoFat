@@ -230,49 +230,114 @@ public enum DevicePerformanceTier {
         return ordinal() <= other.ordinal();
     }
 
-    /** Maximum messages bound into a chat list during its initial render. */
+    /**
+     * Maximum messages bound into a chat list during its initial render.
+     *
+     * <p>Raised from 120/300 to 250/500. A window smaller than the user's scroll history means
+     * scrolling up crosses the window edge and triggers a fresh load-and-decrypt batch, which
+     * is another place the "[Decrypting...]" placeholder surfaced on already-read messages.
+     */
     public int initialChatWindow() {
-        return this == LOW ? 120 : 300;
+        return this == LOW ? 250 : 500;
     }
 
-    /** RecyclerView holders retained beyond the visible children. */
+    /**
+     * RecyclerView holders retained beyond the visible children.
+     *
+     * <p>Raised from 4/10 to 12/16. This is the other half of the "[Decrypting...]" bug: a
+     * holder evicted from the view cache loses its decrypted body, so scrolling back up
+     * re-binds the row and re-queues the decrypt from scratch. At a cache of 4 on LOW, a
+     * short flick past five rows was enough to evict and re-request work that had already
+     * completed, so the placeholder reappeared on content the user had already read. Retained
+     * holders are small; re-decrypting is not.
+     */
     public int recyclerViewCacheSize() {
-        return this == LOW ? 4 : 10;
+        return this == LOW ? 12 : 16;
     }
 
-    /** Maximum simultaneous media preparation/upload operations. */
+    /**
+     * Maximum simultaneous media preparation/upload operations.
+     *
+     * <p>Raised from 1/3 to 2/4 so a single large attachment no longer serializes every other
+     * pending media operation behind it.
+     */
     public int mediaConcurrency() {
-        return this == LOW ? 1 : 3;
-    }
-
-    /** Long edge used for list-row image requests. */
-    public int listImageEdgePx() {
-        return this == LOW ? 720 : 1280;
-    }
-
-    /** Bound for shared short-lived CPU work. Calls use their own real-time threads. */
-    public int shortCpuWorkerCount() {
-        return this == LOW ? 1 : Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-    }
-
-    /** Bound for shared blocking I/O work. */
-    public int shortIoWorkerCount() {
         return this == LOW ? 2 : 4;
     }
 
-    /** Maximum queued short jobs before producers apply backpressure. */
+    /**
+     * Long edge used for list-row image requests.
+     *
+     * <p>Raised from 720/1280 to 1080/1600. This is the clearest size-for-quality trade: the
+     * 720px long edge was visibly soft when a list image was opened full-screen on a 1080p
+     * display, because the cached decode had already discarded the detail.
+     */
+    public int listImageEdgePx() {
+        return this == LOW ? 1080 : 1600;
+    }
+
+    /**
+     * Bound for shared short-lived CPU work. Calls use their own real-time threads.
+     *
+     * <p>The LOW arm was 1, which made the shared CPU pool effectively a single-threaded
+     * queue: one slow job (a large attachment decrypt, a thumbnail decode) blocked every
+     * other CPU job behind it. LOW-tier devices in this codebase are still 8-core parts (the
+     * Helio P35 is 8x A53) — they are classified LOW for being in-order, not for lacking
+     * cores — so allowing 2 workers is well within budget and lets a slow job be overtaken.
+     */
+    public int shortCpuWorkerCount() {
+        return this == LOW
+                ? Math.max(2, Math.min(3, Runtime.getRuntime().availableProcessors() / 2))
+                : Math.max(3, Math.min(6, Runtime.getRuntime().availableProcessors()));
+    }
+
+    /**
+     * Bound for shared blocking I/O work.
+     *
+     * <p>Raised from 2/4 to 3/6. These threads are usually parked on disk or network, so they
+     * cost scheduler slots rather than sustained CPU, and a deeper pool keeps a slow network
+     * fetch from blocking local database reads.
+     */
+    public int shortIoWorkerCount() {
+        return this == LOW ? 3 : 6;
+    }
+
+    /**
+     * Maximum queued short jobs before producers apply backpressure.
+     *
+     * <p>Raised from 32/96 to 128/256. The old LOW ceiling of 32 was a hard backpressure wall:
+     * opening a busy chat can enqueue a decrypt job per row, and once the queue saturated the
+     * submitting thread either blocked or the job was rejected, stalling every row behind it.
+     * These jobs are small closures, so a deeper queue costs very little memory and removes an
+     * entire class of burst-induced stalls.
+     */
     public int shortJobQueueCapacity() {
-        return this == LOW ? 32 : 96;
+        return this == LOW ? 128 : 256;
     }
 
-    /** Initial adjacent-item prefetch count for linear message lists. */
+    /**
+     * Initial adjacent-item prefetch count for linear message lists.
+     *
+     * <p>Raised from 2/8 back toward the pre-tiering flat 12. Prefetch is what binds rows
+     * <em>before</em> they scroll into view, which is exactly when the asynchronous decryption
+     * for that row gets queued. At 2 on LOW the decrypt request was issued barely one row
+     * ahead of the user's eye, so the "[Decrypting...]" placeholder was routinely still on
+     * screen when the row became visible. A deeper prefetch buys the decrypt executor a head
+     * start; the cost is a handful of extra view binds, which is cheap next to the visible
+     * placeholder it removes.
+     */
     public int recyclerViewPrefetchCount() {
-        return this == LOW ? 2 : 8;
+        return this == LOW ? 8 : 12;
     }
 
-    /** Maximum preview thumbnails kept active at once by album/send UIs. */
+    /**
+     * Maximum preview thumbnails kept active at once by album/send UIs.
+     *
+     * <p>Raised from 6/16 to 12/24 so a picker grid does not thrash thumbnails in and out on
+     * a single screenful of scrolling.
+     */
     public int mediaPreviewCount() {
-        return this == LOW ? 6 : 16;
+        return this == LOW ? 12 : 24;
     }
 
     /** Maximum concurrent link-preview requests and retained entries. */

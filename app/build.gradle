@@ -229,23 +229,29 @@ android {
         // artifact exposes test-only native hooks and is never referenced by main code.
         // Production libsignal, WebRTC and SQLCipher libraries remain untouched.
         //
-        // useLegacyPackaging = true DEFLATEs the retained .so files instead of
-        // storing them raw. This is a distribution-channel decision, not a
-        // performance one: uncompressed + extractNativeLibs=false is correct only
-        // when Play serves the app, because Play re-compresses over the wire and
-        // the raw payload costs nothing on download. This app ships as a directly
-        // downloaded APK, so storing raw meant every user paid for the full
-        // uncompressed lib/ directory on every download.
+        // useLegacyPackaging = false STOREs the retained .so files uncompressed and
+        // page-aligned, which lets the loader mmap them straight out of the APK.
         //
-        // The two settings are a PAIR and must change together — the platform
-        // requires uncompressed, page-aligned libs to mmap out of the APK, so
-        // compressed libs are only valid with extractNativeLibs=true (set in
-        // AndroidManifest.xml). Flipping one without the other is a broken build.
+        // Do NOT set android:extractNativeLibs in AndroidManifest.xml. Since AGP 4.2
+        // this flag is the single source of truth: AGP derives extractNativeLibs into
+        // the merged manifest from it (false here => extractNativeLibs=false). The two
+        // must agree, and letting AGP derive it is what guarantees they do. An earlier
+        // revision of this comment claimed the manifest carried the value explicitly;
+        // it never did, and adding it back would create exactly the drift this note
+        // is warning about.
         //
-        // Runtime cost is zero: decompression happens once at install time, and
-        // the loader mmaps the extracted .so afterward exactly as it would have
-        // mmap'd it from the APK. Steady-state speed and RSS are unchanged. The
-        // trade paid is installed disk footprint, not execution speed.
+        // This is a deliberate size-for-performance trade:
+        //   - Uncompressed (this setting): the APK download is larger, but nothing is
+        //     extracted at install time, so there is no second copy of every .so on
+        //     internal storage and cold start does not pay a decompression pass.
+        //     Installed footprint is roughly halved versus the extracted layout.
+        //   - Compressed (useLegacyPackaging = true): smaller download, but the
+        //     platform cannot mmap DEFLATEd libs, so the installer extracts them to
+        //     disk. The user then stores the libs twice — compressed in the APK and
+        //     raw in the app's native dir — and cold start pays the extraction.
+        //
+        // libsignal, WebRTC and SQLCipher are large native libraries and all three are
+        // touched on the startup path, so mmap-from-APK is the right default here.
         //
         // NOTE: this rule governs the AAR-supplied jni/<abi>/ libraries only. The
         // desktop binaries at the libsignal-client JAR root are resources, not
@@ -253,7 +259,7 @@ android {
         // them here expecting them to match.
         jniLibs {
             excludes += ['**/libsignal_jni_testing.so']
-            useLegacyPackaging = true
+            useLegacyPackaging = false
         }
     }
 }

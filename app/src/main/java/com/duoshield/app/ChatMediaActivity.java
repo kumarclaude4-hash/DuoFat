@@ -234,6 +234,26 @@ public class ChatMediaActivity extends BaseActivity {
     private String pendingImageCaption = null;
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
+    /**
+     * Dedicated to Signal Protocol crypto (SessionCipher encrypt/decrypt).
+     *
+     * <p>Kept separate from {@link #dbExecutor} deliberately. Both encrypt and decrypt mutate
+     * the Double Ratchet session state, so every crypto operation must be serialized against
+     * every other one — hence a single thread, not a pool. But they must <em>not</em> be
+     * serialized behind unrelated Room writes.
+     *
+     * <p>Previously all four crypto sites shared {@code dbExecutor} with tombstone writes,
+     * status updates, star toggles, the initial history seed and {@link #saveToRoom}. A
+     * message stayed on screen as "[Decrypting…]" until that one thread drained every queued
+     * disk write ahead of it, so a burst of read receipts or a cold-start seed of several
+     * hundred rows visibly stalled decryption of a message that had already arrived.
+     *
+     * <p>Ratchet ordering is preserved because all crypto still shares this single thread.
+     * Queue ordering relative to the history seed is unaffected: {@code pendingDecryptQueue}
+     * is only ever mutated on the main thread, so the main thread — not the executor — is
+     * what sequences "queue populated" before "queue drained".
+     */
+    private final ExecutorService cryptoExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     /**
      * Dedicated to video re-encoding. Kept separate from {@link #executor} so a
@@ -1472,6 +1492,7 @@ public class ChatMediaActivity extends BaseActivity {
         super.onDestroy();
         if (!executor.isShutdown())   executor.shutdownNow();
         if (!dbExecutor.isShutdown()) dbExecutor.shutdownNow();
+        if (!cryptoExecutor.isShutdown()) cryptoExecutor.shutdownNow();
         if (!transcodeExecutor.isShutdown()) transcodeExecutor.shutdownNow();
         // Clean up any decrypted voice temp file left from the last playback.
         if (currentVoiceTmpFile != null) {
@@ -1999,7 +2020,7 @@ public class ChatMediaActivity extends BaseActivity {
                                 final String fSender  = sender;
                                 final String fId      = id;
                                 final int    fSigType = sigType;
-                                dbExecutor.execute(() -> {
+                                cryptoExecutor.execute(() -> {
                                     try {
                                         String plain = SignalCipherHelper.decrypt(
                                                 ChatMediaActivity.this, fSender, fCipher, fSigType);
@@ -3473,8 +3494,8 @@ public class ChatMediaActivity extends BaseActivity {
         knownIds.add(msgId);
         recyclerView.scrollToPosition(adapter.getItemCount() - 1);
 
-        // Encrypt + Firestore write on Signal executor (must not run on main thread)
-        dbExecutor.execute(() -> {
+        // Encrypt + Firestore write on the Signal crypto executor (never the main thread).
+        cryptoExecutor.execute(() -> {
             try {
                 SignalCipherHelper.EncryptResult r =
                         SignalCipherHelper.encrypt(ChatMediaActivity.this, partnerUid, cardText);
@@ -3579,9 +3600,11 @@ public class ChatMediaActivity extends BaseActivity {
         if (last >= 0) recyclerView.scrollToPosition(last);
 
         // Signal encryption + Firestore write on background thread.
-        // SessionCipher.encrypt() mutates ratchet state — must be single-threaded via dbExecutor.
+        // SessionCipher.encrypt() mutates ratchet state — must be single-threaded, hence
+        // cryptoExecutor, which serializes it against every decrypt without queueing it
+        // behind unrelated Room writes.
         final String finalRId = rId, finalRPrv = rPrv;
-        dbExecutor.execute(() -> {
+        cryptoExecutor.execute(() -> {
             try {
                 SignalCipherHelper.EncryptResult r =
                         SignalCipherHelper.encrypt(ChatMediaActivity.this, partnerUid, plaintext);
@@ -3784,7 +3807,7 @@ public class ChatMediaActivity extends BaseActivity {
      * Async-decrypts all messages in {@link #pendingDecryptQueue}.
      *
      * <p>Must be called from the <strong>main thread</strong>.  The actual crypto and
-     * Room I/O are dispatched to {@link #dbExecutor} (single-threaded), preserving the
+     * Room I/O are dispatched to {@link #cryptoExecutor} (single-threaded), preserving the
      * Signal ratchet order.  UI updates are posted back to the main thread.
      *
      * <h3>Routing</h3>
@@ -3797,11 +3820,11 @@ public class ChatMediaActivity extends BaseActivity {
     private void retryPendingDecryption() {
         if (pendingDecryptQueue.isEmpty() || keyPending) return;
 
-        // Snapshot queue on main thread; crypto runs on dbExecutor
+        // Snapshot queue on main thread; crypto runs on cryptoExecutor
         final List<Message>        snapshot    = new ArrayList<>(pendingDecryptQueue);
         final Map<String, Integer> sigTypes    = new HashMap<>(queuedSigTypes);
 
-        dbExecutor.execute(() -> {
+        cryptoExecutor.execute(() -> {
             List<String>         resolved    = new ArrayList<>();
             List<Message>        reQueue     = new ArrayList<>();
             Map<String, Integer> reQueueSigs = new HashMap<>();

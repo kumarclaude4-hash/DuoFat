@@ -317,6 +317,30 @@ public class CallManager {
     private static final int RECOVERY_POLLS_REQUIRED = 3;
 
     /**
+     * Consecutive <em>unhealthy</em> polls required before stepping down a rung.
+     *
+     * <p>Previously a single sub-threshold poll stepped down immediately. Encoder FPS measured
+     * over one short poll window is noisy — a GC pause, a keyframe request, or the camera
+     * ramping exposure after a lighting change all dip it briefly — so one bad sample is not
+     * evidence of thermal pressure. Requiring two consecutive samples costs one poll interval
+     * of reaction time and removes the large majority of spurious downgrades.
+     */
+    private static final int DOWNGRADE_POLLS_REQUIRED = 2;
+
+    /**
+     * Minimum time a rung must be held before any further change is allowed.
+     *
+     * <p>This is the fix for mid-call glitching and the camera appearing to flip on its own.
+     * Every rung change calls {@code changeCaptureFormat()}, which tears down and re-creates
+     * the camera capture session: the preview drops frames, the encoder emits a fresh
+     * keyframe, and on many devices the surface is re-created — which is the visible "flip".
+     * Without a dwell floor, a device sitting near the FPS threshold could ping-pong between
+     * rungs on consecutive polls and restart the capturer every few seconds for the entire
+     * call. The ladder is a slow adaptation mechanism, so a floor here costs nothing real.
+     */
+    private static final long MIN_QUALITY_DWELL_MS = 12_000L;
+
+    /**
      * Current index into {@link #QUALITY_LADDER}. Written on the main thread, read from the
      * WebRTC stats callback thread, hence volatile.
      */
@@ -325,6 +349,14 @@ public class CallManager {
     private volatile int qualityCeiling = LADDER_HIGH_START;
     /** Consecutive healthy polls observed since the last downgrade. */
     private int healthyPolls = 0;
+    /** Consecutive unhealthy polls observed since the last upgrade. */
+    private int unhealthyPolls = 0;
+    /**
+     * {@link android.os.SystemClock#elapsedRealtime()} of the last rung change, used to enforce
+     * {@link #MIN_QUALITY_DWELL_MS}. Uses elapsedRealtime rather than currentTimeMillis so an
+     * NTP correction mid-call cannot make the dwell window appear to have already elapsed.
+     */
+    private long lastQualityChangeMs = 0L;
     /** Thermal listener registered for proactive downgrades (API 29+). */
     private PowerManager.OnThermalStatusChangedListener thermalListener;
     /** framesEncoded counter from the last outbound-rtp stats snapshot (for FPS delta). */
@@ -1201,16 +1233,28 @@ public class CallManager {
 
         int videoCap = captureVideoBps();          // 0 == unbounded (HIGH tier / top rung)
         boolean cappedVideo = videoCap > 0;
-        boolean lowTier = qualityCeiling >= LADDER_LOW_START;
+
+        // Bitrate floors/caps are derived from the *device tier*, not from qualityCeiling.
+        //
+        // qualityCeiling is pinned to LADDER_HIGH_START (0) on every device so all calls can
+        // start at the top rung, which made the old `qualityCeiling >= LADDER_LOW_START` and
+        // `>= LADDER_MID_START` tests permanently false. Every branch below therefore always
+        // collapsed to the HIGH arm: audioCap became 0 (unbounded) and the video floor was
+        // pinned to VIDEO_BITRATE_HIGH_MIN_BPS even on a budget phone that had already been
+        // stepped down to 320x240 — the floor then fought the downgrade, holding the bitrate
+        // high enough to re-provoke the thermal event we had just stepped down to escape.
+        DevicePerformanceTier tier = DevicePerformanceTier.getCachedOrDefault();
+        boolean lowTier = tier == DevicePerformanceTier.LOW;
+        boolean midTier = tier == DevicePerformanceTier.MID;
 
         int videoFloor = lowTier ? VIDEO_BITRATE_LOW_MIN_BPS
-                : (qualityCeiling >= LADDER_MID_START ? VIDEO_BITRATE_MID_MIN_BPS
-                                                      : VIDEO_BITRATE_HIGH_MIN_BPS);
+                : (midTier ? VIDEO_BITRATE_MID_MIN_BPS
+                           : VIDEO_BITRATE_HIGH_MIN_BPS);
         int audioCap = lowTier ? AUDIO_BITRATE_LOW_MAX_BPS
-                : (qualityCeiling >= LADDER_MID_START ? AUDIO_BITRATE_MID_MAX_BPS : 0);
+                : (midTier ? AUDIO_BITRATE_MID_MAX_BPS : 0);
         int audioFloor = lowTier ? AUDIO_BITRATE_LOW_MIN_BPS
-                : (qualityCeiling >= LADDER_MID_START ? AUDIO_BITRATE_MID_MIN_BPS
-                                                      : AUDIO_BITRATE_HIGH_MIN_BPS);
+                : (midTier ? AUDIO_BITRATE_MID_MIN_BPS
+                           : AUDIO_BITRATE_HIGH_MIN_BPS);
 
         for (RtpSender sender : peerConnection.getSenders()) {
             if (sender.track() == null) continue;
@@ -1433,11 +1477,16 @@ public class CallManager {
      * momentary hiccup 20 seconds into a 30-minute call cost the user every one of the
      * remaining 29 minutes.
      *
-     * <p>Steps down immediately when the encoder falls below
-     * {@link #THERMAL_FPS_THRESHOLD} or the device reports thermal throttling, and steps back
+     * <p>Steps down after {@link #DOWNGRADE_POLLS_REQUIRED} consecutive polls below
+     * {@link #THERMAL_FPS_THRESHOLD} (or reporting thermal throttling), and steps back
      * up only after {@link #RECOVERY_POLLS_REQUIRED} consecutive polls above
      * {@link #RECOVERY_FPS_THRESHOLD} while not throttling. The gap between the two
      * thresholds is the hysteresis band that stops the ladder oscillating.
+     *
+     * <p>The two streak counters are mutually exclusive: entering one resets the other, so a
+     * run of alternating good/bad polls accumulates neither and the rung is held. Combined
+     * with {@link #MIN_QUALITY_DWELL_MS}, this is what stops the capturer being restarted
+     * repeatedly on a device hovering right at the threshold.
      */
     private void evaluateQualityStep(double actualFps) {
         boolean throttling = DevicePerformanceTier.isThrottling(
@@ -1450,34 +1499,61 @@ public class CallManager {
 
         if (actualFps < THERMAL_FPS_THRESHOLD || throttling) {
             healthyPolls = 0;
-            stepDownQuality(throttling ? "device thermal throttling"
-                    : String.format(Locale.US, "encoder at %.1f fps", actualFps));
+            unhealthyPolls++;
+            if (unhealthyPolls >= DOWNGRADE_POLLS_REQUIRED) {
+                unhealthyPolls = 0;
+                stepDownQuality(throttling ? "device thermal throttling"
+                        : String.format(Locale.US, "encoder at %.1f fps", actualFps));
+            }
         } else if (actualFps > RECOVERY_FPS_THRESHOLD) {
+            unhealthyPolls = 0;
             healthyPolls++;
             if (healthyPolls >= RECOVERY_POLLS_REQUIRED) {
                 healthyPolls = 0;
                 stepUpQuality();
             }
         } else {
-            // In the hysteresis band: hold the current rung and reset the recovery streak.
+            // In the hysteresis band: hold the current rung and reset both streaks.
             healthyPolls = 0;
+            unhealthyPolls = 0;
         }
     }
 
-    /** Drops one rung, unless already at the bottom of the ladder. */
+    /**
+     * True when the current rung has been held long enough to allow another change.
+     *
+     * <p>Applied to both directions. A downgrade blocked here is not lost: the streak counter
+     * re-accumulates and the next qualifying poll after the window applies it.
+     */
+    private boolean qualityDwellElapsed() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastQualityChangeMs != 0L && now - lastQualityChangeMs < MIN_QUALITY_DWELL_MS) {
+            Log.d(TAG, "Quality change suppressed: only "
+                    + (now - lastQualityChangeMs) + " ms since last change (min "
+                    + MIN_QUALITY_DWELL_MS + " ms)");
+            return false;
+        }
+        return true;
+    }
+
+    /** Drops one rung, unless already at the bottom of the ladder or inside the dwell window. */
     private void stepDownQuality(String reason) {
         if (qualityStep >= QUALITY_LADDER.length - 1) return;
+        if (!qualityDwellElapsed()) return;
         qualityStep++;
+        lastQualityChangeMs = android.os.SystemClock.elapsedRealtime();
         Log.w(TAG, "Thermal downgrade → rung " + qualityStep + " ("
                 + captureWidth() + "×" + captureHeight() + " @ " + captureFps()
                 + " fps): " + reason);
         applyCurrentQualityStep();
     }
 
-    /** Climbs one rung, never above the tier's ceiling. */
+    /** Climbs one rung, never above the tier's ceiling, and never inside the dwell window. */
     private void stepUpQuality() {
         if (qualityStep <= qualityCeiling) return;
+        if (!qualityDwellElapsed()) return;
         qualityStep--;
+        lastQualityChangeMs = android.os.SystemClock.elapsedRealtime();
         Log.i(TAG, "Thermal recovery → rung " + qualityStep + " ("
                 + captureWidth() + "×" + captureHeight() + " @ " + captureFps() + " fps)");
         applyCurrentQualityStep();
