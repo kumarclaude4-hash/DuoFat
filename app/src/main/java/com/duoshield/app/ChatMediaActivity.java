@@ -883,7 +883,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // CALLING
-    // ══════════════════���═══════════════════════════════════════════
+    // ══════════════════����═══════════════════════════════════════════
 
     private void requestCallPermissions(boolean isVideo) {
         pendingCallIsVideo = isVideo;
@@ -2225,26 +2225,36 @@ public class ChatMediaActivity extends BaseActivity {
                 .setState(com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED);
 
         // ── Quick reactions row ────────────────────────────────────────────────
+        // Six fixed favourites plus a "+" that opens the full searchable picker. Tapping the
+        // emoji already registered for this user removes it (WhatsApp toggle semantics);
+        // tapping a different one replaces it.
         android.widget.LinearLayout reactionRow = root.findViewById(R.id.reactionRow);
-        String[] quickEmojis = {"👍", "❤️", "😂", "😮", "😢", "��"};
+        final String myReaction = myUid == null ? null : msg.getReactionFor(myUid);
+        String[] quickEmojis = {"👍", "❤️", "😂", "😮", "😢", "🙏"};
         for (String emoji : quickEmojis) {
-            android.widget.TextView tv = new android.widget.TextView(this);
-            android.widget.LinearLayout.LayoutParams lp =
-                    new android.widget.LinearLayout.LayoutParams(
-                            0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            tv.setLayoutParams(lp);
-            tv.setText(emoji);
-            tv.setTextSize(28f);
-            tv.setGravity(android.view.Gravity.CENTER);
-            tv.setPadding(0, 12, 0, 12);
-            tv.setOnClickListener(v -> {
-                db.collection("chats").document(conversationId)
-                  .collection("messages").document(msg.getId())
-                  .update("reaction", emoji);
-                adapter.updateMessage(msg.getId(), m -> m.setReaction(emoji));
-                sheet.dismiss();
-            });
-            reactionRow.addView(tv);
+            reactionRow.addView(
+                    quickReactionCell(emoji, emoji.equals(myReaction), () -> {
+                        if (emoji.equals(myReaction)) clearMyReaction(msg);
+                        else                          setMyReaction(msg, emoji);
+                        sheet.dismiss();
+                    }));
+        }
+        reactionRow.addView(quickReactionCell("＋", false, () -> {
+            sheet.dismiss();
+            new com.duoshield.app.ui.ReactionPickerSheet(
+                    ChatMediaActivity.this, myReaction,
+                    picked -> {
+                        if (picked.equals(myReaction)) clearMyReaction(msg);
+                        else                           setMyReaction(msg, picked);
+                    }).show();
+        }));
+
+        // Explicit removal path, shown only when there is something of mine to remove. The
+        // toggle above covers it when the current reaction is one of the seven on screen,
+        // but a reaction chosen from the full picker may not be.
+        if (myReaction != null) {
+            addMsgAction(root.findViewById(R.id.actionsContainer), R.drawable.ic_delete,
+                    "Remove reaction", false, sheet, () -> clearMyReaction(msg));
         }
 
         // ── Action rows ────────────────────────────────────────────────────────
@@ -2304,6 +2314,65 @@ public class ChatMediaActivity extends BaseActivity {
         text.setTextColor(color);
         row.setOnClickListener(v -> { action.run(); sheet.dismiss(); });
         container.addView(row);
+    }
+
+    /** One tappable emoji in the quick-reaction row, weighted so the row divides evenly. */
+    private android.widget.TextView quickReactionCell(String emoji, boolean selected,
+                                                      Runnable onTap) {
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        tv.setText(emoji);
+        tv.setTextSize(28f);
+        tv.setGravity(android.view.Gravity.CENTER);
+        tv.setPadding(0, 12, 0, 12);
+        tv.setClickable(true);
+        tv.setFocusable(true);
+        // Highlighting my current pick is what makes "tap again to remove" discoverable.
+        if (selected) tv.setBackgroundResource(R.drawable.bg_reaction_badge);
+        tv.setOnClickListener(v -> onTap.run());
+        return tv;
+    }
+
+    /**
+     * Registers this user's reaction on a message.
+     *
+     * <p>Writes to the dotted field path {@code reactions.<uid>} so each participant owns their
+     * own key and cannot clobber the other's — the old single {@code reaction} field made the
+     * last writer win. Uids are alphanumeric, so the dotted path needs no escaping.
+     */
+    private void setMyReaction(Message msg, String emoji) {
+        if (myUid == null || msg.getId() == null) return;
+        final String msgId = msg.getId();
+        db.collection("chats").document(conversationId)
+          .collection("messages").document(msgId)
+          .update("reactions." + myUid, emoji);
+        adapter.updateMessage(msgId, m -> m.setReactionFor(myUid, emoji));
+        persistReactions(msgId);
+    }
+
+    /** Clears this user's reaction, deleting only their key from the map. */
+    private void clearMyReaction(Message msg) {
+        if (myUid == null || msg.getId() == null) return;
+        final String msgId = msg.getId();
+        java.util.Map<String, Object> upd = new java.util.HashMap<>();
+        upd.put("reactions." + myUid, FieldValue.delete());
+        // Also clear the legacy single-value field, otherwise getReactionsMap() would surface
+        // it again as an unattributed reaction the moment the map goes empty.
+        upd.put("reaction", FieldValue.delete());
+        db.collection("chats").document(conversationId)
+          .collection("messages").document(msgId)
+          .update(upd);
+        adapter.updateMessage(msgId, m -> m.removeReactionFor(myUid));
+        persistReactions(msgId);
+    }
+
+    /** Mirrors the post-mutation reactions JSON into Room so it survives an app restart. */
+    private void persistReactions(String msgId) {
+        Message updated = adapter.getMessageById(msgId);
+        final String json = updated == null ? null : updated.getReactions();
+        dbExecutor.execute(() -> AppDatabase.getInstance(ChatMediaActivity.this)
+                .messageDao().updateReactions(msgId, json));
     }
 
     private void copyMessage(Message msg) {

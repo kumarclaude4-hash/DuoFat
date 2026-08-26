@@ -289,6 +289,16 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     }
 
     /**
+     * The live Message instance for {@code msgId}, or null if it is not currently loaded.
+     *
+     * <p>Returns the same object the adapter binds from, so callers reading a field straight
+     * after {@link #updateMessage} see the mutated value.
+     */
+    public Message getMessageById(String msgId) {
+        return msgId == null ? null : messagesById.get(msgId);
+    }
+
+    /**
      * Update a single message in-place (reaction, status, text, etc.).
      *
      * <p>displayItems holds references to the same Message objects as messages, so
@@ -652,7 +662,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     ? partnerName : "");
         }
 
-        // ── Pin indicator ───────────────────────────────────────────
+        // ── Pin indicator ─────────────────��─────────────────────────
         if (pinnedIds.contains(msg.getId())) {
             h.pinIndicatorRow.setVisibility(View.VISIBLE);
             LinearLayout.LayoutParams pinLp =
@@ -1023,8 +1033,12 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         }
 
         // ── Reaction (WhatsApp style: floating emoji pill below bubble corner) ──
-        String reaction = msg.getReaction();
-        if (reaction != null && !reaction.isEmpty()) {
+        // Rendered from the per-user reactions map, not the legacy single-value column, so
+        // both participants' picks show side by side. getReactionSummary() collapses
+        // duplicate glyphs into "<emoji><count>" and returns "" when nobody has reacted —
+        // which is what keeps the pill hidden (it was reset to GONE above).
+        String reaction = msg.getReactionSummary();
+        if (!reaction.isEmpty()) {
             h.reactionText.setVisibility(View.VISIBLE);
             h.reactionText.setText(reaction);
             h.reactionText.setBackground(ContextCompat.getDrawable(ctx, R.drawable.bg_reaction_badge));
