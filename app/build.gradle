@@ -395,11 +395,17 @@ dependencies {
     // WebRTC — voice & video calling
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
 
-    // NOTE: androidx.localbroadcastmanager is deliberately NOT declared. The comment here
-    // used to claim it carried in-process call_invite delivery, but that path was refactored
-    // and no LocalBroadcastManager reference remains anywhere in app/src — the dependency
-    // outlived the code that used it. It is also deprecated upstream; if in-process
-    // fan-out is needed again, prefer a lifecycle-aware observable over a global bus.
+    // androidx.localbroadcastmanager — NOT used by any code in app/src, but this declaration
+    // must stay: it is a version pin, not a feature dependency.
+    //
+    // The AAR is pulled in transitively regardless, by both
+    // com.google.firebase:firebase-auth and androidx.legacy:legacy-support-core-utils
+    // (via play-services-stats <- firebase-messaging, and dynamicanimation <- material).
+    // Both request 1.0.0, so dropping this line does not remove the artifact from the APK —
+    // it only downgrades it 1.1.0 -> 1.0.0. gradle/verification-metadata.xml pins hashes for
+    // 1.1.0 only, so the downgrade fails :app:checkReleaseAarMetadata with a dependency
+    // verification error. Removing it saves no bytes and breaks the release build.
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
 
     // Pull-to-refresh on conversation list
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
