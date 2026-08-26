@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/kumarclaude4-hash/DuoFat/main/app/src/main/res/drawable/ic_secure.png" width="100" alt="DuoShield"/>
+<img src="docs/brand/duoshield-logo.png" width="100" alt="DuoShield"/>
 
 # DuoShield
 

@@ -197,7 +197,31 @@ android {
                 // libsignal-client bundles desktop runtime artifacts in its JAR.
                 // Android can never load these; excluding them changes no app code
                 // or cryptographic behavior and avoids shipping macOS/Windows payloads.
+                //
+                // These binaries sit at the JAR ROOT with no lib/<abi>/ prefix, so AGP
+                // classifies them as Java *resources* and the jniLibs filter below can
+                // never see them — that filter only applies to the native-library
+                // domain. They have to be excluded here or they ride along in every
+                // APK. Both the bare and the '**/' spelling are listed so the
+                // exclusion holds however the matcher anchors a root-level entry.
+                //
+                // The arch-suffixed '.so' glob is what removes the real payload:
+                //   libsignal_jni_amd64.so          68.7 MB  Linux x86-64
+                //   libsignal_jni_testing_amd64.so  11.9 MB  Linux x86-64, test-only
+                // = 80.5 MB of code an ARM Android device cannot even load.
+                //
+                // This cannot touch the library the app actually uses. Android's is
+                // 'libsignal_jni.so' — no arch suffix, because the ABI is carried by
+                // its jni/<abi>/ directory — and it arrives from the separate
+                // libsignal-android AAR in the jniLibs domain. The pattern is
+                // deliberately a suffix glob rather than a list of exact filenames so
+                // a future libsignal bump cannot silently reintroduce a new desktop
+                // arch (e.g. a Linux aarch64 build) under a name nobody thought to add.
+                'libsignal_jni_*.so',
+                '**/libsignal_jni_*.so',
+                '*.dylib',
                 '**/*.dylib',
+                '*.dll',
                 '**/*.dll'
             ]
         }
@@ -206,6 +230,11 @@ android {
         // Production libsignal, WebRTC and SQLCipher libraries remain untouched.
         // Store retained .so files uncompressed so Android can mmap them directly
         // from the APK (pairs with extractNativeLibs=false in the manifest).
+        //
+        // NOTE: this rule governs the AAR-supplied jni/<abi>/ libraries only. The
+        // desktop binaries at the libsignal-client JAR root are resources, not
+        // jniLibs, and are handled by the resources excludes above — do not move
+        // them here expecting them to match.
         jniLibs {
             excludes += ['**/libsignal_jni_testing.so']
             useLegacyPackaging = false
