@@ -256,7 +256,13 @@ dependencies {
     // gradle/verification-metadata.xml in the same change.
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
-    implementation 'androidx.gridlayout:gridlayout:1.0.0'
+    // NOTE: androidx.gridlayout is deliberately NOT declared. The only grid in the app is
+    // EmojiKeyboardHelper's emoji picker, and it uses the *framework* class
+    // `android.widget.GridLayout` (see its import) — which ships in the platform and needs
+    // no artifact. No layout XML references androidx.gridlayout.widget.GridLayout either, so
+    // the dependency was resolved and packaged while nothing could ever load a class from
+    // it. Re-add it only if a view actually switches to the AndroidX backport (needed solely
+    // for API < 14), and regenerate gradle/verification-metadata.xml in the same change.
 
 
     // Security — EncryptedSharedPreferences
@@ -274,7 +280,14 @@ dependencies {
     // Firebase
     implementation platform('com.google.firebase:firebase-bom:32.7.0')
     implementation 'com.google.firebase:firebase-firestore'
-    implementation 'com.google.firebase:firebase-storage'
+    // NOTE: firebase-storage is deliberately NOT declared. Media never transited Firebase
+    // Storage — uploads/downloads go through the Cloudflare Worker to R2/B2 with per-object
+    // capability tokens minted by the push server (see B2StorageHelper, SEC-A01). Nothing in
+    // app/src referenced FirebaseStorage or StorageReference, so the SDK was dead weight, and
+    // proguard-rules.pro's blanket `-keep class com.google.firebase.** { *; }` meant R8 could
+    // not strip it either: it shipped whole. Re-adding it would put user media back on a
+    // path governed by firestore/storage rules instead of the capability-token broker, so
+    // route new media through the Worker rather than declaring this.
     implementation 'com.google.firebase:firebase-auth'
     implementation 'com.google.firebase:firebase-messaging'
 
@@ -382,8 +395,11 @@ dependencies {
     // WebRTC — voice & video calling
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
 
-    // Local broadcast for in-process call_invite delivery
-    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+    // NOTE: androidx.localbroadcastmanager is deliberately NOT declared. The comment here
+    // used to claim it carried in-process call_invite delivery, but that path was refactored
+    // and no LocalBroadcastManager reference remains anywhere in app/src — the dependency
+    // outlived the code that used it. It is also deprecated upstream; if in-process
+    // fan-out is needed again, prefer a lifecycle-aware observable over a global bus.
 
     // Pull-to-refresh on conversation list
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
