@@ -40,6 +40,8 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
+import org.webrtc.audio.AudioDeviceModule;
+import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -90,6 +92,15 @@ public class CallManager {
          * previews are not.
          */
         default void onLocalMirrorChanged(boolean mirror) { }
+
+        /**
+         * Fired when the <i>other</i> party starts or stops recording the call, so this device can
+         * surface a recording indicator. Our own recording state is never reported here — use
+         * {@link CallManager#isRecording()} for that.
+         *
+         * <p>Declared {@code default} so existing implementors keep compiling.
+         */
+        default void onPeerRecordingChanged(boolean peerRecording) { }
     }
 
     public enum CallState {
@@ -102,6 +113,19 @@ public class CallManager {
 
     private EglBase eglBase;
     private PeerConnectionFactory factory;
+    /**
+     * Explicitly-owned audio device module.
+     *
+     * <p>The factory would create one internally, but only an app-owned module exposes the
+     * post-AEC mic tap that {@link CallAudioRecorder} needs. Owning it also means we are
+     * responsible for releasing it in {@link #cleanup}.
+     */
+    private AudioDeviceModule audioDeviceModule;
+    /**
+     * Call recorder. Created alongside the factory and kept for the whole call so its taps can
+     * stay attached; it ignores audio until {@link #startRecording} opens the gate.
+     */
+    private CallAudioRecorder callRecorder;
     private PeerConnection peerConnection;
     private CameraVideoCapturer videoCapturer;
     private SurfaceTextureHelper surfaceTextureHelper;
@@ -472,9 +496,30 @@ public class CallManager {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initOptions);
 
+        // The recorder must exist before the module is built, because the mic tap is registered
+        // as part of the builder and cannot be attached afterwards.
+        callRecorder = new CallAudioRecorder();
+
+        // Build the audio device module explicitly rather than letting the factory create one
+        // internally. This is what makes the post-AEC mic tap reachable.
+        //
+        // Every setting here is chosen to match the module WebRTC would have built by default,
+        // so this swap changes what we can *observe* about the audio, not how it behaves:
+        //   - VOICE_COMMUNICATION source keeps the platform's telephony tuning.
+        //   - Hardware AEC/NS are left enabled, so echo cancellation is unchanged.
+        // Deviating here would risk regressing echo/noise on live calls for every user, whether
+        // or not they ever record.
+        audioDeviceModule = JavaAudioDeviceModule.builder(context)
+                .setAudioSource(android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                .setUseHardwareAcousticEchoCanceler(true)
+                .setUseHardwareNoiseSuppressor(true)
+                .setSamplesReadyCallback(callRecorder)
+                .createAudioDeviceModule();
+
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         factory = PeerConnectionFactory.builder()
                 .setOptions(options)
+                .setAudioDeviceModule(audioDeviceModule)
                 .setVideoEncoderFactory(new DefaultVideoEncoderFactory(
                         eglBase.getEglBaseContext(), true, true))
                 .setVideoDecoderFactory(new DefaultVideoDecoderFactory(
@@ -662,6 +707,19 @@ public class CallManager {
                     remoteAudioTrack = (AudioTrack) track;
                     track.setEnabled(!outputMuted);
                     Log.d(TAG, "Remote audio track received, enabled=" + !outputMuted);
+
+                    // Attach the recorder's sink unconditionally. The recorder discards audio
+                    // while inactive, and attaching here (rather than in startRecording) is what
+                    // makes the "started recording before the remote track arrived" case work —
+                    // the track can land seconds after the user hits record.
+                    if (callRecorder != null) {
+                        try {
+                            remoteAudioTrack.addSink(callRecorder);
+                        } catch (Exception e) {
+                            // Never let a recording-only failure break call audio.
+                            Log.w(TAG, "Failed to attach recorder sink to remote track", e);
+                        }
+                    }
                 }
             }
         });
@@ -859,6 +917,8 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
+            handlePeerRecording(snap);
+
             // Callee wrote a restart offer into the doc — apply it.
             Object restartObj = snap.get("restartOffer");
             if (restartObj instanceof java.util.Map && remoteDescSet && peerConnection != null) {
@@ -1015,6 +1075,8 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
+            handlePeerRecording(snap);
+
             // Caller requested an ICE restart — create a new answer.
             Object restartFlagObj = snap.get("iceRestartRequested");
             if (Boolean.TRUE.equals(restartFlagObj) && remoteDescSet
@@ -1120,6 +1182,56 @@ public class CallManager {
 
     /** True while the partner's audio is muted locally. */
     public boolean isOutputMuted() { return outputMuted; }
+
+    // ── Call recording ────────────────────────────────────────────────────────
+
+    /**
+     * Starts recording both sides of the call to a local file, and publishes the fact that we are
+     * recording so the peer's screen can show an indicator.
+     *
+     * <p>The flag is published <i>before</i> any audio is written, so the peer is notified at the
+     * start of the recording rather than after it.
+     *
+     * @return {@code false} if there is no active call or the encoder could not start, in which
+     *         case nothing was published and {@code cb} is never invoked.
+     */
+    public boolean startRecording(CallAudioRecorder.Listener cb) {
+        if (callRecorder == null) {
+            Log.w(TAG, "startRecording ignored — no active call");
+            return false;
+        }
+        if (callRecorder.isRecording()) return true;
+
+        if (!callRecorder.start(context, cb)) return false;
+
+        if (callId != null && myUid != null) repo.setRecording(callId, myUid, true);
+
+        // The remote track may already have been attached before the recorder existed, or may
+        // still be absent. Attaching here covers the former; onAddTrack covers the latter.
+        if (remoteAudioTrack != null) {
+            try {
+                remoteAudioTrack.addSink(callRecorder);
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to attach recorder sink on start", e);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Stops recording and clears the published flag. The finished file is delivered
+     * asynchronously to the listener passed to {@link #startRecording}.
+     */
+    public void stopRecording() {
+        if (callRecorder == null || !callRecorder.isRecording()) return;
+        callRecorder.stop();
+        if (callId != null && myUid != null) repo.setRecording(callId, myUid, false);
+    }
+
+    /** True while we are recording. Does not reflect whether the <i>peer</i> is recording. */
+    public boolean isRecording() {
+        return callRecorder != null && callRecorder.isRecording();
+    }
 
     /**
      * The shared audio-route controller for this call, created on first use.
@@ -1236,6 +1348,25 @@ public class CallManager {
         if (remoteCandidateListener != null) { remoteCandidateListener.remove(); remoteCandidateListener = null; }
         if (!releasePc) return;
 
+        // Tear the recorder down first. It holds a sink on the remote track and receives mic
+        // callbacks from the audio device module, both of which are destroyed below — letting it
+        // outlive them risks a native-layer crash on a freed track.
+        //
+        // cancel() rather than stop(): the call is already gone, so there is no UI left to hand a
+        // finished file to, and a partial recording of a dropped call is not worth keeping.
+        if (callRecorder != null) {
+            if (callRecorder.isRecording() && callId != null && myUid != null) {
+                // Clear our own flag so a crash or abrupt hangup cannot leave the peer staring
+                // at a "recording" banner for a call that no longer exists.
+                repo.setRecording(callId, myUid, false);
+            }
+            if (remoteAudioTrack != null) {
+                try { remoteAudioTrack.removeSink(callRecorder); } catch (Exception ignored) {}
+            }
+            callRecorder.cancel();
+            callRecorder = null;
+        }
+
         // Stop handing these tracks out before they are disposed below — a secondary screen
         // that renders a disposed track crashes in native code.
         if (active == this) active = null;
@@ -1252,6 +1383,10 @@ public class CallManager {
         if (audioSource != null) { audioSource.dispose(); audioSource = null; }
         if (peerConnection != null) { peerConnection.close(); peerConnection = null; }
         if (factory != null) { factory.dispose(); factory = null; }
+        // We own this module now, so we must release it. The default module the factory used to
+        // create was released internally; ours would leak its audio thread if we skipped this.
+        // Ordering matters: it must outlive the factory that was using it.
+        if (audioDeviceModule != null) { audioDeviceModule.release(); audioDeviceModule = null; }
         if (eglBase != null) { eglBase.release(); eglBase = null; }
     }
 
