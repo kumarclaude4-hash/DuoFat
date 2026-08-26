@@ -72,6 +72,24 @@ public class CallManager {
         void onRemoteVideoTrack(VideoTrack track);
         void onLocalVideoTrack(VideoTrack track);
         void onError(String message);
+
+        /**
+         * Fired when the shared call-start anchor is known, so the duration timer can run in
+         * lock-step on both devices instead of each side counting from its own ICE-connect
+         * moment. {@code callStartLocalMs} is already translated into this device's
+         * {@link System#currentTimeMillis()} frame, so it can be subtracted directly.
+         *
+         * <p>May fire more than once (e.g. once optimistically, then again once the clock
+         * offset is measured); the newest value always wins.
+         */
+        default void onCallTimerAnchor(long callStartLocalMs) { }
+
+        /**
+         * Fired when the local preview's mirroring should change because the active camera
+         * switched. Front-facing previews are mirrored so they read like a mirror; rear-facing
+         * previews are not.
+         */
+        default void onLocalMirrorChanged(boolean mirror) { }
     }
 
     public enum CallState {
@@ -100,6 +118,30 @@ public class CallManager {
     private AudioTrack remoteAudioTrack;
     /** Current microphone mute state, mirrored so other screens can draw the badge. */
     private boolean micMuted = false;
+    /**
+     * True while the front (selfie) camera is active. Drives local-preview mirroring: the
+     * self-view is mirrored on the front camera and un-mirrored on the rear one.
+     */
+    private boolean isFrontCamera = true;
+
+    // ── Synced duration timer state ───────────────────────────────────────────
+    /**
+     * Offset between this device's clock and the Firestore server clock, as
+     * {@code serverMs - localMs}. Measured once per call via a server-timestamp probe so the
+     * shared {@code connectedAt} anchor can be translated into local time without inheriting
+     * wall-clock skew between the two devices.
+     */
+    private long    clockOffsetMs      = 0L;
+    private boolean clockOffsetKnown   = false;
+    /** Local timestamp taken immediately before the clock probe write is issued. */
+    private long    clockProbeSentMs   = 0L;
+    /** Raw server value of {@code connectedAt}, held until the clock offset resolves. */
+    private long    pendingAnchorServerMs = 0L;
+    /** Guards against re-issuing the anchor write/probe on every CONNECTED transition. */
+    private boolean anchorRequested    = false;
+    /** Last anchor already published to the listener, to avoid redundant callbacks. */
+    private long    publishedAnchorMs  = 0L;
+    private final Handler anchorFallbackHandler = new Handler(Looper.getMainLooper());
     /**
      * True while local playback of the partner's audio is disabled ("Turn off sound").
      * Kept separate from {@link #micMuted}: this only silences what <em>we</em> hear, the
@@ -160,6 +202,11 @@ public class CallManager {
      * or host candidate pairs) are free and must not erode the quota counter.
      */
     private boolean isRelayCall = false;
+    /**
+     * Used to hop back to the main thread for listener callbacks that originate off it
+     * (e.g. WebRTC camera-switch callbacks, which arrive on a camera thread).
+     */
+    private final Handler mainHandler  = new Handler(Looper.getMainLooper());
     private final Handler statsHandler = new Handler(Looper.getMainLooper());
     private final Runnable statsPollRunnable = new Runnable() {
         @Override public void run() {
@@ -173,6 +220,13 @@ public class CallManager {
      * Reduced from 5 s → 2 s: modern networks (WiFi↔LTE handover) recover within
      * 1–2 s, so the 5 s grace period was adding unnecessary perceived lag. */
     private static final long ICE_RESTART_DELAY_MS = 2_000L;
+
+    /**
+     * How long to wait for the server clock probe before giving up and trusting the local
+     * clock for the timer anchor. Keeps the duration display from stalling at 00:00 when the
+     * probe cannot resolve.
+     */
+    private static final long ANCHOR_FALLBACK_MS = 3_000L;
     private final Handler  iceRestartHandler  = new Handler(Looper.getMainLooper());
     private final Runnable iceRestartRunnable = new Runnable() {
         @Override public void run() {
@@ -709,10 +763,14 @@ public class CallManager {
                 : new Camera1Enumerator(true);
         for (String name : enumerator.getDeviceNames()) {
             if (enumerator.isFrontFacing(name)) {
+                isFrontCamera = true;
                 return enumerator.createCapturer(name, null);
             }
         }
         for (String name : enumerator.getDeviceNames()) {
+            // No front camera on this device — fall back to whatever exists and record the
+            // real facing so the preview is not mirrored incorrectly.
+            isFrontCamera = enumerator.isFrontFacing(name);
             return enumerator.createCapturer(name, null);
         }
         return null;
@@ -1084,10 +1142,28 @@ public class CallManager {
         }
     }
 
+    /** True while the front (selfie) camera is active. */
+    public boolean isFrontCamera() { return isFrontCamera; }
+
     public void flipCamera() {
-        if (videoCapturer instanceof CameraVideoCapturer) {
-            ((CameraVideoCapturer) videoCapturer).switchCamera(null);
-        }
+        if (!(videoCapturer instanceof CameraVideoCapturer)) return;
+        // A real switch handler is required so the local preview's mirroring follows the
+        // active camera. Passing null (the old behaviour) left the self-view mirrored for the
+        // rear camera, which reversed text and made the preview look wrong.
+        ((CameraVideoCapturer) videoCapturer).switchCamera(
+                new CameraVideoCapturer.CameraSwitchHandler() {
+                    @Override
+                    public void onCameraSwitchDone(boolean isFrontFacing) {
+                        isFrontCamera = isFrontFacing;
+                        CallListener l = listener;
+                        if (l != null) mainHandler.post(() -> l.onLocalMirrorChanged(isFrontFacing));
+                    }
+
+                    @Override
+                    public void onCameraSwitchError(String error) {
+                        Log.w(TAG, "Camera switch failed: " + error);
+                    }
+                });
     }
 
     /**
@@ -1179,6 +1255,7 @@ public class CallManager {
         if (state == CallState.CONNECTED) {
             // Cancel the connection watchdog — we made it.
             connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
+            requestTimerAnchor();
             startStatsPolling();
         } else if (state == CallState.ENDED || state == CallState.FAILED) {
             // Cancel the watchdog in case we're terminating before ever connecting.
@@ -1188,6 +1265,95 @@ public class CallManager {
     }
 
     public CallState getCurrentState() { return currentState; }
+
+    // ── Synced duration timer ─────────────────────────────────────────────────
+
+    /**
+     * Kicks off the shared call-start anchor: stamps {@code connectedAt} on the call doc (a
+     * no-op if the peer already did) and probes the server clock so the shared stamp can be
+     * translated into this device's time base.
+     *
+     * <p>Guarded by {@link #anchorRequested} because the CONNECTED state is re-entered on
+     * every ICE restart; without the guard each restart would re-probe and, worse, the old
+     * code reset the timer to zero.
+     */
+    private void requestTimerAnchor() {
+        if (anchorRequested || callId == null || myUid == null) return;
+        anchorRequested = true;
+
+        repo.markConnected(callId);
+
+        clockProbeSentMs = System.currentTimeMillis();
+        repo.writeClockProbe(callId, myUid, null);
+
+        // If the probe never resolves (offline write, restrictive rules), fall back to trusting
+        // the local clock so the timer always starts rather than hanging at 00:00.
+        anchorFallbackHandler.postDelayed(() -> {
+            if (!clockOffsetKnown) {
+                clockOffsetKnown = true;
+                clockOffsetMs    = 0L;
+                Log.w(TAG, "Clock probe unresolved — falling back to local clock for timer anchor");
+                publishAnchorIfReady();
+            }
+        }, ANCHOR_FALLBACK_MS);
+    }
+
+    /**
+     * Reads the clock probe and the shared {@code connectedAt} out of a call-doc snapshot.
+     * Shared by the caller and callee listeners.
+     */
+    private void handleTimerAnchor(DocumentSnapshot snap) {
+        // An unresolved serverTimestamp reads back as null on the local (pending) snapshot, so
+        // only trust server-acknowledged data here.
+        if (snap == null || snap.getMetadata().hasPendingWrites()) return;
+
+        if (!clockOffsetKnown && myUid != null && clockProbeSentMs > 0L) {
+            Object clockObj = snap.get("clock");
+            if (clockObj instanceof java.util.Map) {
+                Object mine = ((java.util.Map<?, ?>) clockObj).get(myUid);
+                if (mine instanceof com.google.firebase.Timestamp) {
+                    long serverMs = ((com.google.firebase.Timestamp) mine).toDate().getTime();
+                    // The server evaluated the stamp somewhere between when we sent the write
+                    // and when we observed it, so the midpoint is the best point estimate.
+                    long midLocalMs = (clockProbeSentMs + System.currentTimeMillis()) / 2L;
+                    clockOffsetMs    = serverMs - midLocalMs;
+                    clockOffsetKnown = true;
+                    Log.d(TAG, "Clock offset vs server: " + clockOffsetMs + " ms");
+                }
+            }
+        }
+
+        Object connectedObj = snap.get("connectedAt");
+        if (connectedObj instanceof com.google.firebase.Timestamp) {
+            pendingAnchorServerMs =
+                    ((com.google.firebase.Timestamp) connectedObj).toDate().getTime();
+        }
+
+        publishAnchorIfReady();
+    }
+
+    /**
+     * Publishes the anchor once both the shared server timestamp and the clock offset are
+     * known, converting server time into this device's {@link System#currentTimeMillis()}
+     * frame. Because the value is absolute rather than relative, a reconnect or an activity
+     * recreation resumes at the correct elapsed time instead of restarting from zero.
+     */
+    private void publishAnchorIfReady() {
+        if (pendingAnchorServerMs <= 0L || !clockOffsetKnown) return;
+        long localAnchorMs = pendingAnchorServerMs - clockOffsetMs;
+        // A bad clock reading could place the anchor in the future, which would render a
+        // negative duration. Clamp to now.
+        long now = System.currentTimeMillis();
+        if (localAnchorMs > now) localAnchorMs = now;
+        if (localAnchorMs == publishedAnchorMs) return;
+        publishedAnchorMs = localAnchorMs;
+
+        CallListener l = listener;
+        if (l != null) {
+            final long anchor = localAnchorMs;
+            mainHandler.post(() -> l.onCallTimerAnchor(anchor));
+        }
+    }
 
     // ── Bandwidth stats polling ───────────────────────────────────────────────
 

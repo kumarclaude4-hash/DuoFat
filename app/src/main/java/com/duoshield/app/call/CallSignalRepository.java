@@ -128,6 +128,46 @@ public class CallSignalRepository {
                 .collection("calleeCandidates").addSnapshotListener(listener);
     }
 
+    // ── Shared call-start anchor (synced duration timer) ──────────────────────
+
+    /**
+     * Stamps {@code connectedAt} with the Firestore <em>server</em> time the first time either
+     * peer reaches ICE-connected, so both devices can anchor their duration timer to one
+     * agreed instant instead of each counting from its own local connect moment.
+     *
+     * <p>The write runs in a transaction and is a no-op when {@code connectedAt} already
+     * exists. That matters for two reasons: whichever peer connects first wins the race, and
+     * an ICE restart (which re-enters the CONNECTED state) cannot rewind an established
+     * timer back to zero.
+     */
+    public void markConnected(String callId) {
+        final DocumentReference ref = callRef(callId);
+        db.runTransaction(tx -> {
+            com.google.firebase.firestore.DocumentSnapshot snap = tx.get(ref);
+            if (!snap.exists() || snap.get("connectedAt") != null) return null;  // already anchored
+            tx.update(ref, "connectedAt", FieldValue.serverTimestamp());
+            return null;
+        }).addOnFailureListener(e -> Log.w(TAG, "markConnected failed (non-fatal): " + e.getMessage()));
+    }
+
+    /**
+     * Writes {@code clock.<uid>} as a server timestamp so this device can measure its offset
+     * from the Firestore server clock.
+     *
+     * <p>Without this, translating the shared {@code connectedAt} into local time would
+     * silently inherit any skew between the two devices' wall clocks — the exact drift the
+     * shared anchor exists to eliminate. {@code cb} fires once the write is acknowledged, and
+     * the caller brackets that ack to estimate when the server evaluated the stamp.
+     */
+    public void writeClockProbe(String callId, String uid, OnCompleteCallback cb) {
+        callRef(callId).update("clock." + uid, FieldValue.serverTimestamp())
+                .addOnSuccessListener(v -> { if (cb != null) cb.onSuccess(); })
+                .addOnFailureListener(e -> {
+                    Log.w(TAG, "writeClockProbe failed (non-fatal): " + e.getMessage());
+                    if (cb != null) cb.onFailure(e);
+                });
+    }
+
     // ── ICE restart signaling ─────────────────────────────────────────────────
 
     /**
