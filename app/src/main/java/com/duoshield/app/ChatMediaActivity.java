@@ -203,7 +203,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     private static final long[]   DISAPPEAR_OPTS_MS    = {0, 5_000L, 30_000L, 60_000L, 300_000L, 3_600_000L, 86_400_000L, 604_800_000L};
     private static final String[] DISAPPEAR_OPTS_LBL   = {"Off", "5 seconds", "30 seconds", "1 minute", "5 minutes", "1 hour", "1 day", "1 week"};
-    private static final String[] DISAPPEAR_OPTS_EMOJI  = {"🚫", "��", "⏱", "1️⃣", "5️⃣", "🕐", "📅", "📆"};
+    private static final String[] DISAPPEAR_OPTS_EMOJI  = {"🚫", "⚡", "⏱", "1️⃣", "5️⃣", "🕐", "📅", "📆"};
     private static final String   DESTRUCT_WORK_TAG  = "self_destruct_work";
 
     // Voice recording
@@ -883,7 +883,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // CALLING
-    // ══════════════════════════════════════════════════════════════
+    // ══════════════════��═══════════════════════════════════════════
 
     private void requestCallPermissions(boolean isVideo) {
         pendingCallIsVideo = isVideo;

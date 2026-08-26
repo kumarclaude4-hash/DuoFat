@@ -904,8 +904,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         remoteVideoView.setMirror(false);
         remoteVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
         localVideoView.init(eglBase.getEglBaseContext(), null);
-        // mirror=false: local preview shows what the remote party sees (not reversed)
-        localVideoView.setMirror(false);
+        // The capturer starts on the front camera, whose frames are un-mirrored (i.e. reversed
+        // from the user's point of view). Mirroring the self-preview makes it behave like a
+        // real mirror, matching WhatsApp. The rear camera must NOT be mirrored, so this flips
+        // back and forth via onLocalMirrorChanged() whenever the camera is switched.
+        localVideoView.setMirror(callManager.isFrontCamera());
         localVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
     }
 
@@ -1300,6 +1303,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             localVideoPip.setVisibility(View.VISIBLE);
             track.addSink(localVideoView);
         });
+    }
+
+    @Override
+    public void onLocalMirrorChanged(boolean mirror) {
+        runOnUiThread(() -> localVideoView.setMirror(mirror));
     }
 
     @Override
