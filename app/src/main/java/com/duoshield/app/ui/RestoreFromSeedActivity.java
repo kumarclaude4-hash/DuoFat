@@ -18,6 +18,7 @@ import com.duoshield.app.ui.AddContactActivity;
 import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.backup.BackupScheduler;
 import com.duoshield.app.backup.MediaRestoreHelper;
+import com.duoshield.app.contacts.AccountIdValidator;
 import com.duoshield.app.crypto.BackupCryptoHelper;
 import com.duoshield.app.crypto.SeedPhraseHelper;
 import com.duoshield.app.crypto.signal.SignalKeyManager;
@@ -94,8 +95,34 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
    * and an account that is actually locked — there is no version of this
    * screen where a locked account's owner benefits from the attacker knowing
    * the account is real but inaccessible instead of believing it never existed.
+   *
+   * <p><b>Scope limit — read before widening any pattern in
+   * {@link #friendlyError(Throwable)}.</b> This message is reserved for
+   * outcomes that are genuinely about <em>this account's</em> existence or
+   * authorization: a wrong seed, a wrong Account ID, a locked account, or an
+   * account that was never created. It must never be shown for a transient or
+   * infrastructure failure — no network, request timeout, App Check or gateway
+   * rejection, unavailable Firestore, contended local database, locked
+   * Keystore. Those say nothing about whether the account exists, and claiming
+   * non-existence to someone holding a correct recovery phrase reads as
+   * permanent data loss and stops them retrying a restore that would have
+   * worked. Two patterns previously broke this rule — a bare {@code "403"}
+   * (which caught every gateway 403, not just /mintToken's authorization
+   * refusal) and a bare {@code "locked"} (which caught
+   * {@code "database is locked"}). Both are now matched precisely.
    */
   private static final String GENERIC_RESTORE_FAILURE = "Account does not exist.";
+
+  /**
+   * Shown when a restore could not be completed for a reason that is
+   * <em>not</em> account-scoped and may well succeed on the next attempt. Kept
+   * deliberately distinct from {@link #GENERIC_RESTORE_FAILURE}: it invites a
+   * retry rather than reading as a dead end. It leaks nothing — an attacker
+   * holding a coerced seed learns only that the request did not complete,
+   * which they can already see from the absence of a restored account.
+   */
+  private static final String TRANSIENT_RESTORE_FAILURE =
+          "Could not complete the restore. Please try again.";
 
     private TextInputEditText         etAccountId;
     private TextInputEditText         etSeedWords;
@@ -158,6 +185,30 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         String accountId = etAccountId != null && etAccountId.getText() != null
                 ? etAccountId.getText().toString().trim() : "";
         if (accountId.isEmpty()) { showError("Please enter your Account ID."); return; }
+
+        // A mistyped Account ID is the single most common way a legitimate owner
+        // reached GENERIC_RESTORE_FAILURE — the derived-ID comparison below cannot
+        // tell "you fat-fingered one character" from "this account never existed",
+        // so a typo used to be reported as "Account does not exist." and read as
+        // permanent data loss.
+        //
+        // Rejecting a *malformed* ID here leaks nothing: every real Account ID is
+        // SeedPhraseHelper.deriveUserId()'s XXXXX-XXXXX-XXX over the unambiguous
+        // base32 alphabet, so a string outside that shape cannot be any account,
+        // existing or not. No lookup happens and no account is probed — this is a
+        // pure client-side format check, exactly like the 12-word check below it.
+        // Enumeration only becomes possible once a *well-formed* ID is treated
+        // differently depending on whether it resolves, which is still collapsed
+        // into the single generic message.
+        if (!AccountIdValidator.isValid(accountId)) {
+            showError("That Account ID doesn't look right. It should look like "
+                    + "K3MNP-Q8RXA-7BC — 13 characters in three groups. "
+                    + "Please check it and try again.");
+            return;
+        }
+        // Canonical (trimmed + upper-cased) form, so a lower-case paste no longer
+        // depends on the equalsIgnoreCase below to survive.
+        accountId = AccountIdValidator.canonicalizeOrNull(accountId);
 
         String raw   = etSeedWords.getText() != null ? etSeedWords.getText().toString().trim() : "";
         String[] parts = raw.split("\\s+");
@@ -820,43 +871,92 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
     }
 
     private static String friendlyError(Throwable e) {
-        if (e == null) return GENERIC_RESTORE_FAILURE;
+        // An absent Throwable is not evidence of an absent account — it is an
+        // internal bug. Telling the owner of a perfectly good account that it
+        // "does not exist" is the worst possible reading of "we don't know".
+        if (e == null) return TRANSIENT_RESTORE_FAILURE;
         String s = e.getMessage() != null ? e.getMessage() : e.toString();
-        // Credential-mismatch cases are deliberately collapsed to the same generic
-        // message as the client-side derivedUserId check above — see
-        // GENERIC_RESTORE_FAILURE's javadoc for why distinguishing them is unsafe.
-        // Every server-side refusal of a restore is folded in here, not just the
-        // key-mismatch ones. A locked (duress-latched) account is rejected by
-        // /mintToken with the 403 body "Access request not approved", and
-        // AuthTokenHelper deliberately re-throws that reason string verbatim so the
-        // *signup* screen can tell an unapproved invite apart from a bad key. On
-        // this screen that same string used to fall through to the "Restore failed:
-        // <message>" tail, printing "Restore failed: Access request not approved" —
-        // a message no other failure produces, which told anyone holding a coerced
-        // seed phrase that the account is real and was locked rather than never
-        // having existed. That is exactly the inference GENERIC_RESTORE_FAILURE
-        // exists to prevent, so match it (and the invite-gate string a restore of a
-        // never-created account produces) before the tail can reach it.
         String lower = s.toLowerCase(Locale.ROOT);
-        if (s.contains("Key mismatch") || s.contains("403")
-                || s.contains("Recovery phrase does not match")
-                || s.contains("Credential mismatch")
-                || lower.contains("access request")
-                || lower.contains("valid invite required")
-                || lower.contains("locked"))
-            return GENERIC_RESTORE_FAILURE;
+
+        // ── Transient / infrastructure failures — classified FIRST ────────────
+        //
+        // These are ordered ahead of the credential bucket deliberately. A
+        // dropped connection, an App Check rejection, a cold Firestore or a
+        // contended local database says nothing whatsoever about whether the
+        // account exists, so none of them may ever surface as
+        // GENERIC_RESTORE_FAILURE. Getting "Account does not exist." while
+        // holding a correct recovery phrase reads as permanent, irreversible
+        // data loss: the owner stops retrying and assumes the account is gone.
+        // That is a far more common outcome than the coerced-seed attack the
+        // generic message defends against, and the two do not conflict — an
+        // attacker learns nothing from "check your connection".
         if (s.contains("429") || s.contains("Too many"))
             return "Too many attempts. Please wait a moment and try again.";
         if (s.contains("PUSH_SERVER_URL"))
             return "The auth server is not configured. Contact support.";
+        // Any non-200 the auth server reports through this wrapper is transport
+        // or gateway noise (App Check, WAF, proxy, deploy in progress). The two
+        // /mintToken refusals that *are* credential signals never reach here —
+        // AuthTokenHelper converts both into the explicit strings matched in the
+        // credential bucket below, so a bare status code must not be read as one.
+        if (s.contains("Auth server returned HTTP"))
+            return "Could not reach the auth server. Please try again in a moment.";
         if (s.contains("timeout") || s.contains("timed out")
                 || s.contains("network") || s.contains("IOException")
-                || s.contains("UnknownHost") || s.contains("connect"))
+                || s.contains("SocketException") || s.contains("SSLException")
+                || s.contains("UnknownHost") || lower.contains("unable to resolve host")
+                || lower.contains("failed to connect"))
             return "Could not reach the auth server. Check your internet connection and try again.";
+        if (s.contains("FAILED_PRECONDITION") || s.contains("UNAVAILABLE")
+                || s.contains("DEADLINE_EXCEEDED"))
+            return "Could not reach the server. Check your internet connection and try again.";
+        // "database is locked" (SQLCipher/Room contention) and a locked Keystore
+        // are the exact strings the old broad `contains("locked")` test swallowed
+        // into "Account does not exist." Both are local, retryable conditions.
+        if (lower.contains("database is locked") || s.contains("SQLITE_LOCKED")
+                || s.contains("KeyStore") || s.contains("Keystore")
+                || s.contains("UserNotAuthenticated"))
+            return "Could not unlock secure storage on this device. "
+                 + "Unlock your screen and try again.";
         if (s.contains("NoClassDefFoundError") || s.contains("UnsatisfiedLink"))
             return "Encryption library failed to load. Please reinstall the app.";
-        if (s.contains("FAILED_PRECONDITION") || s.contains("UNAVAILABLE"))
-            return "Could not reach the server. Check your internet connection and try again.";
+
+        // ── Credential / lock / absent-account failures ───────────────────────
+        //
+        // Collapsed to one message, matching the client-side derivedUserId check
+        // above — see GENERIC_RESTORE_FAILURE's javadoc for why distinguishing
+        // them is unsafe. Every server-side *authorization* refusal of a restore
+        // is folded in here, not just the key-mismatch ones. A locked
+        // (duress-latched) account is rejected by /mintToken with the 403 body
+        // "Access request not approved", and AuthTokenHelper deliberately
+        // re-throws that reason string verbatim so the *signup* screen can tell
+        // an unapproved invite apart from a bad key. On this screen that same
+        // string used to fall through to the "Restore failed: <message>" tail,
+        // printing "Restore failed: Access request not approved" — a message no
+        // other failure produces, which told anyone holding a coerced seed phrase
+        // that the account is real and was locked rather than never having
+        // existed. That is exactly the inference GENERIC_RESTORE_FAILURE exists
+        // to prevent, so match it (and the invite-gate string a restore of a
+        // never-created account produces) before the tail can reach it.
+        //
+        // Every pattern here names an account-scoped refusal explicitly. Bare
+        // "403" and bare "locked" used to live in this list and were the reason
+        // ordinary users saw "Account does not exist.": the former caught every
+        // gateway 403, the latter caught "database is locked".
+        if (s.contains("Key mismatch")
+                || s.contains("Recovery phrase does not match")
+                || s.contains("Credential mismatch")
+                // The UID-mismatch SecurityException thrown after sign-in. Left
+                // unmatched it reached the verbatim tail as a message no other
+                // failure produces — the same leak as "Access request not approved".
+                || s.contains("Authenticated UID does not match")
+                || lower.contains("access request")
+                || lower.contains("valid invite required")
+                || lower.contains("account is locked")
+                || lower.contains("account locked")
+                || lower.contains("account has been locked"))
+            return GENERIC_RESTORE_FAILURE;
+
         return "Restore failed: " + s;
     }
 
