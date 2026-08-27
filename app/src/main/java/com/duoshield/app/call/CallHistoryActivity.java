@@ -1,10 +1,14 @@
 package com.duoshield.app.call;
 
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.Toolbar;
@@ -45,7 +49,7 @@ public class CallHistoryActivity extends BaseActivity {
         RecyclerView rv = findViewById(R.id.rvCallHistory);
         rv.setLayoutManager(new LinearLayoutManager(this));
 
-        adapter = new CallHistoryAdapter(record -> showDeleteDialog(record));
+        adapter = new CallHistoryAdapter(this::showDeleteDialog, this::togglePlayback);
         rv.setAdapter(adapter);
 
         db = AppDatabase.getInstance(this);
@@ -64,12 +68,83 @@ public class CallHistoryActivity extends BaseActivity {
         });
     }
 
+    // ── Recording playback ────────────────────────────────────────────────────
+
+    /**
+     * Starts this row's recording, or stops it if it is already the one playing. Only one
+     * recording plays at a time, so starting a second one stops the first.
+     */
+    private void togglePlayback(CallRecord record) {
+        if (record.id.equals(playingRecordId)) {
+            stopPlayback();
+            return;
+        }
+        stopPlayback();
+
+        File f = record.recordingPath == null ? null : new File(record.recordingPath);
+        if (f == null || !f.exists()) {
+            // The file vanished after the list was bound. Repaint so the button disappears
+            // instead of failing again on the next tap.
+            Toast.makeText(this, "Recording is no longer available", Toast.LENGTH_SHORT).show();
+            loadHistory();
+            return;
+        }
+
+        try {
+            player = new MediaPlayer();
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
+            player.setDataSource(f.getAbsolutePath());
+            player.setOnCompletionListener(mp -> stopPlayback());
+            player.setOnErrorListener((mp, what, extra) -> {
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "Could not play recording", Toast.LENGTH_SHORT).show();
+                    stopPlayback();
+                });
+                return true;
+            });
+            player.prepare();
+            player.start();
+
+            playingRecordId = record.id;
+            adapter.setPlayingRecordId(playingRecordId);
+        } catch (Exception e) {
+            Log.e(TAG, "playback failed", e);
+            Toast.makeText(this, "Could not play recording", Toast.LENGTH_SHORT).show();
+            stopPlayback();
+        }
+    }
+
+    /** Releases the player and clears the playing indicator. Safe to call when nothing plays. */
+    private void stopPlayback() {
+        if (player != null) {
+            try {
+                player.reset();   // reset() before release() so a mid-prepare player can't throw
+                player.release();
+            } catch (Exception ignored) {}
+            player = null;
+        }
+        if (playingRecordId != null) {
+            playingRecordId = null;
+            adapter.setPlayingRecordId(null);
+        }
+    }
+
     private void showDeleteDialog(CallRecord record) {
         new MaterialAlertDialogBuilder(this)
                 .setTitle("Delete entry")
-                .setMessage("Remove this call from your history?")
+                .setMessage(record.recordingPath != null
+                        ? "Remove this call from your history? The recording will be deleted too."
+                        : "Remove this call from your history?")
                 .setPositiveButton("Delete", (d, w) -> {
+                    // Stop first: deleting the file under a running player leaves it playing from
+                    // an unlinked descriptor, with a stop button on a row that no longer exists.
+                    if (record.id.equals(playingRecordId)) stopPlayback();
                     executor.execute(() -> {
+                        // Delete the file before the row, while the path is still readable.
+                        CallRecordingStore.deleteRecordingFor(record);
                         db.callHistoryDao().deleteById(record.id);
                         loadHistory();
                     });

@@ -1179,6 +1179,12 @@ public class CallManager {
      * not notified. The finished audio never leaves this device — it is handed to {@code cb} as a
      * local file path for on-device storage only.
      *
+     * <p>{@code cb} is a UI listener only. Persisting the finished file is <i>not</i> its job and
+     * must not be: the encoder flushes asynchronously, so on a hangup-while-recording the calling
+     * Activity is already gone by the time the file is ready. This method therefore wraps {@code cb}
+     * and hands every finished recording to the app-scoped {@link CallRecordingStore} first, then
+     * forwards to {@code cb} for UI feedback if it is still interested.
+     *
      * @return {@code false} if there is no active call or the encoder could not start, in which
      *         case {@code cb} is never invoked.
      */
@@ -1189,7 +1195,22 @@ public class CallManager {
         }
         if (callRecorder.isRecording()) return true;
 
-        if (!callRecorder.start(context, cb)) return false;
+        CallRecordingStore store = CallRecordingStore.get(context);
+        CallAudioRecorder.Listener persisting = new CallAudioRecorder.Listener() {
+            @Override public void onStopped(String filePath, int durationSeconds) {
+                // Storage first, UI second: the store outlives the Activity, cb may not.
+                store.onRecordingFinished(filePath);
+                if (cb != null) cb.onStopped(filePath, durationSeconds);
+            }
+            @Override public void onError(String message) {
+                if (cb != null) cb.onError(message);
+            }
+            @Override public void onMaxDurationReached() {
+                if (cb != null) cb.onMaxDurationReached();
+            }
+        };
+
+        if (!callRecorder.start(context, persisting)) return false;
 
         // The remote track may already have been attached before the recorder existed, or may
         // still be absent. Attaching here covers the former; onAddTrack covers the latter.
@@ -1204,13 +1225,15 @@ public class CallManager {
     }
 
     /**
-     * Stops recording and clears the published flag. The finished file is delivered
-     * asynchronously to the listener passed to {@link #startRecording}.
+     * Stops recording. The finished file is delivered asynchronously to the listener passed to
+     * {@link #startRecording}.
+     *
+     * <p>Nothing is published to the call document here, matching {@link #startRecording}: the
+     * peer is never told a recording started, so there is no flag to clear either.
      */
     public void stopRecording() {
         if (callRecorder == null || !callRecorder.isRecording()) return;
         callRecorder.stop();
-        if (callId != null && myUid != null) repo.setRecording(callId, myUid, false);
     }
 
     /** True while we are recording. Does not reflect whether the <i>peer</i> is recording. */
@@ -1335,20 +1358,23 @@ public class CallManager {
 
         // Tear the recorder down first. It holds a sink on the remote track and receives mic
         // callbacks from the audio device module, both of which are destroyed below — letting it
-        // outlive them risks a native-layer crash on a freed track.
+        // outlive them risks a native-layer crash on a freed track. Detaching the sink is enough to
+        // make that safe: ingest stops here, while the encoder thread only touches its own rings.
         //
-        // cancel() rather than stop(): the call is already gone, so there is no UI left to hand a
-        // finished file to, and a partial recording of a dropped call is not worth keeping.
+        // stop() rather than cancel() when a recording is in flight. Hanging up *is* the normal way
+        // to end a recording — most users never press stop first — and cancel() deletes the partial
+        // file, so cancelling here would silently destroy the recording on the most common path.
+        // stop() lets the encoder flush and deliver, and CallRecordingStore (not the already-dying
+        // Activity) is what receives the result.
         if (callRecorder != null) {
-            if (callRecorder.isRecording() && callId != null && myUid != null) {
-                // Clear our own flag so a crash or abrupt hangup cannot leave the peer staring
-                // at a "recording" banner for a call that no longer exists.
-                repo.setRecording(callId, myUid, false);
-            }
             if (remoteAudioTrack != null) {
                 try { remoteAudioTrack.removeSink(callRecorder); } catch (Exception ignored) {}
             }
-            callRecorder.cancel();
+            if (callRecorder.isRecording()) {
+                callRecorder.stop();
+            } else {
+                callRecorder.cancel();
+            }
             callRecorder = null;
         }
 
