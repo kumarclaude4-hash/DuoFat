@@ -11,7 +11,7 @@ import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 import com.duoshield.app.R;
 import com.duoshield.app.models.Conversation;
-import com.duoshield.app.util.LastSeenFormatter;
+import com.duoshield.app.util.PresenceFormatter;
 import com.duoshield.app.util.TimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -113,7 +113,7 @@ public class ConversationAdapter
                 h.tvLastSeen.setTextColor(0xFF6BBF8A);
             } else if (c.lastSeen > 0) {
                 h.tvLastSeen.setVisibility(View.VISIBLE);
-                h.tvLastSeen.setText(LastSeenFormatter.format(c.lastSeen, false));
+                h.tvLastSeen.setText(PresenceFormatter.format(c.lastSeen, false));
                 h.tvLastSeen.setTextColor(0xFF9A8FB0);
             } else {
                 h.tvLastSeen.setVisibility(View.GONE);

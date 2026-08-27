@@ -402,9 +402,7 @@ public class ConversationListActivity extends BaseActivity {
                     conv.isOnline = Boolean.TRUE.equals(online);
 
                     Object lastSeenObj = doc.get("lastSeen_" + partnerUid);
-                    if (lastSeenObj instanceof com.google.firebase.Timestamp) {
-                        conv.lastSeen = ((com.google.firebase.Timestamp) lastSeenObj).toDate().getTime();
-                    }
+                    conv.lastSeen = com.duoshield.app.util.PresenceFormatter.timestampMillis(lastSeenObj);
 
                     Object muted = doc.get("muted_" + myUid);
                     conv.isMuted = Boolean.TRUE.equals(muted);

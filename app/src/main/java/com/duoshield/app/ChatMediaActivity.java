@@ -881,7 +881,7 @@ public class ChatMediaActivity extends BaseActivity {
             tvOnlineStatus.setText("online");
             tvOnlineStatus.setTextColor(0xFF6BBF8A);
         } else if (lastSeenMs > 0) {
-            tvOnlineStatus.setText("last seen " + formatLastSeen(lastSeenMs));
+            tvOnlineStatus.setText(com.duoshield.app.util.PresenceFormatter.format(lastSeenMs, false));
             tvOnlineStatus.setTextColor(0xFF9A8FB0);
         } else {
             tvOnlineStatus.setText("🔒 end-to-end encrypted");
@@ -889,14 +889,24 @@ public class ChatMediaActivity extends BaseActivity {
         }
     }
 
-    private String formatLastSeen(long epochMs) {
-        long diff = System.currentTimeMillis() - epochMs;
-        if (diff < 60_000) return "just now";
-        if (diff < 3600_000) return (diff / 60_000) + "m ago";
-        if (diff < 86400_000) return (diff / 3600_000) + "h ago";
-        return new java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault())
-            .format(new java.util.Date(epochMs));
+    /** Refreshes presence from the server so a cached conversation snapshot cannot leave the header stale. */
+    private void refreshPresenceFromServer() {
+        if (conversationId == null || partnerUid == null) return;
+        FirebaseCostGuard guard = FirebaseCostGuard.getInstance(this);
+        if (!guard.canRead(1)) return;
+        db.collection("chats").document(conversationId)
+          .get(com.google.firebase.firestore.Source.SERVER)
+          .addOnSuccessListener(snap -> {
+              guard.recordReads(1);
+              if (isFinishing() || isDestroyed()) return;
+              long lastSeenMs = com.duoshield.app.util.PresenceFormatter.timestampMillis(
+                      snap.get("lastSeen_" + partnerUid));
+              updateOnlineStatus(Boolean.TRUE.equals(snap.get("online_" + partnerUid)), lastSeenMs);
+          })
+          .addOnFailureListener(e ->
+                  Log.d(TAG, "Presence server refresh unavailable: " + e.getMessage()));
     }
+
 
     // ══════════════════════════════════════════════════════════════
     // CALLING
@@ -1513,6 +1523,7 @@ public class ChatMediaActivity extends BaseActivity {
         if (conversationId != null) {
             if (msgListener  == null) ensureSignalSession(); // ensures session then starts listener
             if (convListener == null) listenForConvUpdates();
+            refreshPresenceFromServer();
         }
         // Mark this user as online in the active conversation so the partner's conversation
         // list and chat header show the online dot immediately.
@@ -1602,9 +1613,7 @@ public class ChatMediaActivity extends BaseActivity {
               // Online / last seen
               Object online   = snap.get("online_"   + partnerUid);
               Object lastSeen = snap.get("lastSeen_" + partnerUid);
-              long lastSeenMs = 0;
-              if (lastSeen instanceof com.google.firebase.Timestamp)
-                  lastSeenMs = ((com.google.firebase.Timestamp) lastSeen).toDate().getTime();
+              long lastSeenMs = com.duoshield.app.util.PresenceFormatter.timestampMillis(lastSeen);
               updateOnlineStatus(Boolean.TRUE.equals(online), lastSeenMs);
 
               // ── Disappearing-messages partner sync (Feature B) ──────────────
