@@ -61,11 +61,10 @@ public class S319ManifestTest {
     }
 
     /**
-     * S08-M2: file_paths.xml must declare exactly one root — the
-     * FileProvider-grantable "shared/" subdirectory — and must not declare
-     * either external-storage root (the app never writes to external
-     * storage) or an unscoped "." cache/files root (getFilesDir() locations
-     * like the avatar and B2 disk cache are never passed to FileProvider).
+     * S08-M2: file_paths.xml may expose only the two narrowly scoped roots
+     * used by the app: shared/ for media sharing and updates/ under the app's
+     * external-files directory for the verified APK installer handoff. It must
+     * not declare either external-storage root or an unscoped "." root.
      */
     @Test
     public void filePaths_declaresOnlyScopedSharedCacheRoot() throws Exception {
@@ -76,27 +75,28 @@ public class S319ManifestTest {
 
         NodeList children = root.getChildNodes();
         int elementCount = 0;
-        Element onlyPathElement = null;
+        Element sharedPath = null;
+        Element updatesPath = null;
         for (int i = 0; i < children.getLength(); i++) {
             Node child = children.item(i);
             if (child.getNodeType() == Node.ELEMENT_NODE) {
                 elementCount++;
-                onlyPathElement = (Element) child;
+                Element path = (Element) child;
+                if ("shared".equals(path.getAttribute("name"))) sharedPath = path;
+                if ("updates".equals(path.getAttribute("name"))) updatesPath = path;
             }
         }
 
-        assertEquals("expected exactly one declared path root", 1, elementCount);
-        assertNotNull(onlyPathElement);
-        assertEquals("the one root must be cache-path (getCacheDir()-relative)",
-                "cache-path", onlyPathElement.getTagName());
-        assertEquals("shared", onlyPathElement.getAttribute("name"));
-        assertEquals("shared/", onlyPathElement.getAttribute("path"));
+        assertEquals("expected exactly two declared path roots", 2, elementCount);
+        assertNotNull(sharedPath);
+        assertEquals("cache-path", sharedPath.getTagName());
+        assertEquals("shared/", sharedPath.getAttribute("path"));
+        assertNotNull(updatesPath);
+        assertEquals("external-files-path", updatesPath.getTagName());
+        assertEquals("updates/", updatesPath.getAttribute("path"));
 
-        // Explicitly assert the two external-storage roots and the unscoped
-        // "." files-path root this fix removed are gone, not just that a
-        // shared root exists alongside them.
+        // Explicitly reject the external-cache and unscoped files roots.
         assertEquals(0, root.getElementsByTagName("external-cache-path").getLength());
-        assertEquals(0, root.getElementsByTagName("external-files-path").getLength());
         assertEquals(0, root.getElementsByTagName("files-path").getLength());
     }
 

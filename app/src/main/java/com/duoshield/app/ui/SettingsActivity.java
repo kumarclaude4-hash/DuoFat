@@ -1,5 +1,6 @@
 package com.duoshield.app.ui;
 
+import android.app.Dialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -64,6 +65,8 @@ public class SettingsActivity extends BaseActivity {
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
     /** Monotonically increases for every photo load/selection; stale callbacks are ignored. */
     private final AtomicInteger photoGeneration = new AtomicInteger(0);
+    private File pendingApkForInstall;
+    private Dialog updateDownloadDialog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -151,6 +154,134 @@ public class SettingsActivity extends BaseActivity {
             int    vCode = com.duoshield.app.util.AppUpdateHelper.getVersionCode(this);
             tvAppVersion.setText("DuoShield v" + vName + " (" + vCode + ")");
         }
+
+        LinearLayout rowCheckForUpdates = findViewById(R.id.rowCheckForUpdates);
+        if (rowCheckForUpdates != null) {
+            rowCheckForUpdates.setOnClickListener(v -> checkForUpdates(true));
+        }
+        // Keep the feature discoverable without interrupting normal use: opening
+        // Settings performs a silent check and only shows a dialog when a release exists.
+        checkForUpdates(false);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (pendingApkForInstall != null
+                && AppUpdateHelper.canInstallPackages(this)) {
+            File apk = pendingApkForInstall;
+            pendingApkForInstall = null;
+            AppUpdateHelper.install(this, apk, new AppUpdateHelper.InstallCallback() {
+                @Override public void onPermissionRequired() { pendingApkForInstall = apk; }
+                @Override public void onStarted() { }
+                @Override public void onError(String message) {
+                    Toast.makeText(SettingsActivity.this, message, Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+    }
+
+    private void checkForUpdates(boolean showUpToDate) {
+        TextView summary = findViewById(R.id.tvUpdateSummary);
+        if (summary != null) summary.setText("Checking for updates…");
+        AppUpdateHelper.checkForUpdate(this, new AppUpdateHelper.CheckCallback() {
+            @Override public void onUpdateAvailable(AppUpdateHelper.ReleaseInfo info) {
+                if (isFinishing() || isDestroyed()) return;
+                if (summary != null) summary.setText("Version " + info.versionName + " is available");
+                showUpdateDialog(info);
+            }
+
+            @Override public void onUpToDate(String currentVersion) {
+                if (isFinishing() || isDestroyed()) return;
+                if (summary != null) summary.setText("You’re up to date");
+                if (showUpToDate) {
+                    Toast.makeText(SettingsActivity.this,
+                            "You’re already using the latest version.", Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override public void onError(String message) {
+                if (isFinishing() || isDestroyed()) return;
+                if (summary != null) summary.setText("Tap to check again");
+                if (showUpToDate) {
+                    Toast.makeText(SettingsActivity.this, message, Toast.LENGTH_LONG).show();
+                }
+            }
+        });
+    }
+
+    private void showUpdateDialog(AppUpdateHelper.ReleaseInfo info) {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("New DuoShield update")
+                .setMessage("Version " + info.versionName
+                        + " is ready to download. Your account and local data stay on this device, "
+                        + "so you won’t need to log in again.")
+                .setNegativeButton("Later", null)
+                .setPositiveButton("Download", (dialog, which) -> downloadUpdate(info))
+                .show();
+    }
+
+    private void downloadUpdate(AppUpdateHelper.ReleaseInfo info) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int dp = (int) getResources().getDisplayMetrics().density;
+        content.setPadding(24 * dp, 8 * dp, 24 * dp, 4 * dp);
+
+        TextView status = new TextView(this);
+        status.setText("Preparing secure download…");
+        status.setTextColor(getResources().getColor(R.color.ds_text_secondary));
+        status.setTextSize(14);
+        content.addView(status);
+
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(100);
+        progress.setProgress(0);
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 8 * dp);
+        progressParams.topMargin = 16 * dp;
+        content.addView(progress, progressParams);
+
+        updateDownloadDialog = new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Downloading update")
+                .setView(content)
+                .setCancelable(false)
+                .show();
+
+        AppUpdateHelper.download(this, info, new AppUpdateHelper.DownloadCallback() {
+            @Override public void onProgress(int percent) {
+                if (progress.getHandler() == null) return;
+                progress.setProgress(Math.max(0, percent));
+                status.setText(percent >= 0 ? "Downloading… " + percent + "%" : "Downloading…");
+            }
+
+            @Override public void onDownloaded(File apk) {
+                if (updateDownloadDialog != null) updateDownloadDialog.dismiss();
+                AppUpdateHelper.install(SettingsActivity.this, apk, new AppUpdateHelper.InstallCallback() {
+                    @Override public void onPermissionRequired() {
+                        pendingApkForInstall = apk;
+                        new androidx.appcompat.app.AlertDialog.Builder(SettingsActivity.this)
+                                .setTitle("Allow installation")
+                                .setMessage("Android needs permission to install updates downloaded inside DuoShield.")
+                                .setNegativeButton("Later", null)
+                                .setPositiveButton("Open settings", (d, w) ->
+                                        AppUpdateHelper.openInstallPermissionSettings(SettingsActivity.this))
+                                .show();
+                    }
+                    @Override public void onStarted() {
+                        Toast.makeText(SettingsActivity.this,
+                                "Opening Android installer…", Toast.LENGTH_SHORT).show();
+                    }
+                    @Override public void onError(String message) {
+                        Toast.makeText(SettingsActivity.this, message, Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+
+            @Override public void onError(String message) {
+                if (updateDownloadDialog != null) updateDownloadDialog.dismiss();
+                Toast.makeText(SettingsActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     // ── Call data usage dialog ────────────────────────────────────────────────
@@ -682,6 +813,10 @@ public class SettingsActivity extends BaseActivity {
     @Override
     protected void onDestroy() {
         photoGeneration.incrementAndGet();
+        if (updateDownloadDialog != null && updateDownloadDialog.isShowing()) {
+            updateDownloadDialog.dismiss();
+            updateDownloadDialog = null;
+        }
         super.onDestroy();
         if (!bgExecutor.isShutdown()) bgExecutor.shutdown();
     }

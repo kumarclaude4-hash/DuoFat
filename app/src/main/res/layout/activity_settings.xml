@@ -404,6 +404,66 @@
                     app:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
 
+            <!-- ══ APP UPDATES ═════════════════════════════════════════════════ -->
+            <TextView
+                android:text="App updates"
+                style="@style/SectionHeader"
+                android:paddingStart="20dp"/>
+
+            <LinearLayout
+                android:id="@+id/rowCheckForUpdates"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="64dp"
+                android:background="@color/ds_surface"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground">
+
+                <ImageView
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:src="@drawable/ic_settings"
+                    app:tint="#9A81FF"
+                    android:layout_marginEnd="18dp"
+                    android:importantForAccessibility="no"/>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Check for updates"
+                        android:textColor="@color/ds_text_primary"
+                        android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"/>
+
+                    <TextView
+                        android:id="@+id/tvUpdateSummary"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Download the latest version without signing in again"
+                        android:textColor="@color/ds_text_tertiary"
+                        android:textSize="12sp"/>
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_forward"
+                    app:tint="@color/ds_text_tertiary"
+                    android:importantForAccessibility="no"/>
+            </LinearLayout>
+
             <!-- ══ APP VERSION FOOTER ══════════════════════════════════════════ -->
             <TextView
                 android:id="@+id/tvAppVersion"
