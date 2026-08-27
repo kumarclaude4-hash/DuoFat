@@ -50,8 +50,6 @@
                         android:scaleType="centerCrop"
                         android:background="@drawable/bg_profile_avatar"
                         android:src="@drawable/ic_person"
-                        app:tint="#9A81FF"
-                        android:padding="20dp"
                         android:contentDescription="Change profile photo"/>
 
                     <FrameLayout

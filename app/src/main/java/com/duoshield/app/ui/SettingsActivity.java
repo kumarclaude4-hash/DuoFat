@@ -538,6 +538,7 @@ public class SettingsActivity extends BaseActivity {
     /** Local-first display followed by an authoritative Firestore reconciliation. */
     private void loadProfilePhoto() {
         if (ivProfilePhoto == null) return;
+        applyPlaceholderAvatarView();
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null) return;
 
@@ -642,6 +643,7 @@ public class SettingsActivity extends BaseActivity {
 
     private void finishPhotoPublication(byte[] jpeg) {
         if (ivProfilePhoto != null && !isDestroyed() && !isFinishing()) {
+            prepareRealAvatarView();
             Glide.with(this).clear(ivProfilePhoto);
             Glide.with(this).load(jpeg)
                     .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
@@ -652,13 +654,32 @@ public class SettingsActivity extends BaseActivity {
     }
 
     private void displayLocalAvatar(File file) {
-        if (ivProfilePhoto == null) return;
+        if (ivProfilePhoto == null || file == null || !file.exists() || file.length() <= 0) return;
+        prepareRealAvatarView();
         Glide.with(this).clear(ivProfilePhoto);
         Glide.with(this).load(file)
-                .signature(new ObjectKey(String.valueOf(file.lastModified())))
+                .signature(new ObjectKey(file.lastModified() + ":" + file.length()))
                 .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
                 .placeholder(R.drawable.ic_person).error(R.drawable.ic_person)
                 .transform(new CircleCrop()).into(ivProfilePhoto);
+    }
+
+    /** Removes placeholder-only styling before a real image is bound. */
+    private void prepareRealAvatarView() {
+        if (ivProfilePhoto == null) return;
+        ivProfilePhoto.setPadding(0, 0, 0, 0);
+        ivProfilePhoto.clearColorFilter();
+        ivProfilePhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
+    }
+
+    /** Applies placeholder-only styling for the default ic_person avatar. */
+    private void applyPlaceholderAvatarView() {
+        if (ivProfilePhoto == null) return;
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        ivProfilePhoto.setPadding(pad, pad, pad, pad);
+        ivProfilePhoto.setColorFilter(0xFF9A81FF);
+        ivProfilePhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        ivProfilePhoto.setImageResource(R.drawable.ic_person);
     }
 
     private void saveOwnAvatarToDisk(byte[] bytes) throws Exception {
