@@ -82,6 +82,9 @@ public class FullScreenImageActivity extends BaseActivity {
         ImageButton btnShare = findViewById(R.id.btn_share);
         if (btnShare != null) btnShare.setOnClickListener(v -> shareImage());
 
+        ImageButton btnMore = findViewById(R.id.btn_more);
+        if (btnMore != null) btnMore.setOnClickListener(this::showMoreMenu);
+
         ImageButton btnForward = findViewById(R.id.btn_forward);
         if (btnForward != null) btnForward.setOnClickListener(v -> forwardImage());
 
@@ -138,6 +141,24 @@ public class FullScreenImageActivity extends BaseActivity {
             bar.animate().alpha(0f).setDuration(180)
                     .withEndAction(() -> bar.setVisibility(View.GONE)).start();
         }
+    }
+
+    private void showMoreMenu(View anchor) {
+        android.widget.PopupMenu popup = new android.widget.PopupMenu(this, anchor);
+        popup.getMenu().add(0, 1, 0, "Share");
+        popup.getMenu().add(0, 2, 0, "Show in chat");
+        popup.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) {
+                shareImage();
+                return true;
+            }
+            if (item.getItemId() == 2) {
+                finish();
+                return true;
+            }
+            return false;
+        });
+        popup.show();
     }
 
     private void forwardImage() {
