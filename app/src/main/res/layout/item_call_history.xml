@@ -63,20 +63,6 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Recording playback — only shown for rows that have a stored recording -->
-    <ImageView
-        android:id="@+id/btnPlayRecording"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
-        android:padding="7dp"
-        android:layout_marginEnd="6dp"
-        android:src="@drawable/ic_play_audio"
-        app:tint="@color/text_primary"
-        android:scaleType="fitCenter"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:visibility="gone"
-        android:contentDescription="Play recording"/>
-
     <!-- Date + time -->
     <TextView
         android:id="@+id/tvCallHistoryTime"

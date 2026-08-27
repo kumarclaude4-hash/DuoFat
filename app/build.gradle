@@ -419,11 +419,8 @@ dependencies {
 
     // WebRTC — voice & video calling
     //
-    // Pinned at 1.3.10, not 1.1.1: CallAudioRecorder taps the remote audio stream via
-    // org.webrtc.AudioTrackSink (AudioTrack.addSink/removeSink). That API does not exist
-    // in 1.1.1 — that version's AudioTrack exposes only setVolume/getNativeAudioTrack and
-    // offers no remote-playback sample callback at all, so the two-sided recording mix
-    // cannot be expressed against it. Downgrading breaks compileDebugJavaWithJavac.
+    // Pinned at 1.3.10 for the current Unified Plan audio/video call implementation and
+    // remote-track playback support. Downgrading this dependency can break call compilation.
     //
     // Bumping this also moves two transitive pins (androidx.annotation 1.7.0 -> 1.9.1,
     // kotlin-stdlib 1.9.20 -> 1.9.25) because Gradle resolves to the highest requested

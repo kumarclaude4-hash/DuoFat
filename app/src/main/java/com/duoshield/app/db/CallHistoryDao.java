@@ -25,9 +25,6 @@ public interface CallHistoryDao {
     @Query("SELECT SUM(durationSeconds) FROM call_history WHERE partnerId = :partnerId AND outcome = 'ANSWERED'")
     int totalDurationByPartnerId(String partnerId);
 
-    @Query("UPDATE call_history SET recordingPath = :path WHERE id = :id")
-    void setRecordingPath(String id, String path);
-
     @Query("DELETE FROM call_history WHERE id = :id")
     void deleteById(String id);
 
