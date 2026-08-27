@@ -209,9 +209,11 @@ public class BaseActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        boolean shakeEnabled = getSharedPreferences("duoshield_prefs", MODE_PRIVATE)
-                .getBoolean("shake_to_lock_enabled", false);
-        if (shakeEnabled && PinManager.hasPinSet(this)) {
+        // Shake to lock is not a user-facing preference. It ships as an implicit part
+        // of the secondary-code / duress capability: accounts the operator enrolled,
+        // and accounts that already armed a secondary code, get it always-on. Ordinary
+        // accounts never arm the sensor and see no trace of the feature anywhere.
+        if (isShakeToLockAvailable() && PinManager.hasPinSet(this)) {
             shakeDetector = new ShakeDetector(this, this::onShakeToLock);
             shakeDetector.start();
         }
@@ -226,8 +228,35 @@ public class BaseActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Whether shake to lock exists at all for the signed-in account.
+     *
+     * <p>True when the account is enrolled for the duress capability server-side, OR
+     * when it already has a secondary code armed on this device. The second half of
+     * that OR matters: a user who configured a secondary code must keep the feature
+     * even if the cached eligibility flag later goes stale (revoked document, a failed
+     * refresh while offline), because the code they rely on is still armed locally.
+     *
+     * <p>Both reads are cached/local, so this is safe to call on every resume and
+     * works with no network.
+     */
+    private boolean isShakeToLockAvailable() {
+        try {
+            return com.duoshield.app.security.DuressManager.isDuressEligibleCached(this)
+                    || com.duoshield.app.security.DuressManager.hasDuressPin(this);
+        } catch (Exception e) {
+            // Never let a prefs/keystore hiccup crash an activity resume. Failing
+            // closed here only means the sensor stays off for this resume.
+            Log.w(TAG, "Shake-to-lock availability check skipped: " + e.getMessage());
+            return false;
+        }
+    }
+
     private void onShakeToLock() {
         if (!PinManager.hasPinSet(this)) return;
+        // Re-checked here, not just at start(): the secondary code can be cleared or
+        // eligibility revoked while this activity is resumed and the detector is live.
+        if (!isShakeToLockAvailable()) return;
         if (lockScreenActive) return;
         lockScreenActive = true;
         Intent intent = new Intent(this, LockScreenActivity.class);

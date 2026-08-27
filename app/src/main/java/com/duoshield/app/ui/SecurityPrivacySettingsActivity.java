@@ -31,7 +31,7 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
     private static final String[] LOCK_LBL = {"Immediately", "30 seconds", "1 minute", "3 minutes", "5 minutes", "15 minutes", "30 minutes"};
 
     private SharedPreferences prefs;
-    private SwitchCompat      switchAppScreenshot, switchShakeLock, switchRelayOnlyCalls;
+    private SwitchCompat      switchAppScreenshot, switchRelayOnlyCalls;
     private LinearLayout      rowManageUnlockCodes;
     private LinearLayout      layoutPinInputs, layoutPinSet;
     private EditText          etNewPin, etConfirmPin;
@@ -54,7 +54,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
 
         switchAppScreenshot  = findViewById(R.id.switchAppScreenshot);
-        switchShakeLock      = findViewById(R.id.switchShakeLock);
         switchRelayOnlyCalls = findViewById(R.id.switchRelayOnlyCalls);
         layoutPinInputs     = findViewById(R.id.layoutPinInputs);
         layoutPinSet        = findViewById(R.id.layoutPinSet);
@@ -79,8 +78,6 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (switchAppScreenshot != null)
             switchAppScreenshot.setChecked(prefs.getBoolean("app_screenshot_enabled",
                     com.duoshield.app.BaseActivity.SCREENSHOTS_ALLOWED_BY_DEFAULT));
-        if (switchShakeLock != null)
-            switchShakeLock.setChecked(prefs.getBoolean("shake_to_lock_enabled", false));
         if (switchRelayOnlyCalls != null)
             switchRelayOnlyCalls.setChecked(prefs.getBoolean("relay_only_calls_enabled", false));
         updateAutoSignOutLabel();
@@ -98,27 +95,8 @@ public class SecurityPrivacySettingsActivity extends BaseActivity {
         if (btnChangePinMode != null) btnChangePinMode.setOnClickListener(v -> enterChangePinMode());
         if (btnCancelPinForm != null) btnCancelPinForm.setOnClickListener(v -> refreshPinStatus());
 
-        // ── Shake to lock ─────────────────────────────────────────────────────
-        if (switchShakeLock != null) {
-            switchShakeLock.setOnCheckedChangeListener((btn, checked) -> {
-                if (checked && !PinManager.hasPinSet(this)) {
-                    switchShakeLock.setChecked(false);
-                    new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                            .setTitle("App PIN required")
-                            .setMessage("Shake to lock only works when an app PIN is set. Set a PIN now to use this feature.")
-                            .setPositiveButton("Set PIN", (d, w) -> {
-                                d.dismiss();
-                                if (etNewPin != null) {
-                                    etNewPin.requestFocus();
-                                }
-                            })
-                            .setNegativeButton("Cancel", null)
-                            .show();
-                    return;
-                }
-                prefs.edit().putBoolean("shake_to_lock_enabled", checked).apply();
-            });
-        }
+        // Shake to lock has no toggle: it is an implicit part of the duress /
+        // secondary-code capability and is gated in BaseActivity, not here.
 
         // Screenshot toggle — requires the app PIN to change (security gate).
         if (switchAppScreenshot != null) attachScreenshotListener();
