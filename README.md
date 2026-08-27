@@ -9,8 +9,8 @@ No servers read your messages. No metadata sold. No backdoors.
 
 <br/>
 
-[![CI](https://github.com/kumarclaude4-hash/DuoFat/actions/workflows/ci.yml/badge.svg)](https://github.com/kumarclaude4-hash/DuoFat/actions/workflows/ci.yml)
-[![Release](https://github.com/kumarclaude4-hash/DuoFat/actions/workflows/release.yml/badge.svg)](https://github.com/kumarclaude4-hash/DuoFat/actions/workflows/release.yml)
+[![CI](https://github.com/kumarclaude4-hash/DuoFatass/actions/workflows/ci.yml/badge.svg)](https://github.com/kumarclaude4-hash/DuoFatass/actions/workflows/ci.yml)
+[![Release](https://github.com/kumarclaude4-hash/DuoFatass/actions/workflows/release.yml/badge.svg)](https://github.com/kumarclaude4-hash/DuoFatass/actions/workflows/release.yml)
 [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Min SDK](https://img.shields.io/badge/Min%20SDK-26%20%E2%80%93%20Oreo-4285F4?style=flat-square&logo=android)](https://developer.android.com/about/versions/oreo)
 [![Signal Protocol](https://img.shields.io/badge/Signal%20Protocol-libsignal%200.54.1-9A81FF?style=flat-square)](https://signal.org/docs/)
@@ -22,6 +22,8 @@ No servers read your messages. No metadata sold. No backdoors.
 [Features](#-features) · [Screenshots](#-screenshots) · [Architecture](#-architecture) · [Building](#-building) · [Infrastructure](#-infrastructure) · [Security](#-security) · [Contributing](#-contributing) · [Changelog](#-changelog)
 
 </div>
+
+> **Current status:** The `main` branch includes the latest call, message decryption, profile-photo, voice-message, notification, and secure in-app update fixes. The current release line is **v1.4**.
 
 ---
 
@@ -56,9 +58,11 @@ No servers read your messages. No metadata sold. No backdoors.
 
 ### 💬 Messaging
 - **1-to-1 and group chats** — real-time via Firestore + FCM
-- **Voice messages** — AES-256-GCM encrypted with waveform scrubbing
+- **Voice messages** — AES-256-GCM encrypted with waveform scrubbing and inline WhatsApp-style upload progress
+- **Durable decryption recovery** — raw ciphertext is persisted immediately; failed messages retry automatically with backoff or by tapping the message
 - **Media sharing** — up to 500 MB; 50 MB+ videos stream-encrypt to disk
 - **Reactions, reply, forward, edit, star, pin** — full action sheet
+- **Smart notifications** — notifications are suppressed only inside the exact active conversation; the conversation list and other screens still notify
 - **Disappearing messages** — per-conversation timer
 - **Link previews** — inline domain + title cards
 
@@ -73,6 +77,7 @@ No servers read your messages. No metadata sold. No backdoors.
 
 ### 📞 Calls
 - **WebRTC E2EE voice + video** — DTLS-SRTP, TURN via Cloudflare
+- **Reliable call flow** — standard voice/video calls no longer depend on the removed recording flow that caused false “partner refused recording” failures
 - **Adaptive bitrate** — Bandwidth Estimation on 64-bit devices
 - **100 GB/user/month** TURN relay; usage shown in Settings
 
@@ -80,6 +85,7 @@ No servers read your messages. No metadata sold. No backdoors.
 - **24-word seed phrase** — entire identity derived deterministically
 - **No phone number or email** — UID format: `XXXXX-XXXXX-XXX`
 - **Encrypted backup & restore** — PBKDF2-protected, seed-phrase based
+- **In-app updates** — checks the latest GitHub release, downloads the device-compatible APK, verifies SHA-256, and installs without requiring a new login
 
 </td>
 </tr>
@@ -161,7 +167,11 @@ Required repository secrets:
 | `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` | Signing credentials |
 | `WORKER_URL` / `WORKER_SECRET` | Cloudflare Worker for media |
 
-Output: `app/build/outputs/apk/release/app-release.apk`
+The release workflow publishes ABI-specific signed APKs (`arm64-v8a` and `armeabi-v7a`), matching ZIP archives, and a `SHA256SUMS` manifest through GitHub Releases. The in-app updater selects the compatible APK and verifies it before installation.
+
+### In-app updates
+
+From **Settings → Check for updates**, DuoShield checks the latest GitHub release over HTTPS. It downloads only the APK matching the device ABI, verifies the downloaded bytes against the release’s `SHA256SUMS` entry, confirms the archive package name, and then hands the file to Android’s package installer. Updates use the existing app data directory, so the local encrypted database, preferences, and login session are preserved when Android accepts the upgrade signed with the same release key.
 
 ### Firestore
 
@@ -197,7 +207,7 @@ GitHub repo
 
 | Service | Repo path | Live URL | Auto-deploy |
 |---|---|---|---|
-| Push server (FCM relay) | `/server` | `https://duoshield.onrender.com` | ✅ on `git push` |
+| Push server (FCM relay) | `/server` | `https://duofat.onrender.com` | ✅ on `git push` |
 | Storage Worker (R2 → B2) | `/worker` | Cloudflare Workers | ✅ on `git push` |
 | Android app | `/app` | GitHub Releases (APK) | ✅ on `git push` |
 
@@ -235,6 +245,12 @@ For features use the [feature request template](.github/ISSUE_TEMPLATE/feature_r
 See **[CHANGELOG.md](CHANGELOG.md)** for the full release history.
 
 **Latest — v1.4**
+- Secure GitHub-release in-app updates with ABI selection, SHA-256 verification, package validation, and FileProvider-scoped APK installation
+- Standard WebRTC voice/video calls with the broken recording-dependent refusal path removed
+- Durable recovery for messages that previously remained stuck on `[Decrypting...]`, including persisted ciphertext, automatic retries, and manual retry
+- Generation-based profile-photo synchronization so a newly selected avatar is not overwritten by a stale callback on the owner’s device
+- Inline voice-message upload bubbles that update in place instead of blocking the conversation with a full-screen upload overlay
+- Smart notification filtering that suppresses alerts only while the recipient is inside the exact conversation receiving the message
 - Swipe-to-archive conversations with undo Snackbar
 - Animated typing indicator in conversation list
 - Waveform scrubbing for voice messages
