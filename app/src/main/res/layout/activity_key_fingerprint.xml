@@ -55,9 +55,60 @@
                 android:text="@string/fingerprint_info"
                 android:textColor="@color/ds_text_secondary" android:textSize="14sp"
                 android:lineSpacingMultiplier="1.4"/>
+            <!-- Signature feature: the Trust Seal. A deterministic emblem + safety words derived
+                 from BOTH identity keys (see SafetyWords/TrustGlyphView). Two contacts see the
+                 identical seal only if their keys match, turning the abstract hex below into an
+                 at-a-glance human comparison. Hidden when opened without a specific contact. -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/trust_seal_card"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/ds_surface" app:cardCornerRadius="16dp"
+                app:cardElevation="0dp" app:strokeColor="@color/ds_divider" app:strokeWidth="1dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:gravity="center_horizontal"
+                    android:padding="20dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="@string/trust_seal_title"
+                        android:textColor="@color/ds_accent" android:textSize="12sp"
+                        android:textAllCaps="true" android:letterSpacing="0.08"
+                        android:fontFamily="sans-serif-medium"/>
+
+                    <com.duoshield.app.ui.TrustGlyphView
+                        android:id="@+id/trust_glyph"
+                        android:layout_width="184dp" android:layout_height="184dp"
+                        android:layout_marginTop="12dp"/>
+
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/trust_seal_words_label"
+                        android:textColor="@color/ds_text_secondary" android:textSize="11sp"
+                        android:textAllCaps="true" android:letterSpacing="0.08"
+                        android:fontFamily="sans-serif-medium"/>
+
+                    <TextView android:id="@+id/tv_safety_words"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center"
+                        android:textColor="@color/ds_text_primary" android:textSize="15sp"
+                        android:fontFamily="sans-serif-medium"
+                        android:lineSpacingMultiplier="1.4"
+                        android:letterSpacing="0.02"
+                        android:textIsSelectable="true"/>
+
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:gravity="center"
+                        android:text="@string/trust_seal_hint"
+                        android:textColor="@color/ds_text_secondary" android:textSize="13sp"
+                        android:lineSpacingMultiplier="1.45"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="28dp"
+                android:layout_marginTop="20dp"
                 app:cardBackgroundColor="@color/ds_surface" app:cardCornerRadius="12dp"
                 app:cardElevation="0dp" app:strokeColor="@color/ds_divider" app:strokeWidth="1dp">
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

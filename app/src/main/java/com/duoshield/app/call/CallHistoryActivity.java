@@ -21,16 +21,25 @@ import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.db.CallRecord;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import java.io.File;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class CallHistoryActivity extends BaseActivity {
 
+    private static final String TAG = "CallHistoryActivity";
+
     private CallHistoryAdapter adapter;
     private View               tvEmpty;
     private ExecutorService    executor;
     private AppDatabase        db;
+
+    /** The MediaPlayer for the currently playing recording, or {@code null} when nothing plays. */
+    private MediaPlayer player;
+
+    /** Id of the record currently playing, or {@code null}. */
+    private String playingRecordId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

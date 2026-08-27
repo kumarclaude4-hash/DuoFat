@@ -17,6 +17,8 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 
 import com.duoshield.app.crypto.signal.SignalKeyManager;
+import com.duoshield.app.ui.TrustGlyphView;
+import com.duoshield.app.util.SafetyWords;
 import com.duoshield.app.util.SecurePrefs;
 import com.duoshield.app.util.VerificationStore;
 import com.google.android.material.button.MaterialButton;
@@ -50,6 +52,11 @@ public class KeyFingerprintActivity extends BaseActivity {
     private TextView     tvMyFingerprintView;
     private TextView     tvPartnerFingerprintView;
 
+    /** Signature feature: the Trust Seal (deterministic emblem + safety words). */
+    private View           trustSealCard;
+    private TrustGlyphView trustGlyph;
+    private TextView       tvSafetyWords;
+
     // Must be registered as a field so it is ready before onCreate()
     private final ActivityResultLauncher<ScanOptions> scanLauncher =
             registerForActivityResult(new ScanContract(), this::onScanResult);
@@ -75,6 +82,13 @@ public class KeyFingerprintActivity extends BaseActivity {
         ivVerifiedBadge = findViewById(R.id.ivVerifiedBadge);
         tvVerifiedBadge = findViewById(R.id.tvVerifiedBadge);
         tvVerifyHint    = findViewById(R.id.tvVerifyHint);
+        trustSealCard   = findViewById(R.id.trust_seal_card);
+        trustGlyph      = findViewById(R.id.trust_glyph);
+        tvSafetyWords   = findViewById(R.id.tv_safety_words);
+        if (trustGlyph != null) {
+            trustGlyph.setVerifiedColor(
+                    androidx.core.content.ContextCompat.getColor(this, R.color.ds_verified));
+        }
         MaterialButton btnShowQr      = findViewById(R.id.btn_show_qr);
         MaterialButton btnScanPartner = findViewById(R.id.btn_scan_partner);
         MaterialButton btnShare       = findViewById(R.id.btn_share);
@@ -213,6 +227,8 @@ public class KeyFingerprintActivity extends BaseActivity {
                 VerificationStore.markVerified(this, partnerUid, partnerFingerprintHex);
             }
             renderVerificationState();
+            // Seal the Trust Seal emblem the moment verification passes.
+            updateTrustSeal();
             showVerifyDialog(true, getString(R.string.verify_passed_body));
         } else {
             showVerifyDialog(false, getString(R.string.verify_failed_body));
@@ -240,6 +256,7 @@ public class KeyFingerprintActivity extends BaseActivity {
         // Re-read on resume: the key may have changed (and the verification been voided by
         // DuoShieldSignalStore) while this screen was in the background.
         renderVerificationState();
+        updateTrustSeal();
     }
 
     /**
@@ -311,6 +328,51 @@ public class KeyFingerprintActivity extends BaseActivity {
         // The pill is a status readout, so give TalkBack the whole thing as one label.
         verifiedBadge.setContentDescription(label);
         if (tvVerifyHint != null) tvVerifyHint.setText(hint);
+    }
+
+    /** Guards against re-running the entrance animation when the seal is unchanged. */
+    private String appliedSealKey;
+
+    /**
+     * Signature feature. Derives the shared Trust Seal (emblem + safety words) from BOTH
+     * fingerprints and renders it. Both contacts compute the identical seal because
+     * {@link SafetyWords#combinedSeed} sorts the two hexes before hashing, so the emblem is a
+     * fast, human-checkable proxy for the authoritative hex/QR comparison below.
+     *
+     * <p>Only meaningful with a partner in context; hidden when opened from Settings.
+     */
+    private void updateTrustSeal() {
+        if (trustSealCard == null) return;
+        if (myFingerprintHex == null || partnerFingerprintHex == null) {
+            trustSealCard.setVisibility(android.view.View.GONE);
+            return;
+        }
+        byte[] seed = SafetyWords.combinedSeed(myFingerprintHex, partnerFingerprintHex);
+        if (seed == null) {
+            trustSealCard.setVisibility(android.view.View.GONE);
+            return;
+        }
+        trustSealCard.setVisibility(android.view.View.VISIBLE);
+
+        String key = myFingerprintHex + "|" + partnerFingerprintHex;
+        if (!key.equals(appliedSealKey)) {
+            appliedSealKey = key;
+            if (trustGlyph != null) trustGlyph.setSeed(seed);
+            if (tvSafetyWords != null) {
+                tvSafetyWords.setText(SafetyWords.phrase(seed));
+                String spoken = SafetyWords.spokenPhrase(seed);
+                if (spoken != null) {
+                    tvSafetyWords.setContentDescription(
+                            getString(R.string.trust_seal_a11y, spoken));
+                }
+            }
+        }
+
+        if (trustGlyph != null && partnerUid != null) {
+            boolean verified = VerificationStore.isVerified(this, partnerUid)
+                    && !VerificationStore.isStale(this, partnerUid, partnerFingerprintHex);
+            trustGlyph.setVerified(verified);
+        }
     }
 
     // ── Show my fingerprint as QR ─────────────────────────────────────────────
@@ -401,6 +463,8 @@ public class KeyFingerprintActivity extends BaseActivity {
         // asynchronously from Firestore — re-render once it is known so a stale
         // verification can be detected against the key actually on file.
         renderVerificationState();
+        // The Trust Seal likewise depends on the partner fingerprint being known.
+        updateTrustSeal();
     }
 
     private String sha256Hex(byte[] input) {

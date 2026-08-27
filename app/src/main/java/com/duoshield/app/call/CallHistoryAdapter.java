@@ -60,6 +60,14 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
         this.playListener      = playListener;
     }
 
+    /**
+     * Convenience constructor for read-only lists (e.g. the recent-calls list on a contact's
+     * detail screen) that don't offer long-press deletion or recording playback.
+     */
+    public CallHistoryAdapter(OnItemLongClickListener longClickListener) {
+        this(longClickListener, null);
+    }
+
     /** Repaints the play/stop icons to match whichever row is playing (or none). */
     public void setPlayingRecordId(String recordId) {
         String previous  = playingRecordId;
