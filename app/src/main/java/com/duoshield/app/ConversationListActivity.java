@@ -53,6 +53,8 @@ import java.util.concurrent.Executors;
 
 public class ConversationListActivity extends BaseActivity {
 
+    private static final int MAX_LIVE_CONVERSATIONS = 100;
+
     public static final String EXTRA_FORWARD_MODE = "forward_mode";
     public static final String EXTRA_FORWARD_MESSAGE_ID = "forward_message_id";
     public static final String EXTRA_FORWARD_SOURCE_CONVERSATION = "forward_source_conversation";
@@ -162,8 +164,10 @@ public class ConversationListActivity extends BaseActivity {
             swipeRefresh.setOnRefreshListener(() -> {
                 firstLoadDone = false;
                 if (shimmerContainer != null) shimmerContainer.setVisibility(View.VISIBLE);
-                if (listener != null) { listener.remove(); listener = null; }
-                listenForConversation();
+                // Keep the live listener attached across ordinary background/foreground
+                // transitions. Removing it here forces Firestore to bill the complete query
+                // result again when the screen is reopened.
+                if (listener == null) listenForConversation();
                 loadGroupsFromRoom();
             });
         }
@@ -376,6 +380,7 @@ public class ConversationListActivity extends BaseActivity {
     private void listenForConversation() {
         listener = db.collection("chats")
             .whereArrayContains("participants", myUid)
+            .limit(MAX_LIVE_CONVERSATIONS)
             .addSnapshotListener((snapshots, e) -> {
                 if (e != null) {
                     android.util.Log.w("ConversationListActivity",
@@ -731,7 +736,8 @@ public class ConversationListActivity extends BaseActivity {
 
     @Override protected void onStop() {
         super.onStop();
-        if (listener != null) { listener.remove(); listener = null; }
+        // Deliberately keep the conversation listener alive. Reattaching it on every
+        // background/foreground transition causes a billed initial read of the whole query.
         if (incomingCallWatcher != null) incomingCallWatcher.stop();
     }
 
@@ -741,6 +747,7 @@ public class ConversationListActivity extends BaseActivity {
             shimmerAnimator.removeAllListeners();
             shimmerAnimator = null;
         }
+        if (listener != null) { listener.remove(); listener = null; }
         if (executor != null && !executor.isShutdown()) executor.shutdownNow();
         super.onDestroy();
     }
