@@ -43,6 +43,7 @@ import java.util.Collections;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class SettingsActivity extends BaseActivity {
 
@@ -61,6 +62,8 @@ public class SettingsActivity extends BaseActivity {
     private static final int JPEG_QUALITY = 88;
 
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
+    /** Monotonically increases for every photo load/selection; stale callbacks are ignored. */
+    private final AtomicInteger photoGeneration = new AtomicInteger(0);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -373,6 +376,9 @@ public class SettingsActivity extends BaseActivity {
             Toast.makeText(this, "Not signed in.", Toast.LENGTH_SHORT).show();
             return;
         }
+        // Invalidate every earlier remote reconciliation as soon as the user chooses a new
+        // image. This is the same last-write-wins rule users expect from WhatsApp.
+        final int generation = photoGeneration.incrementAndGet();
         Toast.makeText(this, "Preparing photo…", Toast.LENGTH_SHORT).show();
         bgExecutor.execute(() -> {
             try {
@@ -380,11 +386,19 @@ public class SettingsActivity extends BaseActivity {
                 String objectKey = "avatars/" + user.getUid() + "_"
                         + System.currentTimeMillis() + ".jpg";
                 String b2Path = B2StorageHelper.uploadFile(jpeg, objectKey, "image/jpeg", null);
-                runOnUiThread(() -> publishUploadedPhoto(b2Path, jpeg, user));
+                runOnUiThread(() -> {
+                    if (generation == photoGeneration.get()) {
+                        publishUploadedPhoto(b2Path, jpeg, user, generation);
+                    }
+                });
             } catch (Exception e) {
                 android.util.Log.e(TAG, "Photo upload failed", e);
-                runOnUiThread(() -> Toast.makeText(this,
-                        "Upload failed: " + safeMessage(e), Toast.LENGTH_LONG).show());
+                runOnUiThread(() -> {
+                    if (generation == photoGeneration.get()) {
+                        Toast.makeText(this, "Upload failed: " + safeMessage(e),
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
             }
         });
     }
@@ -395,6 +409,7 @@ public class SettingsActivity extends BaseActivity {
         FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
         if (user == null) return;
 
+        final int generation = photoGeneration.incrementAndGet();
         File localAvatar = new File(getFilesDir(), AVATAR_FILE);
         String cachedUid = prefs.getString("own_avatar_uid", null);
         if (localAvatar.exists() && user.getUid().equals(cachedUid)) {
@@ -406,31 +421,36 @@ public class SettingsActivity extends BaseActivity {
         FirebaseFirestore.getInstance().collection("users").document(user.getUid()).get()
                 .addOnSuccessListener(doc -> {
                     String remotePath = doc.getString("photoUrl");
-                    if (!isOwnedAvatarPath(remotePath, user.getUid())) return;
+                    if (generation != photoGeneration.get()
+                            || !isOwnedAvatarPath(remotePath, user.getUid())) return;
                     String cachedPath = prefs.getString("my_photo_url", null);
                     boolean validLocal = localAvatar.exists() && localAvatar.length() > 0
                             && user.getUid().equals(prefs.getString("own_avatar_uid", null));
                     if (remotePath.equals(cachedPath) && validLocal) return;
-                    restoreAvatarFromB2(remotePath, user.getUid());
+                    restoreAvatarFromB2(remotePath, user.getUid(), generation);
                 })
                 .addOnFailureListener(e ->
                         android.util.Log.w(TAG, "Could not reconcile profile photo", e));
     }
 
-    private void restoreAvatarFromB2(String b2Path, String uid) {
+    private void restoreAvatarFromB2(String b2Path, String uid, int generation) {
         B2StorageHelper.loadAvatarBytes(b2Path, new B2StorageHelper.MediaCallback() {
             @Override public void onLoaded(byte[] bytes) {
+                if (generation != photoGeneration.get()) return;
                 if (!isValidAvatarJpeg(bytes)) {
                     android.util.Log.w(TAG, "Rejected invalid remote avatar bytes");
                     return;
                 }
                 bgExecutor.execute(() -> {
+                    if (generation != photoGeneration.get()) return;
                     try {
                         saveOwnAvatarToDisk(bytes);
+                        if (generation != photoGeneration.get()) return;
                         prefs.edit().putString("my_photo_url", b2Path)
                                 .putString("own_avatar_uid", uid).commit();
                         runOnUiThread(() -> {
-                            if (!isFinishing() && !isDestroyed()) {
+                            if (generation == photoGeneration.get()
+                                    && !isFinishing() && !isDestroyed()) {
                                 displayLocalAvatar(new File(getFilesDir(), AVATAR_FILE));
                             }
                         });
@@ -445,15 +465,18 @@ public class SettingsActivity extends BaseActivity {
         });
     }
 
-    private void publishUploadedPhoto(String b2Path, byte[] jpeg, FirebaseUser user) {
+    private void publishUploadedPhoto(String b2Path, byte[] jpeg, FirebaseUser user,
+                                      int generation) {
         String previousPath = prefs.getString("my_photo_url", null);
         // publishPhotoReferences writes users/{uid}.photoUrl and every
         // partnerPhotoUrl_<uid> chat field in a single atomic batch, so the
         // user document can never land without the denormalized chat copies.
         publishPhotoReferences(user.getUid(), b2Path)
                 .addOnSuccessListener(ignored -> bgExecutor.execute(() -> {
+                    if (generation != photoGeneration.get()) return;
                     try {
                         saveOwnAvatarToDisk(jpeg);
+                        if (generation != photoGeneration.get()) return;
                         prefs.edit().putString("my_photo_url", b2Path)
                                 .putString("own_avatar_uid", user.getUid()).commit();
                         if (isOwnedAvatarPath(previousPath, user.getUid())
@@ -463,7 +486,9 @@ public class SettingsActivity extends BaseActivity {
                                 android.util.Log.w(TAG, "Old avatar cleanup failed", e);
                             }
                         }
-                        runOnUiThread(() -> finishPhotoPublication(jpeg));
+                        runOnUiThread(() -> {
+                            if (generation == photoGeneration.get()) finishPhotoPublication(jpeg);
+                        });
                     } catch (Exception e) {
                         android.util.Log.e(TAG, "Local avatar commit failed", e);
                         runOnUiThread(() -> Toast.makeText(this,
@@ -485,6 +510,7 @@ public class SettingsActivity extends BaseActivity {
 
     private void finishPhotoPublication(byte[] jpeg) {
         if (ivProfilePhoto != null && !isDestroyed() && !isFinishing()) {
+            Glide.with(this).clear(ivProfilePhoto);
             Glide.with(this).load(jpeg)
                     .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
                     .placeholder(R.drawable.ic_person).error(R.drawable.ic_person)
@@ -494,6 +520,8 @@ public class SettingsActivity extends BaseActivity {
     }
 
     private void displayLocalAvatar(File file) {
+        if (ivProfilePhoto == null) return;
+        Glide.with(this).clear(ivProfilePhoto);
         Glide.with(this).load(file)
                 .signature(new ObjectKey(String.valueOf(file.lastModified())))
                 .diskCacheStrategy(DiskCacheStrategy.NONE).skipMemoryCache(true)
@@ -653,6 +681,7 @@ public class SettingsActivity extends BaseActivity {
 
     @Override
     protected void onDestroy() {
+        photoGeneration.incrementAndGet();
         super.onDestroy();
         if (!bgExecutor.isShutdown()) bgExecutor.shutdown();
     }

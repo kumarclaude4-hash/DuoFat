@@ -16,12 +16,16 @@ public class GlideHelper {
      */
     private static void loadPrivateOrPlain(Context ctx, String pathOrUrl, ImageView iv,
                                             boolean circle) {
+        final String requestKey = pathOrUrl;
+        Glide.with(ctx).clear(iv);
+        iv.setTag(requestKey);
         iv.setImageResource(R.drawable.ic_person);
         if (pathOrUrl == null || pathOrUrl.isEmpty()) return;
         if (com.duoshield.app.util.B2StorageHelper.isB2Path(pathOrUrl)) {
             com.duoshield.app.util.B2StorageHelper.loadAvatarBytes(pathOrUrl,
                 new com.duoshield.app.util.B2StorageHelper.MediaCallback() {
                     @Override public void onLoaded(byte[] bytes) {
+                        if (!requestKey.equals(iv.getTag())) return;
                         com.bumptech.glide.RequestBuilder<android.graphics.drawable.Drawable> req =
                             Glide.with(ctx).load(bytes)
                                 .placeholder(R.drawable.ic_person)
@@ -30,10 +34,11 @@ public class GlideHelper {
                         req.into(iv);
                     }
                     @Override public void onError(Exception e) {
-                        iv.setImageResource(R.drawable.ic_person);
+                        if (requestKey.equals(iv.getTag())) iv.setImageResource(R.drawable.ic_person);
                     }
                 });
         } else {
+            if (!requestKey.equals(iv.getTag())) return;
             com.bumptech.glide.RequestBuilder<android.graphics.drawable.Drawable> req =
                 Glide.with(ctx).load(pathOrUrl)
                     .placeholder(R.drawable.ic_person)
