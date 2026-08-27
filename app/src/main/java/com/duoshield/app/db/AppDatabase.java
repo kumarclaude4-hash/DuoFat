@@ -126,6 +126,11 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
                 MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
+            .addCallback(new RoomDatabase.Callback() {
+                @Override public void onCreate(SupportSQLiteDatabase db) {
+                    createSearchIndex(db);
+                }
+            })
             .build();
     }
 
@@ -385,14 +390,23 @@ public abstract class AppDatabase extends RoomDatabase {
                     "message_id UNINDEXED, conversation_id UNINDEXED, text, " +
                     "sender UNINDEXED, timestamp UNINDEXED, media_type UNINDEXED, " +
                     "starred UNINDEXED, is_deleted UNINDEXED, tokenize='unicode61')");
-            db.execSQL("INSERT INTO message_search_fts " +
-                    "(message_id, conversation_id, text, sender, timestamp, media_type, starred, is_deleted) " +
-                    "SELECT id, conversationId, text, sender, timestamp, mediaType, starred, isDeleted " +
-                    "FROM messages WHERE isEncrypted = 0 AND text IS NOT NULL AND text != '' " +
-                    "AND text NOT LIKE '[Decrypting%' AND text != '\u26d4 Message deleted'");
-            createSearchTriggers(db);
+            createSearchIndex(db);
         }
     };
+
+    private static void createSearchIndex(SupportSQLiteDatabase db) {
+        db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS message_search_fts USING fts5(" +
+                "message_id UNINDEXED, conversation_id UNINDEXED, text, " +
+                "sender UNINDEXED, timestamp UNINDEXED, media_type UNINDEXED, " +
+                "starred UNINDEXED, is_deleted UNINDEXED, tokenize='unicode61')");
+        db.execSQL("INSERT INTO message_search_fts " +
+                "(message_id, conversation_id, text, sender, timestamp, media_type, starred, is_deleted) " +
+                "SELECT m.id, m.conversationId, m.text, m.sender, m.timestamp, m.mediaType, m.starred, m.isDeleted " +
+                "FROM messages AS m WHERE m.isEncrypted = 0 AND m.text IS NOT NULL AND m.text != '' " +
+                "AND m.text NOT LIKE '[Decrypting%' AND m.text != '\u26d4 Message deleted' " +
+                "AND NOT EXISTS (SELECT 1 FROM message_search_fts AS f WHERE f.message_id = m.id)");
+        createSearchTriggers(db);
+    }
 
     private static void createSearchTriggers(SupportSQLiteDatabase db) {
         db.execSQL("CREATE TRIGGER IF NOT EXISTS messages_search_ai AFTER INSERT ON messages " +

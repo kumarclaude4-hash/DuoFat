@@ -270,6 +270,7 @@ public class ConversationListActivity extends BaseActivity {
             popup.getMenu().add(0, 5, 0, "New Group");
             popup.getMenu().add(0, 2, 0, "Quota");
             popup.getMenu().add(0, 4, 0, "Wipe & Exit");
+            popup.getMenu().add(0, 6, 0, "Search messages");
             popup.setOnMenuItemClickListener(item -> {
                 int id = item.getItemId();
                 if (id == 1) { startActivity(new Intent(this, com.duoshield.app.ui.SettingsActivity.class)); return true; }
@@ -277,6 +278,12 @@ public class ConversationListActivity extends BaseActivity {
                 if (id == 5) { startActivity(new Intent(this, CreateGroupActivity.class)); return true; }
                 if (id == 2) { showQuotaDialog(); return true; }
                 if (id == 4) { confirmWipeAndExit(); return true; }
+                if (id == 6) {
+                    Intent search = new Intent(this, MessageSearchActivity.class);
+                    search.putExtra(MessageSearchActivity.EXTRA_GLOBAL_SEARCH, true);
+                    startActivity(search);
+                    return true;
+                }
                 return false;
             });
             popup.show();

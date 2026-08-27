@@ -18,6 +18,8 @@ import java.util.ArrayList;
 public class MessageSearchActivity extends BaseActivity {
 
     public static final String EXTRA_MSG_ID = "msg_id";
+    public static final String EXTRA_CONVERSATION_ID = "conversation_id";
+    public static final String EXTRA_GLOBAL_SEARCH = "global_search";
 
     private EditText                 svSearch;
     private RecyclerView             recyclerView;
@@ -46,9 +48,10 @@ public class MessageSearchActivity extends BaseActivity {
         if (toolbar != null) toolbar.setNavigationOnClickListener(v -> finish());
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
-        conversationId = prefs.getString("conversation_id", null);
+        boolean globalSearch = getIntent().getBooleanExtra(EXTRA_GLOBAL_SEARCH, false);
+        conversationId = globalSearch ? null : prefs.getString("conversation_id", null);
         myUid       = prefs.getString("my_uid", null);
-        String partnerName = prefs.getString("partner_name", null);
+        String partnerName = globalSearch ? "Conversation" : prefs.getString("partner_name", null);
 
         svSearch     = findViewById(R.id.sv_search);
         recyclerView = findViewById(R.id.rv_results);
@@ -58,8 +61,13 @@ public class MessageSearchActivity extends BaseActivity {
         adapter = new SearchResultsAdapter(new ArrayList<>());
         adapter.setUids(myUid, partnerName);
         adapter.setOnResultClickListener(msg -> {
+            if (globalSearch) {
+                openGlobalResult(msg);
+                return;
+            }
             Intent result = new Intent();
             result.putExtra(EXTRA_MSG_ID, msg.getId());
+            result.putExtra(EXTRA_CONVERSATION_ID, msg.getConversationId());
             setResult(RESULT_OK, result);
             finish();
         });
@@ -93,7 +101,7 @@ public class MessageSearchActivity extends BaseActivity {
     }
 
     private void runSearch(String query) {
-        if (conversationId == null) return;
+        if (conversationId == null && !getIntent().getBooleanExtra(EXTRA_GLOBAL_SEARCH, false)) return;
         if (progress != null) progress.setVisibility(View.VISIBLE);
         adapter.setQuery(query);
         SearchHelper.runSearch(this, conversationId, query, activeFilter, myUid,
@@ -102,6 +110,49 @@ public class MessageSearchActivity extends BaseActivity {
             adapter.setMessages(results);
             if (tvEmpty != null) tvEmpty.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
                 }));
+    }
+
+    private void openGlobalResult(com.duoshield.app.models.Message message) {
+        String id = message.getConversationId();
+        if (id == null || id.isEmpty()) return;
+        com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("groups").document(id).get()
+                .addOnSuccessListener(group -> {
+                    Intent intent;
+                    if (group.exists()) {
+                        intent = new Intent(this, GroupChatActivity.class);
+                        intent.putExtra("group_id", id);
+                    } else {
+                        intent = new Intent(this, ChatMediaActivity.class);
+                        intent.putExtra("conversation_id", id);
+                        resolveDirectPartnerAndOpen(intent, id);
+                        return;
+                    }
+                    startActivity(intent);
+                    finish();
+                })
+                .addOnFailureListener(e ->
+                        android.widget.Toast.makeText(this, "Could not open conversation", android.widget.Toast.LENGTH_SHORT).show());
+    }
+
+    private void resolveDirectPartnerAndOpen(Intent intent, String conversationId) {
+        com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("chats").document(conversationId).get()
+                .addOnSuccessListener(chat -> {
+                    Object value = chat.get("participants");
+                    if (!(value instanceof java.util.List)) return;
+                    String partner = null;
+                    for (Object item : (java.util.List<?>) value) {
+                        if (item != null && !myUid.equals(String.valueOf(item))) {
+                            partner = String.valueOf(item);
+                            break;
+                        }
+                    }
+                    if (partner == null) return;
+                    intent.putExtra("partner_uid", partner);
+                    startActivity(intent);
+                    finish();
+                });
     }
 
     private void setupFilters() {

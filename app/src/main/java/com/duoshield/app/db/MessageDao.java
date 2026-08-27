@@ -44,6 +44,9 @@ public interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp DESC LIMIT :limit")
     List<Message> getLatestMessages(String conversationId, int limit);
 
+    @Query("SELECT * FROM messages WHERE isDeleted = 0 ORDER BY timestamp DESC LIMIT :limit")
+    List<Message> getLatestMessagesGlobal(int limit);
+
     @Query("UPDATE messages SET seen = 1, status = 'read' WHERE conversationId = :conversationId AND sender != :myUid")
     void markAllRead(String conversationId, String myUid);
 

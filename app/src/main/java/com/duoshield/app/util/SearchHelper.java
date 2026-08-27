@@ -40,7 +40,7 @@ public final class SearchHelper {
         if (cb == null) return;
         final String normalized = query == null ? "" : query.trim();
         final Filter safeFilter = filter == null ? Filter.ALL : filter;
-        if (conversationId == null || (normalized.length() < 2 && safeFilter == Filter.ALL)) {
+        if (normalized.length() < 2 && safeFilter == Filter.ALL) {
             cb.onResults(new ArrayList<>());
             return;
         }
@@ -64,11 +64,12 @@ public final class SearchHelper {
 
     private static List<Message> searchFilterOnly(Context ctx, String conversationId,
                                                    Filter filter, String myUid) {
-        String sql = "SELECT m.* FROM messages AS m WHERE m.conversationId = ? " +
+        String sql = "SELECT m.* FROM messages AS m WHERE " +
+                (conversationId == null ? "1 = 1 " : "m.conversationId = ? ") +
                 "AND m.isDeleted = 0 " + filterSql(filter) +
                 " ORDER BY m.timestamp DESC LIMIT ?";
         List<Object> args = new ArrayList<>();
-        args.add(conversationId);
+        if (conversationId != null) args.add(conversationId);
         if (filter == Filter.UNREAD || filter == Filter.MINE || filter == Filter.OTHERS) {
             args.add(myUid == null ? "" : myUid);
         }
@@ -81,10 +82,11 @@ public final class SearchHelper {
                                            Filter filter, String myUid) {
         String sql = "SELECT m.* FROM messages AS m " +
                 "JOIN message_search_fts AS f ON f.message_id = m.id " +
-                "WHERE f.conversation_id = ? AND f.text MATCH ? AND m.isDeleted = 0 " +
+                "WHERE " + (conversationId == null ? "1 = 1 " : "f.conversation_id = ? ") +
+                "AND f.text MATCH ? AND m.isDeleted = 0 " +
                 filterSql(filter) + " ORDER BY m.timestamp DESC LIMIT ?";
         List<Object> args = new ArrayList<>();
-        args.add(conversationId);
+        if (conversationId != null) args.add(conversationId);
         args.add(toFtsMatchExpression(query));
         if (filter == Filter.UNREAD || filter == Filter.MINE || filter == Filter.OTHERS) {
             args.add(myUid == null ? "" : myUid);
@@ -131,8 +133,9 @@ public final class SearchHelper {
 
     private static List<Message> boundedFallback(Context ctx, String conversationId, String query,
                                                  Filter filter, String myUid) {
-        List<Message> all = AppDatabase.getInstance(ctx).messageDao()
-                .getLatestMessages(conversationId, FALLBACK_SCAN_LIMIT);
+        List<Message> all = conversationId == null
+                ? AppDatabase.getInstance(ctx).messageDao().getLatestMessagesGlobal(FALLBACK_SCAN_LIMIT)
+                : AppDatabase.getInstance(ctx).messageDao().getLatestMessages(conversationId, FALLBACK_SCAN_LIMIT);
         String lower = query.toLowerCase(Locale.ROOT);
         List<Message> results = new ArrayList<>();
         for (Message message : all) {
