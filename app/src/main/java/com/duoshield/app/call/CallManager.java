@@ -322,7 +322,7 @@ public class CallManager {
         }
     };
 
-    // ── Tiered capture / bitrate policy ─────────────────────────────────────���
+    // ── Tiered capture / bitrate policy ────────────────────────────────────────
     /**
      * Hard bitrate ceiling for {@link DevicePerformanceTier#LOW} devices.
      *
@@ -1098,7 +1098,7 @@ public class CallManager {
         });
     }
 
-    // ─── ICE candidate listeners ────────────────────────────────────��────────
+    // ─── ICE candidate listeners ────────────────────────────────────────
 
     private void listenForCalleeCandidates() {
         remoteCandidateListener = repo.listenToCalleeCandidates(callId, (snap, e) -> {
@@ -1394,6 +1394,10 @@ public class CallManager {
     public void hangup() {
         if (currentState == CallState.IDLE || currentState == CallState.ENDED) return;
         repo.writeStatus(callId, "ended", "hangup");
+        // Before the doc goes away: cleanup() below stops the encoder directly, bypassing
+        // stopRecording(), so this is the only place the disclosure flag gets cleared on a
+        // hangup-while-recording. Ordered ahead of the delete so the update() lands on a live doc.
+        clearRecordingDisclosure();
         repo.deleteCallDoc(callId);
         setState(CallState.ENDED);
         cleanup(true);
@@ -1455,6 +1459,11 @@ public class CallManager {
             }
             callRecorder = null;
         }
+
+        // Forget the peer's last known recording state. handlePeerRecording() suppresses
+        // duplicate notices by comparing against this, so a reused manager instance would
+        // otherwise carry a stale `true` into the next call and swallow its first disclosure.
+        lastPeerRecording = null;
 
         // Stop handing these tracks out before they are disposed below — a secondary screen
         // that renders a disposed track crashes in native code.
