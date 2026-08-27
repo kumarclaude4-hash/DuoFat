@@ -292,60 +292,9 @@
                     app:tint="@color/ds_text_tertiary"/>
             </LinearLayout>
 
-            <!-- ══ SHAKE TO LOCK ═══════════════════════════════════════════════ -->
-            <TextView
-                android:text="SHAKE TO LOCK"
-                style="@style/SectionHeader"
-                android:paddingStart="20dp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@color/ds_surface"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingStart="20dp"
-                android:paddingEnd="20dp"
-                android:paddingTop="14dp"
-                android:paddingBottom="14dp"
-                android:minHeight="60dp">
-
-                <ImageView
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:src="@drawable/ic_lock"
-                    app:tint="#9A81FF"
-                    android:layout_marginEnd="18dp"/>
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Shake to lock"
-                        android:textColor="@color/ds_text_primary"
-                        android:textSize="15sp"/>
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Shake your phone to instantly lock the app. Requires a PIN to be set first."
-                        android:textSize="12sp"
-                        android:textColor="@color/ds_text_tertiary"
-                        android:layout_marginTop="3dp"
-                        android:lineSpacingMultiplier="1.3"/>
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switchShakeLock"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="14dp"/>
-            </LinearLayout>
+            <!-- No shake-to-lock section here by design. The capability is implicit for
+                 duress-enrolled accounts (see BaseActivity.isShakeToLockAvailable) and
+                 must leave no trace in Settings for ordinary accounts. -->
 
             <!-- ══ SESSION TIMEOUT ══════════════════════════════════════════════ -->
             <TextView
