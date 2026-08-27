@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.duoshield.app.R;
 import com.duoshield.app.db.CallRecord;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -37,11 +38,36 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
         void onLongClick(CallRecord record);
     }
 
-    private List<CallRecord> items = new ArrayList<>();
-    private final OnItemLongClickListener longClickListener;
+    /** Play/stop toggle for a row's recording. */
+    public interface OnPlayRecordingListener {
+        void onPlayRecording(CallRecord record);
+    }
 
-    public CallHistoryAdapter(OnItemLongClickListener longClickListener) {
+    private List<CallRecord> items = new ArrayList<>();
+    private final OnItemLongClickListener  longClickListener;
+    private final OnPlayRecordingListener  playListener;
+
+    /**
+     * Id of the row currently playing, or {@code null}. Held here rather than in the ViewHolder
+     * because holders are recycled: scrolling a playing row off-screen and back must still show
+     * the stop icon, and the row that inherits the recycled holder must not.
+     */
+    private String playingRecordId = null;
+
+    public CallHistoryAdapter(OnItemLongClickListener longClickListener,
+                              OnPlayRecordingListener playListener) {
         this.longClickListener = longClickListener;
+        this.playListener      = playListener;
+    }
+
+    /** Repaints the play/stop icons to match whichever row is playing (or none). */
+    public void setPlayingRecordId(String recordId) {
+        String previous  = playingRecordId;
+        playingRecordId  = recordId;
+        for (int i = 0; i < items.size(); i++) {
+            String id = items.get(i).id;
+            if (id.equals(previous) || id.equals(recordId)) notifyItemChanged(i);
+        }
     }
 
     public void setItems(List<CallRecord> newItems) {
@@ -98,6 +124,25 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
             h.tvDetail.setTextColor(0xFF9A8FB0);
         }
 
+        // Recording playback. The button appears only when a recording file is actually on disk:
+        // a row can carry a recordingPath whose file was removed behind the app's back (user
+        // cleared app storage), and offering play for a file that cannot be opened is worse than
+        // not offering it at all.
+        boolean hasRecording = r.recordingPath != null && new File(r.recordingPath).exists();
+        if (hasRecording) {
+            boolean playing = r.id.equals(playingRecordId);
+            h.btnPlay.setVisibility(View.VISIBLE);
+            h.btnPlay.setImageResource(playing ? R.drawable.ic_stop : R.drawable.ic_play_audio);
+            h.btnPlay.setContentDescription(playing ? "Stop playback" : "Play recording");
+            h.btnPlay.setOnClickListener(v -> {
+                if (playListener != null) playListener.onPlayRecording(r);
+            });
+        } else {
+            h.btnPlay.setVisibility(View.GONE);
+            // Recycled holders keep their old listener, which would point at the previous row.
+            h.btnPlay.setOnClickListener(null);
+        }
+
         h.itemView.setOnLongClickListener(v -> {
             if (longClickListener != null) longClickListener.onLongClick(r);
             return true;
@@ -107,12 +152,13 @@ public class CallHistoryAdapter extends RecyclerView.Adapter<CallHistoryAdapter.
     @Override public int getItemCount() { return items.size(); }
 
     static class VH extends RecyclerView.ViewHolder {
-        ImageView ivType, ivVideoFlag;
+        ImageView ivType, ivVideoFlag, btnPlay;
         TextView  tvName, tvDetail, tvTime;
         VH(View v) {
             super(v);
             ivType     = v.findViewById(R.id.ivCallType);
             ivVideoFlag = v.findViewById(R.id.ivCallVideoFlag);
+            btnPlay    = v.findViewById(R.id.btnPlayRecording);
             tvName     = v.findViewById(R.id.tvCallHistoryName);
             tvDetail   = v.findViewById(R.id.tvCallHistoryDetail);
             tvTime     = v.findViewById(R.id.tvCallHistoryTime);

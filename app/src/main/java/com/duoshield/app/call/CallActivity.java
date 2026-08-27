@@ -111,6 +111,18 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View                btnBack;
     private ImageView           btnChat;
     private ImageView           btnWatch;
+    private ImageView           btnRecord;
+    private View                btnRecordLayout;
+
+    /**
+     * Mirrors {@code callManager.isRecording()} for the button's visual state. Kept as a separate
+     * field because the manager's recorder is torn down during hangup, so it stops being a usable
+     * source of truth exactly when the UI is being updated for the last time.
+     */
+    private boolean isRecordingCall = false;
+
+    /** Id of the history row this call wrote, so a late-finishing recording can find it. */
+    private String savedRecordId = null;
 
     // TURN quota warning banner
     private View     bannerTurnWarning;
@@ -412,6 +424,10 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                         Toast.LENGTH_LONG).show());
             }
 
+            // Drop any half-finished pairing left behind by an earlier call, so a recording can
+            // never be attached to this call's history row by mistake.
+            CallRecordingStore.get(getApplicationContext()).beginCall();
+
             if (isCaller) {
                 callManager.startCall(myUid, partnerId, isVideo, chatId);
                 // BUG FIX — in-call chat always said "call not established" for the caller:
@@ -571,6 +587,8 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnBack               = findViewById(R.id.btnBack);
         btnChat               = findViewById(R.id.btnChat);
         btnWatch              = findViewById(R.id.btnWatch);
+        btnRecord             = findViewById(R.id.btnRecord);
+        btnRecordLayout       = findViewById(R.id.btnRecordLayout);
 
         // TURN banner
         bannerTurnWarning = findViewById(R.id.bannerTurnWarning);
@@ -604,6 +622,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             if (btnWatchLayout         != null) btnWatchLayout.setVisibility(View.VISIBLE);
             refreshWatchTogetherAwareness();
             // btnFlipLayout lives inside localVideoPip; visible once PiP appears
+        } else if (btnRecordLayout != null) {
+            // Voice calls only for now. The recorder mixes audio only, so in a video call the
+            // resulting file would silently omit the picture — better to not offer it than to
+            // hand back something that looks like a recording of the call but isn't.
+            btnRecordLayout.setVisibility(View.VISIBLE);
         }
     }
 
@@ -659,8 +682,68 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
             btnWatch.setOnClickListener(v -> openWatchTogether());
         }
 
+        // Record call (voice calls only)
+        if (btnRecord != null) {
+            btnRecord.setOnClickListener(v -> toggleRecording());
+        }
+
         // Draggable PiP — WhatsApp-style free drag, snaps to edge on release.
         setupPipDrag();
+    }
+
+    // ── Call recording ────────────────────────────────────────────────────────
+
+    private void toggleRecording() {
+        if (isRecordingCall) {
+            // The file is not ready yet — the encoder flushes asynchronously and
+            // CallRecordingStore attaches it to the history row when it lands. Nothing to do here
+            // beyond resetting the button.
+            callManager.stopRecording();
+            isRecordingCall = false;
+            updateRecordButtonUi();
+            Toast.makeText(this, "Recording saved to call history", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean started = callManager.startRecording(new CallAudioRecorder.Listener() {
+            @Override public void onStopped(String filePath, int durationSeconds) {
+                // Persistence is handled by CallRecordingStore inside CallManager; this callback
+                // exists purely so the button resets if the recorder stopped on its own.
+                isRecordingCall = false;
+                updateRecordButtonUi();
+            }
+
+            @Override public void onError(String message) {
+                isRecordingCall = false;
+                updateRecordButtonUi();
+                Toast.makeText(CallActivity.this,
+                        "Recording failed: " + message, Toast.LENGTH_LONG).show();
+            }
+
+            @Override public void onMaxDurationReached() {
+                Toast.makeText(CallActivity.this,
+                        "Recording limit reached — saving what was captured",
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+
+        if (!started) {
+            Toast.makeText(this, "Can't record until the call connects", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        isRecordingCall = true;
+        updateRecordButtonUi();
+        Toast.makeText(this, "Recording this call", Toast.LENGTH_SHORT).show();
+    }
+
+    private void updateRecordButtonUi() {
+        if (btnRecord == null) return;
+        btnRecord.setImageResource(isRecordingCall ? R.drawable.ic_stop : R.drawable.ic_record);
+        btnRecord.setBackgroundResource(isRecordingCall
+                ? R.drawable.bg_call_btn_red
+                : R.drawable.bg_call_btn_circle);
+        btnRecord.setContentDescription(isRecordingCall ? "Stop recording" : "Record call");
     }
 
     // ── Draggable local-video PiP ─────────────────────────────────────────────
@@ -1255,7 +1338,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         });
     }
 
-    // ── TURN quota warning ────────────────────────────────────────────────────
+    // ── TURN quota warning ────────────────────────────────────────��───────────
 
     /**
      * Shows or updates the TURN quota warning banner.
@@ -1392,8 +1475,20 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
     // ── Call history ──────────────────────────────────────────────────────────
 
+    /**
+     * Writes this call's history row.
+     *
+     * <p>Called from {@code updateStatusUi(ENDED)}, which calls {@code finish()} immediately
+     * afterwards. So this must not be the thing that waits for the recording: it only announces the
+     * row id to {@link CallRecordingStore}, which pairs it with the audio file whenever the
+     * encoder's flush completes — before or after this Activity is gone.
+     *
+     * <p>Guarded against running twice: an ENDED status can arrive from both the local hangup and
+     * the remote status write, and a duplicate row would strand the recording on the wrong id.
+     */
     private void saveCallRecord(String outcome) {
         if (partnerId == null || myUid == null) return;
+        if (savedRecordId != null) return;
         long now         = System.currentTimeMillis();
         int  durationSec = callStartMs > 0 ? (int) ((now - callStartMs) / 1000) : 0;
         String direction = isCaller ? CallRecord.DIRECTION_OUTGOING : CallRecord.DIRECTION_INCOMING;
@@ -1407,8 +1502,15 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         record.outcome         = outcome;
         record.startedAt       = callStartMs > 0 ? callStartMs : now;
         record.durationSeconds = durationSec;
-        historyExecutor.execute(() ->
-                AppDatabase.getInstance(getApplicationContext()).callHistoryDao().insert(record));
+        savedRecordId          = record.id;
+
+        Context appCtx = getApplicationContext();
+        historyExecutor.execute(() -> {
+            AppDatabase.getInstance(appCtx).callHistoryDao().insert(record);
+            // Only announce once the row genuinely exists, otherwise the store could try to
+            // UPDATE a row that has not been inserted yet and silently match nothing.
+            CallRecordingStore.get(appCtx).onCallRecordSaved(record.id);
+        });
     }
 
     // ── Foreground service lifecycle ──────────────────────────────────────────

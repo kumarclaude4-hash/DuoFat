@@ -168,25 +168,10 @@ public class CallSignalRepository {
                 });
     }
 
-    // ── Call recording indicator ──────────────────────────────────────────────
-
-    /**
-     * Publishes whether {@code uid} is currently recording the call, so the other party's screen
-     * can show a recording indicator.
-     *
-     * <p>Written as a per-uid map (mirroring the {@code clock.<uid>} pattern above) rather than a
-     * single boolean, because both parties can record at the same time and independently — a
-     * shared flag would let one peer's stop clear the other's indicator.
-     *
-     * <p>Failures are logged and swallowed. Recording is local and already under way by the time
-     * this runs, so a failed write must not tear down the recording; the cost is that the peer's
-     * indicator may not appear.
-     */
-    public void setRecording(String callId, String uid, boolean recording) {
-        callRef(callId).update("recording." + uid, recording)
-                .addOnFailureListener(e ->
-                        Log.w(TAG, "setRecording failed (non-fatal): " + e.getMessage()));
-    }
+    // NOTE: There is deliberately no setRecording()/recording-indicator signaling here.
+    // Call recording is silent and local-only: nothing about it is ever written to the shared
+    // call document, so the peer cannot learn that a recording is in progress. Do not
+    // reintroduce a `recording.<uid>` field — see CallManager#startRecording.
 
     // ── ICE restart signaling ─────────────────────────────────────────────────
 

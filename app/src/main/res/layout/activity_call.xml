@@ -315,6 +315,28 @@
                     android:contentDescription="Mute" />
             </LinearLayout>
 
+            <!-- Record call (voice calls only for now) -->
+            <LinearLayout
+                android:id="@+id/btnRecordLayout"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:visibility="gone">
+                <ImageView
+                    android:id="@+id/btnRecord"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:src="@drawable/ic_record"
+                    android:padding="14dp"
+                    android:background="@drawable/bg_call_btn_circle"
+                    app:tint="#FFFFFF"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Record call" />
+            </LinearLayout>
+
             <!-- Chat (video calls only) -->
             <LinearLayout
                 android:id="@+id/btnChatLayout"
