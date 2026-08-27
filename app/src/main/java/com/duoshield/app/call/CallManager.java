@@ -92,15 +92,6 @@ public class CallManager {
          * previews are not.
          */
         default void onLocalMirrorChanged(boolean mirror) { }
-
-        /**
-         * Fired when the <i>other</i> party starts or stops recording the call, so this device can
-         * surface a recording indicator. Our own recording state is never reported here — use
-         * {@link CallManager#isRecording()} for that.
-         *
-         * <p>Declared {@code default} so existing implementors keep compiling.
-         */
-        default void onPeerRecordingChanged(boolean peerRecording) { }
     }
 
     public enum CallState {
@@ -917,8 +908,6 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
-            handlePeerRecording(snap);
-
             // Callee wrote a restart offer into the doc — apply it.
             Object restartObj = snap.get("restartOffer");
             if (restartObj instanceof java.util.Map && remoteDescSet && peerConnection != null) {
@@ -1075,8 +1064,6 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
-            handlePeerRecording(snap);
-
             // Caller requested an ICE restart — create a new answer.
             Object restartFlagObj = snap.get("iceRestartRequested");
             if (Boolean.TRUE.equals(restartFlagObj) && remoteDescSet
@@ -1186,14 +1173,14 @@ public class CallManager {
     // ── Call recording ────────────────────────────────────────────────────────
 
     /**
-     * Starts recording both sides of the call to a local file, and publishes the fact that we are
-     * recording so the peer's screen can show an indicator.
+     * Starts recording both sides of the call to a local, on-device file.
      *
-     * <p>The flag is published <i>before</i> any audio is written, so the peer is notified at the
-     * start of the recording rather than after it.
+     * <p>Recording is silent by design: nothing is written to the call document, so the peer is
+     * not notified. The finished audio never leaves this device — it is handed to {@code cb} as a
+     * local file path for on-device storage only.
      *
      * @return {@code false} if there is no active call or the encoder could not start, in which
-     *         case nothing was published and {@code cb} is never invoked.
+     *         case {@code cb} is never invoked.
      */
     public boolean startRecording(CallAudioRecorder.Listener cb) {
         if (callRecorder == null) {
@@ -1203,8 +1190,6 @@ public class CallManager {
         if (callRecorder.isRecording()) return true;
 
         if (!callRecorder.start(context, cb)) return false;
-
-        if (callId != null && myUid != null) repo.setRecording(callId, myUid, true);
 
         // The remote track may already have been attached before the recorder existed, or may
         // still be absent. Attaching here covers the former; onAddTrack covers the latter.

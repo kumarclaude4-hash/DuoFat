@@ -30,4 +30,14 @@ public class CallRecord {
     @NonNull public String outcome        = OUTCOME_ANSWERED;
     public long            startedAt      = 0L;
     public int             durationSeconds = 0;
+
+    /**
+     * Absolute path to the local {@code .m4a} audio recording of this call, or {@code null} when
+     * the call was not recorded. Nullable on purpose: "not recorded" and "recording deleted" are
+     * both represented by NULL, and the history UI only shows a play affordance when this is set.
+     *
+     * <p>Never transmitted — the file lives in app-private external storage and the path is only
+     * meaningful on this device.
+     */
+    public String          recordingPath   = null;
 }
