@@ -176,6 +176,24 @@ public class SignInActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
+
+        // Hard "no offline use" wall — the app's front door.
+        //
+        // This screen is pre-auth and therefore does NOT extend BaseActivity, so it never
+        // inherited the offline gate. That made it the one place where the whole policy
+        // could be sidestepped: with no server, Create and Restore were both still
+        // tappable, and Restore in particular is where the server-side account-lock latch
+        // is enforced (a locked account must be indistinguishable from a non-existent
+        // one). Letting that flow start offline means the enforcement point is simply
+        // absent, and the user gets a network error whose wording is outside our control
+        // instead of the deliberately uniform failure. Gate the door, not the error text.
+        //
+        // Placed before the returning-user route() below so an offline launch also cannot
+        // silently re-enter the app on cached Firebase credentials.
+        if (com.duoshield.app.util.NetworkStateHelper.blockIfOffline(this)) {
+            return;
+        }
+
         // Auth state check already done in onCreate.
         // This is now just a safety check for edge cases.
         if (mAuth == null) mAuth = FirebaseAuth.getInstance();

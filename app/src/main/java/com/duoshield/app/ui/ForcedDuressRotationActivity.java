@@ -104,6 +104,9 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         btnConfirmExplain.setOnClickListener(v -> onConfirmExplain());
         btnRetryAck.setOnClickListener(v -> retryAcknowledge());
 
+        // Offline gate registered below in onStart(); see its javadoc for why this
+        // screen in particular must not be reachable without the server.
+
         // A relaunch mid-flow (app killed after slot B was armed but before the
         // server ack succeeded) lands straight back here via MainActivity.route().
         // Both local codes are already set at that point, so skip re-collecting
