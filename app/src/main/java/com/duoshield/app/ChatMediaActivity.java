@@ -563,6 +563,7 @@ public class ChatMediaActivity extends BaseActivity {
             },
             (msg, anchor) -> showMessageActionDialog(msg),
             this::retryMessage);
+        adapter.setViewerContext(conversationId, partnerUid);
         adapter.setOnReplyTapListener(this::scrollToAndHighlight);
         adapter.setOnVoiceSpeedToggleListener(this::onVoiceSpeedToggle);
         LinearLayoutManager llm = new LinearLayoutManager(this);

@@ -102,6 +102,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private String                           partnerName    = null;
     private String                           partnerAvatarUrl = null;
     private String                           partnerInitial   = "?";
+    private String                           viewerConversationId = null;
+    private String                           viewerPartnerUid = null;
     private String                           currentSpeedLabel = "1x";
     private String                           highlightedMsgId = null;
     private OnReplyTapListener               replyTapListener = null;
@@ -152,6 +154,23 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         this.partnerAvatarUrl = (photoUrl != null && !photoUrl.isEmpty()) ? photoUrl : null;
         this.partnerInitial   = (initial != null && !initial.isEmpty()) ? initial : "?";
         notifyItemRangeChanged(0, displayItems.size());
+    }
+
+    /** Supplies the source chat context to media viewers opened from this adapter. */
+    public void setViewerContext(String conversationId, String partnerUid) {
+        this.viewerConversationId = conversationId;
+        this.viewerPartnerUid = partnerUid;
+    }
+
+    private void addViewerContext(Intent intent, Message message) {
+        if (intent == null || message == null) return;
+        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_CONVERSATION_ID,
+                viewerConversationId);
+        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MY_UID, myUid);
+        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_PARTNER_UID,
+                viewerPartnerUid);
+        intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_MESSAGE_ID,
+                message.getId());
     }
 
     public void setOnVoiceSpeedToggleListener(OnVoiceSpeedToggleListener l) {
@@ -778,6 +797,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_SENDER_NAME, vidSender);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_TIMESTAMP, vidTs);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_CAPTION, vidCaption);
+                    addViewerContext(i, msg);
                     ctx.startActivity(i);
                 });
 
@@ -795,6 +815,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_SENDER_NAME, vidSenderLegacy);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_TIMESTAMP, vidTsLegacy);
                     i.putExtra(com.duoshield.app.MediaViewerActivity.EXTRA_CAPTION, vidCaptionLegacy);
+                    addViewerContext(i, msg);
                     ctx.startActivity(i);
                 });
             }
@@ -922,6 +943,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_SENDER_NAME, imgSender);
                 i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_TIMESTAMP, imgTs);
                 i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_CAPTION, imgCaption);
+                addViewerContext(i, msg);
                 ctx.startActivity(i);
             });
 
@@ -1285,6 +1307,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_SENDER_NAME, albumSender);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_TIMESTAMP, albumTs);
                         intent.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_CAPTION, albumCaption);
+                        addViewerContext(intent, msg);
                     }
                     ctx.startActivity(intent);
                 });

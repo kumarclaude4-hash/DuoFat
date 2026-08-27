@@ -11,6 +11,7 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.Toast;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
@@ -24,6 +25,8 @@ import com.duoshield.app.util.ArchiveHelper;
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.models.Conversation;
 import com.duoshield.app.models.Group;
+import com.duoshield.app.models.Message;
+import com.duoshield.app.util.ForwardMessageHelper;
 import com.duoshield.app.ui.ConversationAdapter;
 import com.duoshield.app.ui.CreateGroupActivity;
 import com.duoshield.app.ui.SeedPhraseDisplayActivity;
@@ -50,6 +53,16 @@ import java.util.concurrent.Executors;
 
 public class ConversationListActivity extends BaseActivity {
 
+    public static final String EXTRA_FORWARD_MODE = "forward_mode";
+    public static final String EXTRA_FORWARD_MESSAGE_ID = "forward_message_id";
+    public static final String EXTRA_FORWARD_SOURCE_CONVERSATION = "forward_source_conversation";
+    public static final String EXTRA_FORWARD_SOURCE_SENDER = "forward_source_sender";
+    public static final String EXTRA_FORWARD_MEDIA_URL = "forward_media_url";
+    public static final String EXTRA_FORWARD_MEDIA_KEY = "forward_media_key";
+    public static final String EXTRA_FORWARD_MEDIA_TYPE = "forward_media_type";
+    public static final String EXTRA_FORWARD_TEXT = "forward_text";
+    public static final String EXTRA_FORWARD_TIMESTAMP = "forward_timestamp";
+
     private RecyclerView        recyclerView;
     private ConversationAdapter adapter;
     private LinearLayout        emptyState;
@@ -72,12 +85,24 @@ public class ConversationListActivity extends BaseActivity {
     private AppDatabase          localDb;
     /** Incremented each time a new filter pass starts; stale async results are discarded. */
     private volatile int         filterSeq           = 0;
+    private boolean               forwardMode        = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         com.duoshield.app.util.UiModeHelper.applyTheme(this);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_conversation_list);
+        forwardMode = getIntent().getBooleanExtra(EXTRA_FORWARD_MODE, false);
+        if (forwardMode) {
+            android.widget.TextView title = findViewById(R.id.tv_screen_title);
+            if (title != null) title.setText("Forward to…");
+            View callHistory = findViewById(R.id.btn_call_history);
+            View searchToggle = findViewById(R.id.btn_search_toggle);
+            View menu = findViewById(R.id.btn_menu);
+            if (callHistory != null) callHistory.setVisibility(View.GONE);
+            if (searchToggle != null) searchToggle.setVisibility(View.GONE);
+            if (menu != null) menu.setVisibility(View.GONE);
+        }
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         myUid = prefs.getString("my_uid", null);
@@ -169,7 +194,9 @@ public class ConversationListActivity extends BaseActivity {
 
         adapter = new ConversationAdapter(new ConversationAdapter.OnConversationClickListener() {
             @Override public void onClick(Conversation conv)     { openChat(conv); }
-            @Override public void onLongClick(Conversation conv) { openContactDetail(conv); }
+            @Override public void onLongClick(Conversation conv) {
+                if (!forwardMode) openContactDetail(conv);
+            }
         });
 
         LinearLayoutManager convLlm = new LinearLayoutManager(this);
@@ -497,6 +524,27 @@ public class ConversationListActivity extends BaseActivity {
     }
 
     private void openChat(Conversation conv) {
+        if (forwardMode) {
+            if (conv.isGroup || conv.partnerUid == null || conv.partnerUid.isEmpty()) {
+                Toast.makeText(this, "Choose a direct conversation", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String id = getIntent().getStringExtra(EXTRA_FORWARD_MESSAGE_ID);
+            String sourceConversation = getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_CONVERSATION);
+            String url = getIntent().getStringExtra(EXTRA_FORWARD_MEDIA_URL);
+            String key = getIntent().getStringExtra(EXTRA_FORWARD_MEDIA_KEY);
+            String type = getIntent().getStringExtra(EXTRA_FORWARD_MEDIA_TYPE);
+            Message source = new Message(id != null ? id : java.util.UUID.randomUUID().toString(),
+                    sourceConversation, getIntent().getStringExtra(EXTRA_FORWARD_SOURCE_SENDER),
+                    getIntent().getStringExtra(EXTRA_FORWARD_TEXT),
+                    getIntent().getLongExtra(EXTRA_FORWARD_TIMESTAMP, System.currentTimeMillis()),
+                    true, url, type);
+            source.setMediaKey(key);
+            ForwardMessageHelper.forward(this, source, conv.id, myUid, conv.partnerUid);
+            Toast.makeText(this, "Forwarding…", Toast.LENGTH_SHORT).show();
+            finish();
+            return;
+        }
         if (conv.isGroup) {
             Intent i = new Intent(this, GroupChatActivity.class);
             i.putExtra("group_id", conv.groupId);

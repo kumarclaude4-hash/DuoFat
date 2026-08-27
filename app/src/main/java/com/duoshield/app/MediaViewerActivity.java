@@ -50,6 +50,10 @@ public class MediaViewerActivity extends BaseActivity {
     public static final String EXTRA_SENDER_NAME = "sender_name";
     public static final String EXTRA_TIMESTAMP   = "timestamp";
     public static final String EXTRA_CAPTION     = "caption";
+    public static final String EXTRA_CONVERSATION_ID = "forward_conversation_id";
+    public static final String EXTRA_MY_UID      = "forward_my_uid";
+    public static final String EXTRA_PARTNER_UID = "forward_partner_uid";
+    public static final String EXTRA_MESSAGE_ID  = "forward_message_id";
 
     private ExoPlayer   player;
     private PlayerView  playerView;
@@ -70,6 +74,7 @@ public class MediaViewerActivity extends BaseActivity {
      * at rest.
      */
     private File        playbackFile;
+    private int          videoRotationDegrees = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,10 +94,14 @@ public class MediaViewerActivity extends BaseActivity {
         ImageButton btnClose    = findViewById(R.id.btn_close);
         ImageButton btnDownload = findViewById(R.id.btn_download);
         ImageButton btnShare    = findViewById(R.id.btn_share);
+        ImageButton btnForward  = findViewById(R.id.btn_forward);
+        ImageButton btnRotate   = findViewById(R.id.btn_rotate);
 
         if (btnClose    != null) btnClose.setOnClickListener(v -> finish());
         if (btnDownload != null) btnDownload.setOnClickListener(v -> saveVideoToGallery());
         if (btnShare    != null) btnShare.setOnClickListener(v -> shareVideo());
+        if (btnForward  != null) btnForward.setOnClickListener(v -> forwardVideo());
+        if (btnRotate   != null) btnRotate.setOnClickListener(v -> rotateVideo());
 
         // Keep the custom top bar / caption in lock-step with ExoPlayer's own controller
         // so a single tap reveals or hides all chrome together (WhatsApp/Telegram feel).
@@ -105,6 +114,35 @@ public class MediaViewerActivity extends BaseActivity {
         }
 
         if (mediaRef != null) loadAndPlay();
+    }
+
+    private void rotateVideo() {
+        if (playerView == null) return;
+        videoRotationDegrees = (videoRotationDegrees + 90) % 360;
+        playerView.animate().rotation(videoRotationDegrees).setDuration(180).start();
+    }
+
+    private void forwardVideo() {
+        String conversationId = getIntent().getStringExtra(EXTRA_CONVERSATION_ID);
+        String myUid = getIntent().getStringExtra(EXTRA_MY_UID);
+        String partnerUid = getIntent().getStringExtra(EXTRA_PARTNER_UID);
+        String messageId = getIntent().getStringExtra(EXTRA_MESSAGE_ID);
+        if (conversationId == null || myUid == null || partnerUid == null || messageId == null) {
+            Toast.makeText(this, "Forward is unavailable for this media", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        android.content.Intent picker = new android.content.Intent(this, ConversationListActivity.class);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MODE, true);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MESSAGE_ID, messageId);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_SOURCE_CONVERSATION, conversationId);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_URL, mediaRef);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_KEY, mediaKey);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_TYPE, "video");
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_TEXT,
+                getIntent().getStringExtra(EXTRA_CAPTION));
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_TIMESTAMP,
+                getIntent().getLongExtra(EXTRA_TIMESTAMP, System.currentTimeMillis()));
+        startActivity(picker);
     }
 
     /** Fills the top bar with the sender name, a friendly timestamp, and any caption. */

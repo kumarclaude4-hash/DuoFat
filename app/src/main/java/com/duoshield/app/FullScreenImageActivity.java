@@ -30,6 +30,10 @@ public class FullScreenImageActivity extends BaseActivity {
     public static final String EXTRA_SENDER_NAME = "sender_name";
     public static final String EXTRA_TIMESTAMP   = "timestamp";
     public static final String EXTRA_CAPTION     = "caption";
+    public static final String EXTRA_CONVERSATION_ID = "forward_conversation_id";
+    public static final String EXTRA_MY_UID      = "forward_my_uid";
+    public static final String EXTRA_PARTNER_UID = "forward_partner_uid";
+    public static final String EXTRA_MESSAGE_ID  = "forward_message_id";
 
     private PhotoView   photoView;
     private ProgressBar progressBar;
@@ -78,11 +82,12 @@ public class FullScreenImageActivity extends BaseActivity {
         ImageButton btnShare = findViewById(R.id.btn_share);
         if (btnShare != null) btnShare.setOnClickListener(v -> shareImage());
 
+        ImageButton btnForward = findViewById(R.id.btn_forward);
+        if (btnForward != null) btnForward.setOnClickListener(v -> forwardImage());
+
         View.OnClickListener rotate = v -> rotateImage();
         ImageButton btnRotate = findViewById(R.id.btn_rotate);
         if (btnRotate != null) btnRotate.setOnClickListener(rotate);
-        ImageButton btnRotateAction = findViewById(R.id.btn_rotate_action);
-        if (btnRotateAction != null) btnRotateAction.setOnClickListener(rotate);
 
         // Single tap on the photo toggles the chrome (immersive, like WhatsApp/Telegram).
         // PhotoView surfaces this via its own tap listener so it never fights pinch/zoom.
@@ -133,6 +138,30 @@ public class FullScreenImageActivity extends BaseActivity {
             bar.animate().alpha(0f).setDuration(180)
                     .withEndAction(() -> bar.setVisibility(View.GONE)).start();
         }
+    }
+
+    private void forwardImage() {
+        String conversationId = getIntent().getStringExtra(EXTRA_CONVERSATION_ID);
+        String myUid = getIntent().getStringExtra(EXTRA_MY_UID);
+        String partnerUid = getIntent().getStringExtra(EXTRA_PARTNER_UID);
+        String messageId = getIntent().getStringExtra(EXTRA_MESSAGE_ID);
+        if (conversationId == null || myUid == null || partnerUid == null || messageId == null) {
+            Toast.makeText(this, "Forward is unavailable for this media", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        android.content.Intent picker = new android.content.Intent(this, ConversationListActivity.class);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MODE, true);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MESSAGE_ID, messageId);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_SOURCE_CONVERSATION, conversationId);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_SOURCE_SENDER, "");
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_URL, imageUrl);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_KEY, mediaKey);
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_MEDIA_TYPE, "image");
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_TEXT,
+                getIntent().getStringExtra(EXTRA_CAPTION));
+        picker.putExtra(ConversationListActivity.EXTRA_FORWARD_TIMESTAMP,
+                getIntent().getLongExtra(EXTRA_TIMESTAMP, System.currentTimeMillis()));
+        startActivity(picker);
     }
 
     /** Rotates the shown image 90° clockwise per tap — handy for sideways photos. */
