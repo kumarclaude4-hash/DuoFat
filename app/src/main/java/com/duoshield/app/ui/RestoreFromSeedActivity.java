@@ -164,6 +164,29 @@ public class RestoreFromSeedActivity extends AppCompatActivity {
         if (btnBack != null) btnBack.setOnClickListener(v -> onBackPressed());
     }
 
+    /**
+     * Hard "no offline use" wall for the recovery screen.
+     *
+     * <p>This is the screen the offline policy matters most on, and it is pre-auth so it
+     * does not extend {@code BaseActivity} and never inherited the gate. Recovery is
+     * exactly where the server-side account-lock latch is enforced: a locked account must
+     * fail with the same generic message as an account that does not exist, and it must
+     * start recovering normally the moment an admin unlocks it. Both of those facts live
+     * only on the server. With no server reachable, the enforcement point is not merely
+     * degraded — it is absent, and the user instead sees whatever transport-level error
+     * happens to surface, which leaks a different failure shape than the deliberately
+     * uniform one.
+     *
+     * <p>Gating at {@code onStart()} rather than inside {@link #attemptRestore()} means
+     * the recovery phrase is never even typed into a session that cannot complete, so a
+     * 12-word secret is not left sitting in an EditText waiting on a dead network.
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        com.duoshield.app.util.NetworkStateHelper.blockIfOffline(this);
+    }
+
     // ── Step A — Validate both inputs ────────────────────────────────────────
 
     private void attemptRestore() {

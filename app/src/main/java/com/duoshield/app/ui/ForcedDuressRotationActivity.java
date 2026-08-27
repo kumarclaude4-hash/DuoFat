@@ -84,6 +84,32 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
 
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
+    /**
+     * Hard "no offline use" wall for the post-unlock rotation flow.
+     *
+     * <p>This screen does not extend {@code BaseActivity}, so it never inherited the
+     * gate. That mattered more here than on an ordinary screen: the whole point of
+     * this flow is to replace the secondary code <em>and</em> tell the server it was
+     * replaced. Only the local half of that can happen offline, and a local-only
+     * rotation is the worst possible outcome — the user is shown a success path,
+     * slot B is overwritten with the new code, and the server still believes the old
+     * rotation is outstanding. The account then stays flagged as rotation-due
+     * forever while the code needed to satisfy it no longer exists anywhere.</p>
+     *
+     * <p>Gating at {@code onStart()} rather than mid-submit is deliberate: it keeps
+     * the irreversible local write from ever being reached without the server, so
+     * there is no partial state to reconcile. The retry panel exists for a server
+     * ack that failed <em>after</em> a successful connection, not for one that was
+     * never possible.</p>
+     */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (com.duoshield.app.util.NetworkStateHelper.blockIfOffline(this)) {
+            return;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -103,6 +129,9 @@ public class ForcedDuressRotationActivity extends AppCompatActivity {
         btnContinueEntry.setOnClickListener(v -> onContinueEntry());
         btnConfirmExplain.setOnClickListener(v -> onConfirmExplain());
         btnRetryAck.setOnClickListener(v -> retryAcknowledge());
+
+        // Offline gate registered below in onStart(); see its javadoc for why this
+        // screen in particular must not be reachable without the server.
 
         // A relaunch mid-flow (app killed after slot B was armed but before the
         // server ack succeeded) lands straight back here via MainActivity.route().
