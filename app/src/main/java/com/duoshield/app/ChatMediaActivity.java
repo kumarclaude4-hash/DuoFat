@@ -62,6 +62,7 @@ import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
+import com.duoshield.app.notifications.NotificationVisibility;
 import com.google.android.material.snackbar.Snackbar;
 import com.duoshield.app.backup.BackupManager;
 import com.duoshield.app.util.EditMessageHelper;
@@ -1498,6 +1499,9 @@ public class ChatMediaActivity extends BaseActivity {
         // just launched LockScreenActivity, do not load or display any data until the user
         // unlocks. onResume() will fire again after unlock with shouldLock() == false.
         if (AppLockManager.shouldLock(this)) return;
+        if (conversationId != null) {
+            NotificationVisibility.enterConversation(conversationId, this);
+        }
         // FLAG_SECURE is now applied globally in BaseActivity.onCreate()
         // based on the "app_screenshot_enabled" preference.
         markMessagesAsReadAndSeen();
@@ -1520,7 +1524,13 @@ public class ChatMediaActivity extends BaseActivity {
         disappearHandler.post(disappearTicker);
     }
 
+    @Override protected void onPause() {
+        NotificationVisibility.leaveConversation(conversationId, this);
+        super.onPause();
+    }
+
     @Override protected void onStop() {
+        NotificationVisibility.leaveConversation(conversationId, this);
         super.onStop();
         if (msgListener  != null) { msgListener.remove();  msgListener  = null; }
         if (convListener != null) { convListener.remove(); convListener = null; }

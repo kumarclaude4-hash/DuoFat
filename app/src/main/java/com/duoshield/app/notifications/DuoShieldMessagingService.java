@@ -88,7 +88,7 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
             acknowledgeDelivery(chatId, messageId, msgType);
         }
 
-        // ── 2. Dedup: skip notification if already shown for this messageId ──
+        // ── 2. Dedup: skip duplicate pushes for the same message ID ──────────
         if (messageId != null && !messageId.isEmpty()) {
             if (shownMessageIds.size() > 100) shownMessageIds.clear();
             if (!shownMessageIds.add(messageId)) {
@@ -97,7 +97,17 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
             }
         }
 
-        // ── 3. Show notification (if enabled) ────────────────────────────────
+        // ── 3. Exact-chat suppression ───────────────────────────────────────
+        // A foreground app is not enough to suppress a notification: the user may
+        // be on the conversation list or another screen and still needs the alert.
+        // Only the exact resumed chat is silent, like WhatsApp. This check is after
+        // deduplication so a delayed duplicate cannot notify after the chat closes.
+        if (chatId != null && NotificationVisibility.isConversationOpen(chatId)) {
+            Log.d(TAG, "Message notification suppressed: conversation is open (" + chatId + ")");
+            return;
+        }
+
+        // ── 4. Show notification (if enabled) ────────────────────────────────
         boolean notificationsEnabled = prefs.getBoolean("notifications_enabled", true);
         if (!notificationsEnabled) return;
 

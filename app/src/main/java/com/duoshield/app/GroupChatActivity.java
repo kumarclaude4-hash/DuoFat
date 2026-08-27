@@ -31,6 +31,7 @@ import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.models.Group;
 import com.duoshield.app.models.GroupMember;
 import com.duoshield.app.models.Message;
+import com.duoshield.app.notifications.NotificationVisibility;
 import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.util.B2StorageHelper;
 import com.duoshield.app.util.ChatThemeHelper;
@@ -321,6 +322,9 @@ public class GroupChatActivity extends BaseActivity {
     protected void onResume() {
         super.onResume();
         // Re-apply the chat theme and bubble style in case the user changed them in Settings.
+        if (groupId != null) {
+            NotificationVisibility.enterConversation(groupId, this);
+        }
         if (recyclerView != null) {
             ChatThemeHelper.apply(recyclerView, getSharedPreferences("duoshield_prefs", MODE_PRIVATE));
         }
@@ -334,7 +338,14 @@ public class GroupChatActivity extends BaseActivity {
     }
 
     @Override
+    protected void onPause() {
+        NotificationVisibility.leaveConversation(groupId, this);
+        super.onPause();
+    }
+
+    @Override
     protected void onStop() {
+        NotificationVisibility.leaveConversation(groupId, this);
         super.onStop();
         if (msgListener != null) { msgListener.remove(); msgListener = null; }
     }
