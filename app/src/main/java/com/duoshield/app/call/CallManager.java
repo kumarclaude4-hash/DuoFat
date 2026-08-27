@@ -322,7 +322,7 @@ public class CallManager {
         }
     };
 
-    // ── Tiered capture / bitrate policy ──────────────────────────────────────
+    // ── Tiered capture / bitrate policy ─────────────────────────────────────���
     /**
      * Hard bitrate ceiling for {@link DevicePerformanceTier#LOW} devices.
      *
@@ -1098,7 +1098,7 @@ public class CallManager {
         });
     }
 
-    // ─── ICE candidate listeners ─────────────────────────────────────────────
+    // ─── ICE candidate listeners ────────────────────────────────────��────────
 
     private void listenForCalleeCandidates() {
         remoteCandidateListener = repo.listenToCalleeCandidates(callId, (snap, e) -> {
@@ -1264,6 +1264,24 @@ public class CallManager {
         if (callRecorder == null || !callRecorder.isRecording()) return;
         callRecorder.stop();
         if (callId != null && myUid != null) {
+            repo.setRecording(callId, myUid, false, null);
+        }
+    }
+
+    /**
+     * Clears our own {@code recording.<myUid>} disclosure flag, but only when a recording is
+     * actually in flight. This is the fix for the hangup-while-recording edge: the teardown path
+     * ({@link #cleanup}) stops the encoder directly rather than going through
+     * {@link #stopRecording}, so without this the flag would linger on the call document.
+     *
+     * <p>Call this <em>before</em> {@link CallSignalRepository#deleteCallDoc} on the local end
+     * paths. {@code setRecording} issues a Firestore {@code update()}, which no-ops on a missing
+     * document instead of recreating it, so even if this races the delete it can never resurrect a
+     * ghost call doc — but ordering it ahead of the delete keeps the write from failing needlessly.
+     */
+    private void clearRecordingDisclosure() {
+        if (callId != null && myUid != null
+                && callRecorder != null && callRecorder.isRecording()) {
             repo.setRecording(callId, myUid, false, null);
         }
     }
