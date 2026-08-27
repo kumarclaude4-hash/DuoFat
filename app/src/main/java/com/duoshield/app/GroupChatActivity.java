@@ -481,7 +481,12 @@ public class GroupChatActivity extends BaseActivity {
             if (e != null) { Log.e(TAG, "Message listener error", e); return; }
             if (snaps == null || snaps.isEmpty()) return;
 
-            FirebaseCostGuard.getInstance(this).recordReads(snaps.size());
+            // Charge only documents changed in this event; snaps.size() is the entire result
+            // window and dramatically overstates reads during active conversations.
+            int changedCount = snaps.getDocumentChanges().size();
+            if (changedCount > 0) {
+                FirebaseCostGuard.getInstance(this).recordReads(changedCount);
+            }
 
             for (DocumentChange dc : snaps.getDocumentChanges()) {
                 if (dc.getType() != DocumentChange.Type.ADDED) continue;

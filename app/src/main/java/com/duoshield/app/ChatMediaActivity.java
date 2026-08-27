@@ -1823,10 +1823,12 @@ public class ChatMediaActivity extends BaseActivity {
         msgListener = q.addSnapshotListener((snaps, e) -> {
             if (snaps == null) return;
 
-            // F-10: record Firestore reads for quota tracking
-            int snapSize = snaps.size();
-            if (snapSize > 0) {
-                FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordReads(snapSize);
+            // F-10: count only documents changed in this listener event. snaps.size() is the
+            // full result window (up to 300), so charging it for every single message/status
+            // update made a short chat appear to consume tens of thousands of reads.
+            int changedCount = snaps.getDocumentChanges().size();
+            if (changedCount > 0) {
+                FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordReads(changedCount);
             }
 
             boolean newMessageAdded = false;

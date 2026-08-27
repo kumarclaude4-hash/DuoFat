@@ -456,8 +456,13 @@ public class ConversationListActivity extends BaseActivity {
                     }
                 }
 
-                FirebaseCostGuard.getInstance(ConversationListActivity.this)
-                        .recordReads(snapshots.size());
+                // Count changed documents, not the full listener result, because snapshots may
+                // contain the complete conversation window on every metadata update.
+                int changedCount = snapshots.getDocumentChanges().size();
+                if (changedCount > 0) {
+                    FirebaseCostGuard.getInstance(ConversationListActivity.this)
+                            .recordReads(changedCount);
+                }
                 if (hasChanges) mergeAndFilter();
             });
     }
