@@ -22,8 +22,13 @@ public class MessageStatusHelper {
             tick.setVisibility(View.GONE);
             return;
         }
-        tick.setVisibility(View.VISIBLE);
         String status = msg.getStatus();
+        if ("uploading".equals(status)) {
+            // The voice bubble is already visible, but it is not a delivered message yet.
+            tick.setVisibility(View.GONE);
+            return;
+        }
+        tick.setVisibility(View.VISIBLE);
         if ("read".equals(status)) {
             // ✓✓ cyan — partner opened the chat and saw the message
             tick.setImageResource(R.drawable.ic_done_all);

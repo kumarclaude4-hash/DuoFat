@@ -801,13 +801,18 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
         } else if ("voice".equals(type)) {
             h.voiceNoteContainer.setVisibility(View.VISIBLE);
-            boolean playing = msg.getId() != null && msg.getId().equals(playingMsgId);
+            boolean uploading = "uploading".equals(msg.getStatus());
+            boolean playing = !uploading && msg.getId() != null && msg.getId().equals(playingMsgId);
 
             // Reset recycled state first so a previously playing row does not leak scale/progress.
             stopBreathingAnim(h.bubble);
 
             h.voicePlayPauseBtn.setImageResource(
                 playing ? R.drawable.ic_pause_audio : R.drawable.ic_play_audio);
+            h.voicePlayPauseBtn.setEnabled(!uploading);
+            h.voicePlayPauseBtn.setAlpha(uploading ? 0.55f : 1f);
+            h.voicePlayPauseBtn.setContentDescription(
+                    uploading ? "Uploading voice note" : "Play voice note");
             // Tag views with message ID so async callbacks can detect stale ViewHolders
             h.voicePlayPauseBtn.setTag(msg.getId());
             h.voiceWaveform.setTag(msg.getId());
@@ -856,7 +861,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 h.voiceWaveform.setProgress(0f);
             }
             h.voicePlayPauseBtn.setOnClickListener(v -> {
-                if (voiceListener != null)
+                if (!uploading && voiceListener != null)
                     voiceListener.onVoicePlay(msg, h.voicePlayPauseBtn,
                         h.voiceWaveform, h.voiceDuration, h.bubble);
             });

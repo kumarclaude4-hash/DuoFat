@@ -232,6 +232,8 @@ public class ChatMediaActivity extends BaseActivity {
     private String myUid;
     private String partnerUid;
     private String pendingImageCaption = null;
+    /** Local voice files kept until their upload and Firestore write both finish. */
+    private final Map<String, String> pendingVoiceFiles = new HashMap<>();
 
     private final ExecutorService dbExecutor = Executors.newSingleThreadExecutor();
     /**
@@ -1011,28 +1013,34 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     private void uploadVoiceNote(String filePath, List<Integer> amplitudes, int durationMs) {
-        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs, 0);
+        String msgId = UUID.randomUUID().toString();
+        long now = System.currentTimeMillis();
+        long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
+        Message pending = new Message(msgId, conversationId, myUid, "", now, false, null, "voice");
+        pending.setExpiresAt(exp);
+        pending.setStatus("uploading");
+        pending.setWaveAmplitudes(downsampleAmplitudes(amplitudes, 60));
+        pending.setDurationMs(durationMs);
+        pendingVoiceFiles.put(msgId, filePath);
+        adapter.appendMessage(pending);
+        knownIds.add(msgId);
+        recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs, 0, msgId);
     }
 
     // BUG-U01 fix: add retry logic for voice uploads with exponential backoff
-    private void uploadVoiceNoteWithRetry(String filePath, List<Integer> amplitudes, int durationMs, int retryCount) {
+    private void uploadVoiceNoteWithRetry(String filePath, List<Integer> amplitudes, int durationMs,
+                                          int retryCount, String pendingMsgId) {
         if (isFinishing() || isDestroyed()) return;
         if (retryCount > 3) {
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                uploadProgressContainer.setVisibility(View.GONE);
-                showB2ErrorDialog("Voice upload failed after 3 attempts.", null);
-            });
+            markVoiceUploadFailed(pendingMsgId, "Voice upload failed after 3 attempts.", null);
             return;
         }
 
         File f = new File(filePath);
         if (!f.exists()) {
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                uploadProgressContainer.setVisibility(View.GONE);
-                Toast.makeText(ChatMediaActivity.this, R.string.voice_file_not_found, Toast.LENGTH_SHORT).show();
-            });
+            markVoiceUploadFailed(pendingMsgId,
+                    getString(R.string.voice_file_not_found), null);
             return;
         }
 
@@ -1042,21 +1050,12 @@ public class ChatMediaActivity extends BaseActivity {
             long voiceBytes = MediaLimits.sizeOf(f);
             if (MediaLimits.isOversize(voiceBytes)) {
                 final String reject = MediaLimits.tooLargeMessage(voiceBytes, "This voice note");
-                runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) return;
-                    uploadProgressContainer.setVisibility(View.GONE);
-                    Toast.makeText(ChatMediaActivity.this, reject, Toast.LENGTH_LONG).show();
-                });
+                markVoiceUploadFailed(pendingMsgId, reject, null);
                 f.delete();
                 return;
             }
         }
 
-        runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) return;
-            uploadProgressContainer.setVisibility(View.VISIBLE);
-            tvUploadPct.setText("0%");
-        });
         String objectKey = "voice/" + conversationId + "/" + UUID.randomUUID() + ".m4a";
         if (executor.isShutdown()) return;
         executor.execute(() -> {
@@ -1065,33 +1064,28 @@ public class ChatMediaActivity extends BaseActivity {
                 B2StorageHelper.EncryptedMedia enc = B2StorageHelper.encryptForUpload(plain);
                 String storagePath = B2StorageHelper.uploadFile(
                         enc.data, objectKey, "audio/mp4",
-                        pct -> runOnUiThread(() -> {
-                            if (!isFinishing() && !isDestroyed()) tvUploadPct.setText(pct + "%");
-                        }));
+                        pct -> { /* Voice upload is represented by the inline pending bubble. */ });
                 final String mediaKey = enc.keyBase64;
                 final String finalPath = storagePath;
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    uploadProgressContainer.setVisibility(View.GONE);
-                    sendVoiceMessage(finalPath, mediaKey, amplitudes, durationMs);
+                    pendingVoiceFiles.remove(pendingMsgId);
+                    sendVoiceMessage(finalPath, mediaKey, amplitudes, durationMs, pendingMsgId);
                 });
                 f.delete();
             } catch (Exception e) {
                 Log.e(TAG, "Voice upload failed (attempt " + (retryCount + 1) + "/4)", e);
                 final String errMsg = e.getMessage();
                 if (retryCount >= 3) {
-                    runOnUiThread(() -> {
-                        if (isFinishing() || isDestroyed()) return;
-                        uploadProgressContainer.setVisibility(View.GONE);
-                        showB2ErrorDialog("Voice note upload failed.", errMsg);
-                    });
+                    markVoiceUploadFailed(pendingMsgId, "Voice note upload failed.", errMsg);
                     return;
                 }
                 // Exponential backoff: 1s, 2s, 4s
                 long delayMs = (long) (1000 * Math.pow(2, retryCount));
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     if (!isFinishing() && !isDestroyed() && !executor.isShutdown()) {
-                        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs, retryCount + 1);
+                        uploadVoiceNoteWithRetry(filePath, amplitudes, durationMs,
+                                retryCount + 1, pendingMsgId);
                     }
                 }, delayMs);
             }
@@ -1128,23 +1122,58 @@ public class ChatMediaActivity extends BaseActivity {
         return out;
     }
 
-    private void sendVoiceMessage(String storagePath, String mediaKey, List<Integer> amplitudes, int durationMs) {
-        String msgId = UUID.randomUUID().toString();
+    /** Marks the existing inline voice bubble failed without hiding the conversation. */
+    private void markVoiceUploadFailed(String msgId, String message, String detail) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            Message pending = adapter.getMessageById(msgId);
+            if (pending != null) {
+                pending.setStatus("failed");
+                adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
+                saveToRoom(pending);
+            }
+            if (detail != null && !detail.isEmpty()) {
+                showB2ErrorDialog(message, detail);
+            } else {
+                Toast.makeText(ChatMediaActivity.this,
+                        message + " Tap the voice bubble to retry.", Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    /**
+     * Sends the already-uploaded voice object using the same ID as the inline pending bubble.
+     * Keeping one ID prevents a second bubble when the Firestore write is retried.
+     */
+    private void sendVoiceMessage(String storagePath, String mediaKey, List<Integer> amplitudes,
+                                  int durationMs, String pendingMsgId) {
+        String msgId = pendingMsgId != null ? pendingMsgId : UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
-        long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
-
         List<Integer> sampledAmps = downsampleAmplitudes(amplitudes, 60);
-
-        // Optimistic UI — show immediately (same pattern as sendMediaMessage)
-        Message m = new Message(msgId, conversationId, myUid, "", now, false, storagePath, "voice");
-        m.setExpiresAt(exp);
+        Message m = adapter.getMessageById(msgId);
+        if (m == null) {
+            long exp = getDisappearMs() > 0 ? now + getDisappearMs() : 0;
+            m = new Message(msgId, conversationId, myUid, "", now, false, storagePath, "voice");
+            m.setExpiresAt(exp);
+            m.setWaveAmplitudes(sampledAmps);
+            m.setDurationMs(durationMs);
+            adapter.appendMessage(m);
+            knownIds.add(msgId);
+            recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+        }
+        m.setMediaUrl(storagePath);
         m.setMediaKey(mediaKey);
         m.setStatus("pending");
         m.setWaveAmplitudes(sampledAmps);
         m.setDurationMs(durationMs);
-        adapter.appendMessage(m);
-        knownIds.add(msgId);
-        recyclerView.scrollToPosition(adapter.getItemCount() - 1);
+        adapter.updateMessage(msgId, existing -> {
+            existing.setMediaUrl(storagePath);
+            existing.setMediaKey(mediaKey);
+            existing.setStatus("pending");
+            existing.setWaveAmplitudes(sampledAmps);
+            existing.setDurationMs(durationMs);
+        });
+        final Message voiceMessage = m;
 
         Map<String, Object> doc = new HashMap<>();
         doc.put("id", msgId); doc.put("conversationId", conversationId);
@@ -1157,24 +1186,27 @@ public class ChatMediaActivity extends BaseActivity {
         doc.put("status", "sent");
         doc.put("amplitudes", sampledAmps);
         doc.put("durationMs", durationMs);
-        doc.put("expiresAt", exp); doc.put("timestamp", FieldValue.serverTimestamp());
+        doc.put("expiresAt", m.getExpiresAt());
+        doc.put("timestamp", FieldValue.serverTimestamp());
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
           .addOnSuccessListener(v -> {
               FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordWrites(1);
-              m.setStatus("sent");
+              voiceMessage.setStatus("sent");
               adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
-              saveToRoom(m);
+              saveToRoom(voiceMessage);
               notifyPartner("DuoShield", "Sent a voice note 🎙", msgId);
           })
           .addOnFailureListener(e -> {
               Log.e(TAG, "Failed to send voice message: " + e.getMessage());
-              m.setStatus("failed");
+              voiceMessage.setStatus("failed");
               adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
-              saveToRoom(m);
-              Toast.makeText(ChatMediaActivity.this, "Failed to send voice note. Tap to retry.", Toast.LENGTH_SHORT).show();
+              saveToRoom(voiceMessage);
+              Toast.makeText(ChatMediaActivity.this,
+                      "Failed to send voice note. Tap to retry.", Toast.LENGTH_SHORT).show();
           });
     }
+
 
     // ══════════════════════════════════════════════════════════════
     // VOICE PLAYBACK
@@ -1201,6 +1233,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     private void onVoicePlay(Message msg, ImageView playPauseBtn,
                              WaveformView waveform, TextView durationView, View bubble) {
+        if ("uploading".equals(msg.getStatus())) return;
         final String msgId = msg.getId();
 
         // ── Pause: same message is currently playing ──────────────────────
@@ -3686,6 +3719,22 @@ public class ChatMediaActivity extends BaseActivity {
                 m.setStatus("sent");
             });
             retryPendingDecryption();
+            return;
+        }
+        if ("voice".equals(msg.getMediaType())) {
+            String localPath = pendingVoiceFiles.get(msg.getId());
+            if (localPath != null && new File(localPath).exists()) {
+                adapter.updateMessage(msg.getId(), pending -> pending.setStatus("uploading"));
+                uploadVoiceNoteWithRetry(localPath, msg.getWaveAmplitudes(),
+                        msg.getDurationMs(), 0, msg.getId());
+            } else if (msg.getMediaUrl() != null && !msg.getMediaUrl().isEmpty()
+                    && msg.getMediaKey() != null && !msg.getMediaKey().isEmpty()) {
+                sendVoiceMessage(msg.getMediaUrl(), msg.getMediaKey(),
+                        msg.getWaveAmplitudes(), msg.getDurationMs(), msg.getId());
+            } else {
+                Toast.makeText(this, "The original voice recording is no longer available.",
+                        Toast.LENGTH_LONG).show();
+            }
             return;
         }
         adapter.removeMessage(msg.getId());
