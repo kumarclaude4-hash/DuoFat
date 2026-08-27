@@ -12,6 +12,12 @@
     <string name="recovery_walkthrough_warning">If you lose this phrase, you permanently lose access to this account. It cannot be reset or recovered.</string>
     <string name="recovery_walkthrough_continue">I understand — continue</string>
 
+    <!-- Trust Seal (key verification) -->
+    <string name="trust_seal_title">Trust Seal</string>
+    <string name="trust_seal_hint">You and your contact should see the same emblem and the same words. If they match, your conversation is private and no one is intercepting it.</string>
+    <string name="trust_seal_words_label">Safety words</string>
+    <string name="trust_seal_a11y">Trust seal safety words: %1$s</string>
+
     <!-- Conversations -->
     <string name="conversations">Messages</string>
     <string name="no_conversations">No conversations yet</string>
