@@ -29,6 +29,7 @@ import com.bumptech.glide.signature.ObjectKey;
 import com.duoshield.app.BaseActivity;
 import com.duoshield.app.R;
 import com.duoshield.app.call.TurnBandwidthTracker;
+import com.duoshield.app.util.AppUpdateHelper;
 import com.duoshield.app.util.B2StorageHelper;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
