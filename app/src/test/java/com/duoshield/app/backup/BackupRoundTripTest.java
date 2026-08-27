@@ -105,6 +105,23 @@ public class BackupRoundTripTest {
     }
 
     @Test
+    public void roundTrip_encryptedSignalMetadata() throws Exception {
+        Message original = new Message(
+                "pending-ciphertext", "conv-crypto", "sender-uid",
+                "base64-ciphertext", 1_700_000_000_000L, true, null, null);
+        original.sigType = org.signal.libsignal.protocol.message.CiphertextMessage.WHISPER_TYPE;
+        original.setStatus("sent");
+
+        Message restored = BackupManager.fromJson(BackupManager.toJson(original));
+        assertNotNull("encrypted retry row must restore", restored);
+        assertTrue("encrypted flag must survive backup round-trip", restored.isEncrypted());
+        assertEquals("Signal message type must survive backup round-trip",
+                original.sigType, restored.sigType);
+        assertEquals("ciphertext must survive backup round-trip",
+                original.getText(), restored.getText());
+    }
+
+    @Test
     public void roundTrip_forwardedField() throws Exception {
         Message original = fullMessage();
         original.setForwarded(true);

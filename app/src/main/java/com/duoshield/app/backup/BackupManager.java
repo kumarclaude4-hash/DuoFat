@@ -1152,6 +1152,8 @@ public final class BackupManager {
         o.put("conversationId",nvl(m.getConversationId()));
         o.put("sender",        nvl(m.getSender()));
         o.put("text",          nvl(m.getText()));
+        o.put("isEncrypted",   m.isEncrypted());
+        o.put("sigType",        m.sigType);
         o.put("timestamp",     m.getTimestamp());
         o.put("mediaUrl",      nvl(m.getMediaUrl()));
         o.put("mediaType",     nvl(m.getMediaType()));
@@ -1175,13 +1177,16 @@ public final class BackupManager {
         String convId = o.optString("conversationId", null);
         String sender = o.optString("sender",         null);
         String text   = o.optString("text",           "");
+        boolean encrypted = o.optBoolean("isEncrypted", false);
+        int sigType = o.optInt("sigType", 0);
         long   ts     = o.optLong("timestamp",        0);
 
         if (id == null || convId == null || sender == null) return null;
 
-        Message m = new Message(id, convId, sender, text, ts, false,
+        Message m = new Message(id, convId, sender, text, ts, encrypted,
                 o.optString("mediaUrl",  null),
                 o.optString("mediaType", null));
+        m.sigType = sigType;
 
         String rId   = o.optString("replyToId",    null);
         String rPrev = o.optString("replyPreview", null);

@@ -963,13 +963,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             }
 
         } else {
-            // Plain text — show text and check for link preview
+            // Raw encrypted Room rows are retained for retry after a restart. Never render the
+            // ciphertext itself; it is not user text and would also expose encrypted payload.
             h.textView.setVisibility(View.VISIBLE);
-            h.textView.setText(msg.getText());
+            h.textView.setText(msg.isEncrypted() ? "[Decrypting\u2026]" : msg.getText());
             h.textView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP,
                     com.duoshield.app.util.ChatCustomizationHelper.getMsgFontSizeSp(
                             ctx.getSharedPreferences("duoshield_prefs", Context.MODE_PRIVATE)));
-            bindLinkPreview(h, msg, ctx);
+            if (!msg.isEncrypted()) bindLinkPreview(h, msg, ctx);
         }
 
         // ── Media caption (photo / video / album) ──────────���────────
@@ -1054,7 +1055,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         }
 
         h.bubble.setOnClickListener(v -> {
-            if ("failed".equals(msg.getStatus()) && retryListener != null) {
+            if (("failed".equals(msg.getStatus())
+                    || "decrypt_failed".equals(msg.getStatus())) && retryListener != null) {
                 retryListener.onRetry(msg);
             }
         });

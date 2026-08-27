@@ -270,15 +270,29 @@ public class ChatMediaActivity extends BaseActivity {
     // leaving historical messages shown with the wrong key indefinitely.
     private volatile boolean keyPending = false;
 
-    // §3.4 fix: messages that arrive before the ECDH shared key is ready are kept here
-    // (raw ciphertext, isEncrypted=true) until retryPendingDecryption() is called once
-    // key derivation completes. Shown as placeholders in the UI but NOT saved to Room.
+    // Messages that arrive before the Signal session is ready are kept here as raw ciphertext
+    // until retryPendingDecryption() succeeds. They are also persisted to Room immediately, so
+    // advancing the Firestore cursor can never make a temporarily undecryptable message vanish.
     private final List<Message>   pendingDecryptQueue   = new ArrayList<>();
     // Tracks the Signal sigType (WHISPER_TYPE=2 / PREKEY_TYPE=3) for each queued message.
     // Messages without an entry (legacy ECDH) default to 0.
     private final Map<String, Integer> queuedSigTypes = new HashMap<>();
-    // Guards a single re-derive attempt when ECDH decryption fails with a non-null (wrong) key.
+    // Guards a single re-derive attempt when legacy ECDH decryption fails with a non-null key.
     private boolean decryptRetryScheduled = false;
+    // A decrypt task may not overlap another task: libsignal advances ratchet state while
+    // decrypting, so processing the same ciphertext concurrently can consume a message key twice.
+    private boolean decryptTaskRunning = false;
+    // Failed Signal messages are retried with backoff, then remain available for a manual retry.
+    private boolean decryptRetryTimerScheduled = false;
+    private final Handler decryptRetryHandler = new Handler(Looper.getMainLooper());
+    private final Runnable decryptRetryRunnable = () -> {
+        decryptRetryTimerScheduled = false;
+        retryPendingDecryption();
+    };
+    private final Map<String, Integer> decryptAttempts = new HashMap<>();
+    private final Set<String> decryptFailedIds = new HashSet<>();
+    private static final int MAX_DECRYPT_ATTEMPTS = 5;
+    private static final long DECRYPT_RETRY_DELAY_MS = 1_500L;
     // F-07: O(1) duplicate guard replaces the O(n) for-loop inside the snapshot listener.
     private final Set<String>     knownIds              = new java.util.HashSet<>();
     // F-07: Firestore startAfter() cursor.
@@ -1489,6 +1503,8 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     @Override protected void onDestroy() {
+        decryptRetryHandler.removeCallbacks(decryptRetryRunnable);
+        decryptRetryTimerScheduled = false;
         super.onDestroy();
         if (!executor.isShutdown())   executor.shutdownNow();
         if (!dbExecutor.isShutdown()) dbExecutor.shutdownNow();
@@ -1650,11 +1666,12 @@ public class ChatMediaActivity extends BaseActivity {
                     if (m.getId() == null) continue;
                     // Re-queue placeholder messages from prior session so retryPendingDecryption()
                     // can decrypt them once the correct ECDH key is available.
-                    String t = m.getText();
-                    if ("[Decryption failed]".equals(t)
-                            || "[Waiting for encryption key\u2026]".equals(t)) {
-                        m.setEncrypted(true);
+                    if (m.isEncrypted() && m.getText() != null && !m.getText().isEmpty()
+                            && (m.sigType == CiphertextMessage.WHISPER_TYPE
+                                || m.sigType == CiphertextMessage.PREKEY_TYPE)) {
                         pendingDecryptQueue.add(m);
+                        queuedSigTypes.put(m.getId(), m.sigType);
+                        local.set(local.indexOf(m), decryptPlaceholderFor(m));
                     }
                     knownIds.add(m.getId());
                     // NOTE: deliberately does NOT advance latestKnownTimestamp.
@@ -1885,10 +1902,22 @@ public class ChatMediaActivity extends BaseActivity {
                             if (mThumb != null) pending.setThumb(mThumb);
                             pending.setChunked(Boolean.TRUE.equals(mChunked));
                             pending.forwarded = Boolean.TRUE.equals(fwdFlag);
+                            pending.sigType = sigType;
                             String fsStatus = dc.getDocument().getString("status");
                             if (fsStatus != null) pending.setStatus(fsStatus);
-                            pendingDecryptQueue.add(pending);
-                            queuedSigTypes.put(id, sigType);
+                            if (!isPendingDecrypt(id)) {
+                                pendingDecryptQueue.add(pending);
+                                queuedSigTypes.put(id, sigType);
+                                // Persist the ciphertext before the decrypt task and before the
+                                // Firestore cursor can hide this document on the next open. Queue
+                                // this write on the same serial executor as decryption so plaintext
+                                // cannot race with a late ciphertext insert and overwrite it.
+                                cryptoExecutor.execute(() -> {
+                                    AppDatabase.getInstance(ChatMediaActivity.this)
+                                            .messageDao().insert(pending);
+                                    BackupManager.backup(ChatMediaActivity.this, pending);
+                                });
+                            }
                             displayText     = "[Decrypting\u2026]";
                             shouldPersist   = false;
                             signalMsgQueued = true;
@@ -1939,10 +1968,14 @@ public class ChatMediaActivity extends BaseActivity {
                         adapter.updateMessage(id, existing -> {
                             existing.setText(finalM.getText());
                             existing.setEncrypted(false);
-                            if (finalM.getStatus() != null) existing.setStatus(finalM.getStatus());
+                            if (finalM.getStatus() != null
+                                    && !"decrypt_failed".equals(existing.getStatus())) {
+                                existing.setStatus(finalM.getStatus());
+                            }
                         });
-                        // Remove from pendingDecryptQueue — it's been resolved
-                        pendingDecryptQueue.removeIf(p -> id.equals(p.getId()));
+                        // Keep the raw ciphertext in pendingDecryptQueue. This ADDED event can
+                        // be the initial Firestore window overlapping the Room seed; it is not a
+                        // successful decrypt and must not cancel the queued retry.
                     } else {
                         knownIds.add(id);
                         advanceCursor(serverTs, pendingWrite);
@@ -2016,7 +2049,10 @@ public class ChatMediaActivity extends BaseActivity {
                             // a reaction actually reaches the other party. The old
                             // `if (x != null)` guard made removals unsyncable.
                             if (hadReactionsField) msg.setReactions(finalReactions);
-                            if (finalStatus   != null) msg.setStatus(finalStatus);
+                            if (finalStatus != null
+                                    && !"decrypt_failed".equals(msg.getStatus())) {
+                                msg.setStatus(finalStatus);
+                            }
                             if (readAtMs > 0)          msg.setReadAt(readAtMs);
                         });
                         // Persist reactions to Room so they survive an app restart.
@@ -3638,6 +3674,20 @@ public class ChatMediaActivity extends BaseActivity {
     }
 
     private void retryMessage(Message msg) {
+        // Decrypt failures keep their raw ciphertext in pendingDecryptQueue. Retry that same
+        // message in place; never send the visible placeholder as a brand-new chat message.
+        if (msg != null && "decrypt_failed".equals(msg.getStatus())) {
+            String id = msg.getId();
+            decryptAttempts.remove(id);
+            decryptFailedIds.remove(id);
+            adapter.updateMessage(id, m -> {
+                m.setText("[Decrypting\u2026]");
+                m.setEncrypted(false);
+                m.setStatus("sent");
+            });
+            retryPendingDecryption();
+            return;
+        }
         adapter.removeMessage(msg.getId());
         knownIds.remove(msg.getId());
         if ("image".equals(msg.getMediaType()) || "video".equals(msg.getMediaType())) {
@@ -3697,6 +3747,10 @@ public class ChatMediaActivity extends BaseActivity {
         optimistic.setExpiresAt(exp);
         if (rId != null) { optimistic.setReplyToId(rId); optimistic.setReplyPreview(rPrv); }
         adapter.appendMessage(optimistic);
+        // Persist the plaintext echo before the network write. The sender cannot decrypt its own
+        // outbound ciphertext with the partner-addressed ratchet after a cold restart; this local
+        // row is the authoritative recovery copy for the sender.
+        saveToRoom(optimistic);
         HapticHelper.send(this);
         knownIds.add(msgId); // prevent Firestore ADDED event from appending a duplicate
         int last = adapter.getItemCount() - 1;
@@ -3881,6 +3935,43 @@ public class ChatMediaActivity extends BaseActivity {
           });
     }
 
+    /** Returns true when this message is already waiting for a decrypt attempt. Main thread only. */
+    private boolean isPendingDecrypt(String messageId) {
+        if (messageId == null) return false;
+        for (Message pending : pendingDecryptQueue) {
+            if (messageId.equals(pending.getId())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Creates the object rendered by the adapter for an encrypted Room row. The original object
+     * keeps the ciphertext and Signal metadata for a future retry; this copy contains only a
+     * neutral placeholder so ciphertext is never displayed as chat text.
+     */
+    private Message decryptPlaceholderFor(Message encrypted) {
+        Message placeholder = new Message(
+                encrypted.getId(), encrypted.getConversationId(), encrypted.getSender(),
+                "[Decrypting\u2026]", encrypted.getTimestamp(), false,
+                encrypted.getMediaUrl(), encrypted.getMediaType());
+        placeholder.setStatus(encrypted.getStatus());
+        placeholder.setExpiresAt(encrypted.getExpiresAt());
+        placeholder.setReplyToId(encrypted.getReplyToId());
+        placeholder.setReplyPreview(encrypted.getReplyPreview());
+        placeholder.setMediaKey(encrypted.getMediaKey());
+        placeholder.setThumb(encrypted.getThumb());
+        placeholder.setChunked(encrypted.isChunked());
+        placeholder.setReactions(encrypted.getReactions());
+        placeholder.forwarded = encrypted.forwarded;
+        placeholder.edited = encrypted.edited;
+        placeholder.starred = encrypted.starred;
+        placeholder.caption = encrypted.caption;
+        placeholder.mediaItems = encrypted.mediaItems;
+        placeholder.amplitudesCsv = encrypted.amplitudesCsv;
+        placeholder.sigType = encrypted.sigType;
+        return placeholder;
+    }
+
     private void saveToRoom(Message m) {
         dbExecutor.execute(() -> {
             AppDatabase.getInstance(this).messageDao().insert(m);
@@ -3909,9 +4000,11 @@ public class ChatMediaActivity extends BaseActivity {
     /**
      * Async-decrypts all messages in {@link #pendingDecryptQueue}.
      *
-     * <p>Must be called from the <strong>main thread</strong>.  The actual crypto and
+     * <p>Must be called from the <strong>main thread</strong>. The actual crypto and
      * Room I/O are dispatched to {@link #cryptoExecutor} (single-threaded), preserving the
-     * Signal ratchet order.  UI updates are posted back to the main thread.
+     * Signal ratchet order. UI updates are posted back to the main thread. A failure is never
+     * dropped: it is retried with backoff and remains in Room plus the in-memory queue for a
+     * manual retry.
      *
      * <h3>Routing</h3>
      * <ul>
@@ -3921,48 +4014,40 @@ public class ChatMediaActivity extends BaseActivity {
      * </ul>
      */
     private void retryPendingDecryption() {
-        if (pendingDecryptQueue.isEmpty() || keyPending) return;
+        if (pendingDecryptQueue.isEmpty() || keyPending || decryptTaskRunning) return;
+        decryptTaskRunning = true;
 
-        // Snapshot queue on main thread; crypto runs on cryptoExecutor
+        // Snapshot queue and attempt counters on the main thread; crypto runs serially so the
+        // same ratchet state can never be consumed by overlapping decrypt tasks.
         final List<Message>        snapshot    = new ArrayList<>(pendingDecryptQueue);
         final Map<String, Integer> sigTypes    = new HashMap<>(queuedSigTypes);
+        final Map<String, Integer> priorTries  = new HashMap<>(decryptAttempts);
 
         cryptoExecutor.execute(() -> {
-            List<String>         resolved    = new ArrayList<>();
             List<Message>        reQueue     = new ArrayList<>();
             Map<String, Integer> reQueueSigs = new HashMap<>();
+            Map<String, Integer> failedTries = new HashMap<>();
 
             for (Message pending : snapshot) {
                 String id      = pending.getId();
-                int    sigType = sigTypes.containsKey(id) ? sigTypes.get(id) : 0;
+                int    sigType = sigTypes.containsKey(id) ? sigTypes.get(id) : pending.sigType;
                 try {
-                    String decrypted;
-                    boolean isSignalMsg = (sigType == CiphertextMessage.WHISPER_TYPE
-                                         || sigType == CiphertextMessage.PREKEY_TYPE);
-                    if (isSignalMsg) {
-                        decrypted = SignalCipherHelper.decrypt(
-                                ChatMediaActivity.this, pending.getSender(),
-                                pending.getText(), sigType);
-                    } else {
-                        // sigType == 0: legacy ECDH — no decryption path (CryptoHelper deleted).
-                        // Mark resolved so the message stops re-queuing, show explanatory text.
-                        Log.w(TAG, "retryPendingDecryption: sigType=0 msg=" + id + " — legacy, skipped");
-                        runOnUiThread(() -> adapter.updateMessage(id, m -> {
-                            m.setText("[Legacy message — not decryptable]");
-                            m.setEncrypted(false);
-                        }));
-                        resolved.add(id);
-                        continue;
+                    if (sigType != CiphertextMessage.WHISPER_TYPE
+                            && sigType != CiphertextMessage.PREKEY_TYPE) {
+                        throw new IllegalArgumentException("Unsupported Signal sigType " + sigType);
                     }
 
-                    resolved.add(id);
+                    String decrypted = SignalCipherHelper.decrypt(
+                            ChatMediaActivity.this, pending.getSender(),
+                            pending.getText(), sigType);
+
                     final String finalDecrypted = decrypted;
                     runOnUiThread(() -> adapter.updateMessage(id, m -> {
                         m.setText(finalDecrypted);
                         m.setEncrypted(false);
+                        if ("decrypt_failed".equals(m.getStatus())) m.setStatus("sent");
                     }));
 
-                    // Persist to Room from dbExecutor (already on bg thread)
                     Message toSave = new Message(
                             pending.getId(), pending.getConversationId(), pending.getSender(),
                             decrypted, pending.getTimestamp(), false,
@@ -3971,29 +4056,30 @@ public class ChatMediaActivity extends BaseActivity {
                     if (pending.getReplyPreview() != null) toSave.setReplyPreview(pending.getReplyPreview());
                     toSave.setExpiresAt(pending.getExpiresAt());
                     if (pending.getStatus() != null) toSave.setStatus(pending.getStatus());
-                    // Carry the media key and inline thumbnail across the rebuild. Dropping
-                    // them here would leave the persisted row unable to decrypt or preview
-                    // its own attachment after a restart.
                     if (pending.getMediaKey() != null) toSave.setMediaKey(pending.getMediaKey());
                     if (pending.getThumb()    != null) toSave.setThumb(pending.getThumb());
-                    // Same reasoning as the media key: a persisted row that forgot its format
-                    // would come back after a restart claiming whole-blob media and route
-                    // playback into the wrong decrypt path.
                     toSave.setChunked(pending.isChunked());
+                    toSave.forwarded = pending.forwarded;
+                    toSave.edited = pending.edited;
+                    toSave.starred = pending.starred;
+                    toSave.caption = pending.caption;
+                    toSave.mediaItems = pending.mediaItems;
+                    toSave.amplitudesCsv = pending.amplitudesCsv;
                     AppDatabase.getInstance(ChatMediaActivity.this).messageDao().insert(toSave);
                     BackupManager.backup(ChatMediaActivity.this, toSave);
                     Log.d(TAG, "retryPendingDecryption: OK msg=" + id + " sigType=" + sigType);
-
                 } catch (Exception ex) {
-                    Log.w(TAG, "retryPendingDecryption: still failed msg=" + id
-                            + " sigType=" + sigType, ex);
+                    int tries = priorTries.containsKey(id) ? priorTries.get(id) + 1 : 1;
+                    failedTries.put(id, tries);
                     reQueue.add(pending);
-                    if (sigType != 0) reQueueSigs.put(id, sigType);
+                    reQueueSigs.put(id, sigType);
+                    Log.w(TAG, "retryPendingDecryption: failed msg=" + id
+                            + " attempt=" + tries + " sigType=" + sigType, ex);
                 }
             }
 
             runOnUiThread(() -> {
-                // Remove all snapshot entries (resolved + newly failed), re-add failures
+                decryptTaskRunning = false;
                 for (Message m : snapshot) {
                     String id = m.getId();
                     pendingDecryptQueue.removeIf(p -> id.equals(p.getId()));
@@ -4002,13 +4088,53 @@ public class ChatMediaActivity extends BaseActivity {
                 pendingDecryptQueue.addAll(reQueue);
                 queuedSigTypes.putAll(reQueueSigs);
 
-                // Legacy ECDH: if messages failed with a non-null key, schedule one re-derive
-                boolean anyEcdhFailed = reQueue.stream().anyMatch(
-                        p -> !reQueueSigs.containsKey(p.getId()));
-                if (anyEcdhFailed && !decryptRetryScheduled) {
+                boolean hasRetryableFailure = false;
+                for (Message failed : reQueue) {
+                    String id = failed.getId();
+                    int tries = failedTries.containsKey(id) ? failedTries.get(id) : MAX_DECRYPT_ATTEMPTS;
+                    decryptAttempts.put(id, tries);
+                    if (tries >= MAX_DECRYPT_ATTEMPTS) {
+                        decryptFailedIds.add(id);
+                        adapter.updateMessage(id, m -> {
+                            m.setText("[Unable to decrypt — tap to retry]");
+                            m.setEncrypted(false);
+                            m.setStatus("decrypt_failed");
+                        });
+                    } else {
+                        hasRetryableFailure = true;
+                        adapter.updateMessage(id, m -> {
+                            m.setText("[Decrypting\u2026]");
+                            m.setEncrypted(false);
+                            if ("decrypt_failed".equals(m.getStatus())) m.setStatus("sent");
+                        });
+                    }
+                }
+
+                // A session can be present but stale after process restore or a ratchet race.
+                // Re-enter the normal session path once; it reattaches the listener and retries
+                // without deleting ciphertext. The bounded timer below handles transient timing
+                // failures even when the session fast path is already valid.
+                if (!reQueue.isEmpty() && !decryptRetryScheduled) {
                     decryptRetryScheduled = true;
-                    Log.w(TAG, "retryPendingDecryption: ECDH key stale — scheduling re-derive");
                     ensureSignalSession();
+                }
+                if (hasRetryableFailure && !decryptRetryTimerScheduled) {
+                    decryptRetryTimerScheduled = true;
+                    long delay = DECRYPT_RETRY_DELAY_MS;
+                    if (!failedTries.isEmpty()) {
+                        int maxTry = 1;
+                        for (Integer tries : failedTries.values()) {
+                            if (tries != null && tries > maxTry) maxTry = tries;
+                        }
+                        delay = DECRYPT_RETRY_DELAY_MS * Math.min(8L, 1L << Math.min(maxTry - 1, 3));
+                    }
+                    decryptRetryHandler.postDelayed(decryptRetryRunnable, delay);
+                } else if (!pendingDecryptQueue.isEmpty() && !keyPending
+                        && !decryptRetryTimerScheduled) {
+                    // A new message may have arrived while the snapshot above was decrypting.
+                    // Drain it after the current batch rather than leaving it on the placeholder.
+                    decryptRetryTimerScheduled = true;
+                    decryptRetryHandler.post(decryptRetryRunnable);
                 }
             });
         });
