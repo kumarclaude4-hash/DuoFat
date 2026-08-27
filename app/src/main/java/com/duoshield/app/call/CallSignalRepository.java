@@ -168,12 +168,32 @@ public class CallSignalRepository {
                 });
     }
 
-    // NOTE: There is deliberately no setRecording()/recording-indicator signaling here.
-    // Call recording is silent and local-only: nothing about it is ever written to the shared
-    // call document, so the peer cannot learn that a recording is in progress. Do not
-    // reintroduce a `recording.<uid>` field — see CallManager#startRecording.
+    // ── Recording disclosure ──────────────────────────────────────────────────
 
-    // ── ICE restart signaling ─────────────────────────────────────────────────
+    /**
+     * Publishes {@code recording.<uid>} on the shared call document so the <em>peer</em> is told,
+     * in real time, that this device has started or stopped recording the call.
+     *
+     * <p>This is a deliberate, load-bearing part of the feature: recording a call is only lawful
+     * and acceptable when every party knows it is happening. The peer's device listens for this
+     * field (see {@code CallManager}'s call-doc listeners) and, on a {@code true→} transition,
+     * both shows an on-screen recording indicator and plays an audible spoken notice on the peer's
+     * own speaker. Do not remove this write or gate recording start on it succeeding — capture must
+     * never be able to run while the peer is left unaware.
+     *
+     * <p>Failures are logged but non-fatal to the write itself; the caller is responsible for not
+     * beginning capture until the disclosure has been published.
+     */
+    public void setRecording(String callId, String uid, boolean recording, OnCompleteCallback cb) {
+        callRef(callId).update("recording." + uid, recording)
+                .addOnSuccessListener(v -> { if (cb != null) cb.onSuccess(); })
+                .addOnFailureListener(e -> {
+                    Log.w(TAG, "setRecording failed: " + e.getMessage());
+                    if (cb != null) cb.onFailure(e);
+                });
+    }
+
+    // ── ICE restart signaling ────────���────────────────────────────────────────
 
     /**
      * Writes a new offer SDP into the call doc for an ICE restart.

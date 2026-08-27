@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.speech.tts.TextToSpeech;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -123,6 +124,16 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
 
     /** Id of the history row this call wrote, so a late-finishing recording can find it. */
     private String savedRecordId = null;
+
+    /**
+     * Speaks the audible "this call is being recorded" notice to <i>this</i> user when the peer
+     * starts recording. Lazily initialised on first use and released in {@link #onDestroy()}.
+     */
+    private TextToSpeech recordingTts = null;
+    private boolean recordingTtsReady = false;
+
+    /** True while the peer is recording, so the disclosure notice fires once per transition. */
+    private boolean peerRecordingActive = false;
 
     // TURN quota warning banner
     private View     bannerTurnWarning;
@@ -523,6 +534,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         try { unregisterReceiver(notifActionReceiver); } catch (Exception ignored) {}
 
         historyExecutor.shutdownNow();
+        if (recordingTts != null) {
+            try { recordingTts.stop(); recordingTts.shutdown(); } catch (Exception ignored) {}
+            recordingTts = null;
+            recordingTtsReady = false;
+        }
         durationHandler.removeCallbacksAndMessages(null);
         bannerDismissHandler.removeCallbacksAndMessages(null);
         noAnswerHandler.removeCallbacksAndMessages(null);
@@ -1267,7 +1283,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         }, 4_000);
     }
 
-    // ── In-call chat ──────────────────────────────────────────────────────────
+    // ── In-call chat ────────────────────────────────────────��─────────────────
 
     private void openInCallChat() {
         if (callId == null || myUid == null) {
@@ -1386,6 +1402,46 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
                 checkAndShowTurnWarning();
             }
         });
+    }
+
+    @Override
+    public void onPeerRecordingChanged(boolean peerRecording) {
+        runOnUiThread(() -> {
+            peerRecordingActive = peerRecording;
+            if (peerRecording) {
+                // Persistent on-screen indicator so the notice is visible for the whole time
+                // the peer is recording, not just a transient toast.
+                Toast.makeText(this,
+                        "The other person is recording this call",
+                        Toast.LENGTH_LONG).show();
+                speakRecordingNotice();
+            } else {
+                Toast.makeText(this,
+                        "The other person stopped recording",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    /**
+     * Speaks the audible "this call is being recorded" notice on this device's speaker so the
+     * user hears — not just sees — that the peer has started recording. The TTS engine is created
+     * on first use; playback waits for engine initialisation if it is not ready yet.
+     */
+    private void speakRecordingNotice() {
+        final String notice = "Please note, the other person is now recording this call.";
+        if (recordingTts == null) {
+            recordingTts = new TextToSpeech(getApplicationContext(), status -> {
+                recordingTtsReady = (status == TextToSpeech.SUCCESS);
+                if (recordingTtsReady && peerRecordingActive) {
+                    recordingTts.speak(notice, TextToSpeech.QUEUE_FLUSH, null, "peer-rec");
+                }
+            });
+            return;
+        }
+        if (recordingTtsReady) {
+            recordingTts.speak(notice, TextToSpeech.QUEUE_FLUSH, null, "peer-rec");
+        }
     }
 
     @Override

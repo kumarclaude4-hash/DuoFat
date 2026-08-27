@@ -92,6 +92,14 @@ public class CallManager {
          * previews are not.
          */
         default void onLocalMirrorChanged(boolean mirror) { }
+
+        /**
+         * Fired when the <em>peer</em> starts or stops recording the call, as published in the
+         * shared call document's {@code recording.<uid>} field. The UI must make this audible and
+         * visible to this user — an on-screen indicator plus a spoken notice — so nobody is
+         * recorded without knowing. Fires only on an actual change of state.
+         */
+        default void onPeerRecordingChanged(boolean peerRecording) { }
     }
 
     public enum CallState {
@@ -188,6 +196,13 @@ public class CallManager {
     private String partnerUid;
     private boolean isCaller;
     private boolean isVideo;
+
+    /**
+     * Last observed value of the peer's {@code recording.<partnerUid>} flag, so the disclosure
+     * callback fires only on an actual change rather than on every snapshot. {@code null} means
+     * "not yet observed".
+     */
+    private Boolean lastPeerRecording = null;
     /** F6: chatId passed to the call doc so Firestore rules can enforce bilateral contact gate. */
     private String chatIdForCall;
 
@@ -307,7 +322,7 @@ public class CallManager {
         }
     };
 
-    // ── Tiered capture / bitrate policy ──────────────────────────────────────
+    // ── Tiered capture / bitrate policy ─────────────────────────────────────���
     /**
      * Hard bitrate ceiling for {@link DevicePerformanceTier#LOW} devices.
      *
@@ -908,6 +923,9 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
+            // Peer recording disclosure — indicator + audible notice on change.
+            handlePeerRecording(snap);
+
             // Callee wrote a restart offer into the doc — apply it.
             Object restartObj = snap.get("restartOffer");
             if (restartObj instanceof java.util.Map && remoteDescSet && peerConnection != null) {
@@ -1064,6 +1082,9 @@ public class CallManager {
             // Shared call-start anchor + server clock probe (see requestTimerAnchor()).
             handleTimerAnchor(snap);
 
+            // Peer recording disclosure — indicator + audible notice on change.
+            handlePeerRecording(snap);
+
             // Caller requested an ICE restart — create a new answer.
             Object restartFlagObj = snap.get("iceRestartRequested");
             if (Boolean.TRUE.equals(restartFlagObj) && remoteDescSet
@@ -1077,7 +1098,7 @@ public class CallManager {
         });
     }
 
-    // ─── ICE candidate listeners ─────────────────────────────────────────────
+    // ─── ICE candidate listeners ────────────────────────────────────��────────
 
     private void listenForCalleeCandidates() {
         remoteCandidateListener = repo.listenToCalleeCandidates(callId, (snap, e) -> {
@@ -1175,9 +1196,11 @@ public class CallManager {
     /**
      * Starts recording both sides of the call to a local, on-device file.
      *
-     * <p>Recording is silent by design: nothing is written to the call document, so the peer is
-     * not notified. The finished audio never leaves this device — it is handed to {@code cb} as a
-     * local file path for on-device storage only.
+     * <p>Recording is <b>disclosed</b>: the moment capture starts, {@code recording.<myUid>} is
+     * published to the shared call document so the peer's device shows an indicator and plays an
+     * audible spoken notice. The finished audio stays on this device — it is handed to {@code cb}
+     * as a local file path for on-device storage only — but the fact that recording is happening
+     * is always announced to the other party. Do not remove the {@code repo.setRecording} call.
      *
      * <p>{@code cb} is a UI listener only. Persisting the finished file is <i>not</i> its job and
      * must not be: the encoder flushes asynchronously, so on a hangup-while-recording the calling
@@ -1212,6 +1235,12 @@ public class CallManager {
 
         if (!callRecorder.start(context, persisting)) return false;
 
+        // Disclose to the peer immediately. Their device shows an indicator and plays an audible
+        // spoken notice off this flag, so the other party is never recorded without knowing.
+        if (callId != null && myUid != null) {
+            repo.setRecording(callId, myUid, true, null);
+        }
+
         // The remote track may already have been attached before the recorder existed, or may
         // still be absent. Attaching here covers the former; onAddTrack covers the latter.
         if (remoteAudioTrack != null) {
@@ -1228,17 +1257,66 @@ public class CallManager {
      * Stops recording. The finished file is delivered asynchronously to the listener passed to
      * {@link #startRecording}.
      *
-     * <p>Nothing is published to the call document here, matching {@link #startRecording}: the
-     * peer is never told a recording started, so there is no flag to clear either.
+     * <p>Clears {@code recording.<myUid>} on the call document so the peer's indicator and
+     * "recording stopped" state stay in sync with reality.
      */
     public void stopRecording() {
         if (callRecorder == null || !callRecorder.isRecording()) return;
         callRecorder.stop();
+        if (callId != null && myUid != null) {
+            repo.setRecording(callId, myUid, false, null);
+        }
+    }
+
+    /**
+     * Clears our own {@code recording.<myUid>} disclosure flag, but only when a recording is
+     * actually in flight. This is the fix for the hangup-while-recording edge: the teardown path
+     * ({@link #cleanup}) stops the encoder directly rather than going through
+     * {@link #stopRecording}, so without this the flag would linger on the call document.
+     *
+     * <p>Call this <em>before</em> {@link CallSignalRepository#deleteCallDoc} on the local end
+     * paths. {@code setRecording} issues a Firestore {@code update()}, which no-ops on a missing
+     * document instead of recreating it, so even if this races the delete it can never resurrect a
+     * ghost call doc — but ordering it ahead of the delete keeps the write from failing needlessly.
+     */
+    private void clearRecordingDisclosure() {
+        if (callId != null && myUid != null
+                && callRecorder != null && callRecorder.isRecording()) {
+            repo.setRecording(callId, myUid, false, null);
+        }
     }
 
     /** True while we are recording. Does not reflect whether the <i>peer</i> is recording. */
     public boolean isRecording() {
         return callRecorder != null && callRecorder.isRecording();
+    }
+
+    /**
+     * Reads the peer's {@code recording.<partnerUid>} flag from a call-doc snapshot and, on a
+     * genuine change, notifies the UI so it can show an indicator and play the audible spoken
+     * notice. Called from both the caller and callee call-doc listeners.
+     *
+     * <p>Own pending writes are ignored so this device's <i>own</i> {@code recording.<myUid>}
+     * write can never be misread as the peer recording. State is tracked in
+     * {@link #lastPeerRecording} so the notice fires once per transition, not once per snapshot.
+     */
+    private void handlePeerRecording(DocumentSnapshot snap) {
+        if (snap == null || partnerUid == null) return;
+        if (snap.getMetadata().hasPendingWrites()) return;
+
+        Object recObj = snap.get("recording");
+        boolean peerRecording = false;
+        if (recObj instanceof java.util.Map) {
+            Object flag = ((java.util.Map<?, ?>) recObj).get(partnerUid);
+            peerRecording = Boolean.TRUE.equals(flag);
+        }
+
+        if (lastPeerRecording != null && lastPeerRecording == peerRecording) return;
+        lastPeerRecording = peerRecording;
+
+        final boolean rec = peerRecording;
+        final CallListener l = listener;
+        if (l != null) mainHandler.post(() -> l.onPeerRecordingChanged(rec));
     }
 
     /**
