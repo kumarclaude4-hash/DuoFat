@@ -4,6 +4,8 @@ import androidx.room.Dao;
 import androidx.room.Insert;
 import androidx.room.OnConflictStrategy;
 import androidx.room.Query;
+import androidx.room.RawQuery;
+import androidx.sqlite.db.SupportSQLiteQuery;
 import androidx.room.Update;
 import java.util.List;
 import com.duoshield.app.models.Message;
@@ -34,6 +36,10 @@ public interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND text LIKE '%' || :query || '%' ORDER BY timestamp DESC")
     List<Message> searchMessages(String conversationId, String query);
+
+    /** Searches only the local decrypted-text FTS5 index. */
+    @RawQuery(observedEntities = Message.class)
+    List<Message> searchMessagesFts(SupportSQLiteQuery query);
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp DESC LIMIT :limit")
     List<Message> getLatestMessages(String conversationId, int limit);

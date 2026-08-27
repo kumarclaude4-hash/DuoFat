@@ -21,7 +21,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 26
+    version = 27
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -125,8 +125,7 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25,
-                MIGRATION_25_26)
+                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
             .build();
     }
 
@@ -373,6 +372,46 @@ public abstract class AppDatabase extends RoomDatabase {
             db.execSQL("ALTER TABLE call_history ADD COLUMN recordingPath TEXT");
         }
     };
+
+    /**
+     * v27: encrypted-local full-text index for already-decrypted message text.
+     * The index lives inside the SQLCipher database and is never uploaded. It is
+     * maintained by SQLite triggers so Room, Firestore listeners, retries, edits,
+     * tombstones, and optimistic sends all follow the same invariant.
+     */
+    static final Migration MIGRATION_26_27 = new Migration(26, 27) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS message_search_fts USING fts5(" +
+                    "message_id UNINDEXED, conversation_id UNINDEXED, text, " +
+                    "sender UNINDEXED, timestamp UNINDEXED, media_type UNINDEXED, " +
+                    "starred UNINDEXED, is_deleted UNINDEXED, tokenize='unicode61')");
+            db.execSQL("INSERT INTO message_search_fts " +
+                    "(message_id, conversation_id, text, sender, timestamp, media_type, starred, is_deleted) " +
+                    "SELECT id, conversationId, text, sender, timestamp, mediaType, starred, isDeleted " +
+                    "FROM messages WHERE isEncrypted = 0 AND text IS NOT NULL AND text != '' " +
+                    "AND text NOT LIKE '[Decrypting%' AND text != '\u26d4 Message deleted'");
+            createSearchTriggers(db);
+        }
+    };
+
+    private static void createSearchTriggers(SupportSQLiteDatabase db) {
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS messages_search_ai AFTER INSERT ON messages " +
+                "WHEN new.isEncrypted = 0 AND new.text IS NOT NULL AND new.text != '' " +
+                "AND new.text NOT LIKE '[Decrypting%' AND new.text != '\u26d4 Message deleted' " +
+                "BEGIN INSERT INTO message_search_fts " +
+                "(message_id, conversation_id, text, sender, timestamp, media_type, starred, is_deleted) " +
+                "VALUES (new.id, new.conversationId, new.text, new.sender, new.timestamp, new.mediaType, new.starred, new.isDeleted); END");
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS messages_search_au AFTER UPDATE ON messages BEGIN " +
+                "DELETE FROM message_search_fts WHERE message_id = old.id; " +
+                "INSERT INTO message_search_fts " +
+                "(message_id, conversation_id, text, sender, timestamp, media_type, starred, is_deleted) " +
+                "SELECT new.id, new.conversationId, new.text, new.sender, new.timestamp, new.mediaType, new.starred, new.isDeleted " +
+                "WHERE new.isEncrypted = 0 AND new.text IS NOT NULL AND new.text != '' " +
+                "AND new.text NOT LIKE '[Decrypting%' AND new.text != '\u26d4 Message deleted'; END");
+        db.execSQL("CREATE TRIGGER IF NOT EXISTS messages_search_ad AFTER DELETE ON messages BEGIN " +
+                "DELETE FROM message_search_fts WHERE message_id = old.id; END");
+    }
+
 
     static final Migration MIGRATION_23_24 = new Migration(23, 24) {
         @Override public void migrate(SupportSQLiteDatabase db) {

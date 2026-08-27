@@ -1,8 +1,13 @@
 package com.duoshield.app.util;
 
 import android.content.Context;
+import android.util.Log;
+
+import androidx.sqlite.db.SimpleSQLiteQuery;
+
 import com.duoshield.app.db.AppDatabase;
 import com.duoshield.app.models.Message;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -10,60 +15,156 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-/**
- * In-memory full-text search over locally-stored messages.
- *
- * <p>Previously, {@link com.duoshield.app.db.MessageDao#searchMessages} ran a
- * SQL {@code LIKE} query directly on the {@code messages.text} column.
- * For Signal-encrypted conversations the column stores ciphertext, so the
- * {@code LIKE} never matched any plaintext query — search returned zero results
- * for every Signal-encrypted message (BUG-DB01).
- *
- * <p>The fix loads all messages for the conversation into memory and filters
- * in Java.  This correctly searches whatever text is stored in the column
- * (plaintext for sent messages and any already-decrypted received messages)
- * without risking SQL injection via the query string.
- *
- * <p>A single shared executor is reused across calls (no thread leak).
- * Each new search cancels any in-progress one, so rapid keystrokes don't
- * queue up stale searches that arrive out-of-order.
- */
-public class SearchHelper {
+/** Privacy-preserving local search over plaintext already decrypted on this device. */
+public final class SearchHelper {
+    private static final String TAG = "SearchHelper";
+    private static final int MAX_RESULTS = 100;
+    private static final int FALLBACK_SCAN_LIMIT = 2_000;
+    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
+    private static volatile Future<?> lastFuture;
+
+    private SearchHelper() {}
 
     public interface Callback { void onResults(List<Message> results); }
 
-    /** Single-thread executor reused for all searches — never recreated. */
-    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
-    /** Future for the last submitted search; cancelled when a newer one arrives. */
-    private static volatile Future<?> lastFuture;
+    public enum Filter {
+        ALL, MEDIA, LINKS, FILES, STARRED, UNREAD, MINE, OTHERS
+    }
 
-    public static void runSearch(Context ctx, String convId, String query, Callback cb) {
-        if (query == null || query.trim().isEmpty()) {
+    public static void runSearch(Context ctx, String conversationId, String query, Callback cb) {
+        runSearch(ctx, conversationId, query, Filter.ALL, null, cb);
+    }
+
+    public static void runSearch(Context ctx, String conversationId, String query,
+                                 Filter filter, String myUid, Callback cb) {
+        if (cb == null) return;
+        final String normalized = query == null ? "" : query.trim();
+        final Filter safeFilter = filter == null ? Filter.ALL : filter;
+        if (conversationId == null || (normalized.length() < 2 && safeFilter == Filter.ALL)) {
             cb.onResults(new ArrayList<>());
             return;
         }
-        final String lowerQuery = query.trim().toLowerCase(Locale.getDefault());
-
-        // Cancel previous search so stale results don't overwrite fresher ones
-        Future<?> prev = lastFuture;
-        if (prev != null && !prev.isDone()) prev.cancel(true);
-
+        Future<?> previous = lastFuture;
+        if (previous != null && !previous.isDone()) previous.cancel(true);
+        final Context appContext = ctx.getApplicationContext();
         lastFuture = EXECUTOR.submit(() -> {
             if (Thread.currentThread().isInterrupted()) return;
-            List<Message> all = AppDatabase.getInstance(ctx)
-                    .messageDao().getMessages(convId);
-            if (Thread.currentThread().isInterrupted()) return;
-            List<Message> results = new ArrayList<>();
-            for (Message m : all) {
-                if (Thread.currentThread().isInterrupted()) return;
-                String text = m.getText();
-                if (text != null && text.toLowerCase(Locale.getDefault()).contains(lowerQuery)) {
-                    results.add(m);
-                }
+            List<Message> results;
+            try {
+                results = normalized.length() < 2
+                        ? searchFilterOnly(appContext, conversationId, safeFilter, myUid)
+                        : searchFts(appContext, conversationId, normalized, safeFilter, myUid);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "FTS search unavailable; using bounded local fallback", e);
+                results = boundedFallback(appContext, conversationId, normalized, safeFilter, myUid);
             }
             if (!Thread.currentThread().isInterrupted()) cb.onResults(results);
         });
     }
 
-    public static void clearSearch() {}
+    private static List<Message> searchFilterOnly(Context ctx, String conversationId,
+                                                   Filter filter, String myUid) {
+        String sql = "SELECT m.* FROM messages AS m WHERE m.conversationId = ? " +
+                "AND m.isDeleted = 0 " + filterSql(filter) +
+                " ORDER BY m.timestamp DESC LIMIT ?";
+        List<Object> args = new ArrayList<>();
+        args.add(conversationId);
+        if (filter == Filter.UNREAD || filter == Filter.MINE || filter == Filter.OTHERS) {
+            args.add(myUid == null ? "" : myUid);
+        }
+        args.add(MAX_RESULTS);
+        return AppDatabase.getInstance(ctx).messageDao()
+                .searchMessagesFts(new SimpleSQLiteQuery(sql, args.toArray()));
+    }
+
+    private static List<Message> searchFts(Context ctx, String conversationId, String query,
+                                           Filter filter, String myUid) {
+        String sql = "SELECT m.* FROM messages AS m " +
+                "JOIN message_search_fts AS f ON f.message_id = m.id " +
+                "WHERE f.conversation_id = ? AND f.text MATCH ? AND m.isDeleted = 0 " +
+                filterSql(filter) + " ORDER BY m.timestamp DESC LIMIT ?";
+        List<Object> args = new ArrayList<>();
+        args.add(conversationId);
+        args.add(toFtsMatchExpression(query));
+        if (filter == Filter.UNREAD || filter == Filter.MINE || filter == Filter.OTHERS) {
+            args.add(myUid == null ? "" : myUid);
+        }
+        args.add(MAX_RESULTS);
+        return AppDatabase.getInstance(ctx).messageDao()
+                .searchMessagesFts(new SimpleSQLiteQuery(sql, args.toArray()));
+    }
+
+    private static String filterSql(Filter filter) {
+        switch (filter) {
+            case MEDIA:
+                return "AND m.mediaType IN ('image','video','album','voice') ";
+            case FILES:
+                return "AND m.mediaType IN ('file','document') ";
+            case LINKS:
+                return "AND (m.text LIKE '%http://%' OR m.text LIKE '%https://%') ";
+            case STARRED:
+                return "AND m.starred = 1 ";
+            case UNREAD:
+                return "AND m.sender != ? AND m.seen = 0 ";
+            case MINE:
+                return "AND m.sender = ? ";
+            case OTHERS:
+                return "AND m.sender != ? ";
+            case ALL:
+            default:
+                return "";
+        }
+    }
+
+    /** Converts user text into a conservative AND query; FTS operators are not user-controlled. */
+    static String toFtsMatchExpression(String query) {
+        String[] terms = query.toLowerCase(Locale.ROOT).split("\\s+");
+        StringBuilder expression = new StringBuilder();
+        for (String term : terms) {
+            if (term.isEmpty()) continue;
+            if (expression.length() > 0) expression.append(" AND ");
+            expression.append('"').append(term.replace("\"", "\"\""));
+            expression.append("\"*");
+        }
+        return expression.length() == 0 ? "\"\"" : expression.toString();
+    }
+
+    private static List<Message> boundedFallback(Context ctx, String conversationId, String query,
+                                                 Filter filter, String myUid) {
+        List<Message> all = AppDatabase.getInstance(ctx).messageDao()
+                .getLatestMessages(conversationId, FALLBACK_SCAN_LIMIT);
+        String lower = query.toLowerCase(Locale.ROOT);
+        List<Message> results = new ArrayList<>();
+        for (Message message : all) {
+            if (Thread.currentThread().isInterrupted()) return results;
+            String text = message.getText();
+            if (text == null || message.isEncrypted()
+                    || !text.toLowerCase(Locale.ROOT).contains(lower)
+                    || !matchesFilter(message, filter, myUid)) continue;
+            results.add(message);
+            if (results.size() >= MAX_RESULTS) break;
+        }
+        return results;
+    }
+
+    private static boolean matchesFilter(Message m, Filter filter, String myUid) {
+        switch (filter) {
+            case MEDIA: return m.getMediaType() != null &&
+                    (m.getMediaType().equals("image") || m.getMediaType().equals("video")
+                            || m.getMediaType().equals("album") || m.getMediaType().equals("voice"));
+            case FILES: return "file".equals(m.getMediaType()) || "document".equals(m.getMediaType());
+            case LINKS: return m.getText().contains("http://") || m.getText().contains("https://");
+            case STARRED: return m.starred;
+            case UNREAD: return myUid != null && !myUid.equals(m.getSender()) && !m.isSeen();
+            case MINE: return myUid != null && myUid.equals(m.getSender());
+            case OTHERS: return myUid != null && !myUid.equals(m.getSender());
+            case ALL:
+            default: return true;
+        }
+    }
+
+    public static void clearSearch() {
+        Future<?> previous = lastFuture;
+        if (previous != null) previous.cancel(true);
+    }
 }

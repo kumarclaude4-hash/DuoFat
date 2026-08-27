@@ -25,6 +25,8 @@ public class MessageSearchActivity extends BaseActivity {
     private LinearProgressIndicator  progress;
     private SearchResultsAdapter     adapter;
     private String                   conversationId;
+    private String                   myUid;
+    private SearchHelper.Filter      activeFilter = SearchHelper.Filter.ALL;
 
     private final Handler   debounceHandler = new Handler(Looper.getMainLooper());
     private Runnable        debounceRunnable;
@@ -45,7 +47,7 @@ public class MessageSearchActivity extends BaseActivity {
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
         conversationId = prefs.getString("conversation_id", null);
-        String myUid       = prefs.getString("my_uid", null);
+        myUid       = prefs.getString("my_uid", null);
         String partnerName = prefs.getString("partner_name", null);
 
         svSearch     = findViewById(R.id.sv_search);
@@ -66,6 +68,7 @@ public class MessageSearchActivity extends BaseActivity {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
             recyclerView.setAdapter(adapter);
         }
+        setupFilters();
 
         if (svSearch != null) {
             svSearch.addTextChangedListener(new TextWatcher() {
@@ -93,16 +96,36 @@ public class MessageSearchActivity extends BaseActivity {
         if (conversationId == null) return;
         if (progress != null) progress.setVisibility(View.VISIBLE);
         adapter.setQuery(query);
-        SearchHelper.runSearch(this, conversationId, query, results -> runOnUiThread(() -> {
+        SearchHelper.runSearch(this, conversationId, query, activeFilter, myUid,
+                results -> runOnUiThread(() -> {
             if (progress != null) progress.setVisibility(View.GONE);
             adapter.setMessages(results);
             if (tvEmpty != null) tvEmpty.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
-        }));
+                }));
+    }
+
+    private void setupFilters() {
+        com.google.android.material.chip.ChipGroup group = findViewById(R.id.search_filters);
+        if (group == null) return;
+        group.setOnCheckedStateChangeListener((chipGroup, checkedIds) -> {
+            if (checkedIds == null || checkedIds.isEmpty()) return;
+            int id = checkedIds.get(0);
+            if (id == R.id.filter_media) activeFilter = SearchHelper.Filter.MEDIA;
+            else if (id == R.id.filter_links) activeFilter = SearchHelper.Filter.LINKS;
+            else if (id == R.id.filter_files) activeFilter = SearchHelper.Filter.FILES;
+            else if (id == R.id.filter_starred) activeFilter = SearchHelper.Filter.STARRED;
+            else if (id == R.id.filter_unread) activeFilter = SearchHelper.Filter.UNREAD;
+            else activeFilter = SearchHelper.Filter.ALL;
+            if (svSearch != null && svSearch.getText().toString().trim().length() >= 2) {
+                runSearch(svSearch.getText().toString().trim());
+            }
+        });
     }
 
     @Override protected void onDestroy() {
         super.onDestroy();
         debounceHandler.removeCallbacksAndMessages(null);
+        SearchHelper.clearSearch();
     }
 
     @Override public boolean onSupportNavigateUp() { finish(); return true; }
