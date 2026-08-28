@@ -34,6 +34,8 @@ public class FullScreenImageActivity extends BaseActivity {
     public static final String EXTRA_MY_UID      = "forward_my_uid";
     public static final String EXTRA_PARTNER_UID = "forward_partner_uid";
     public static final String EXTRA_MESSAGE_ID  = "forward_message_id";
+    /** When true, this is a bare profile-photo view: no chrome at all, tap/back to dismiss. */
+    public static final String EXTRA_IS_PROFILE_PHOTO = "is_profile_photo";
 
     private PhotoView   photoView;
     private ProgressBar progressBar;
@@ -58,6 +60,8 @@ public class FullScreenImageActivity extends BaseActivity {
     private volatile int rotationDegrees = 0;
     /** Whether the top/bottom chrome is currently shown (toggled by a single tap). */
     private boolean chromeVisible = true;
+    /** True for a bare profile-photo view — no toolbar/reply bar, tap or back to close. */
+    private boolean isProfilePhoto = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,35 +72,47 @@ public class FullScreenImageActivity extends BaseActivity {
         progressBar = findViewById(R.id.progress_bar);
         topBar      = findViewById(R.id.top_bar);
         bottomBar   = findViewById(R.id.bottom_bar);
-        imageUrl    = getIntent().getStringExtra(EXTRA_URL);
-        mediaKey    = getIntent().getStringExtra(EXTRA_MEDIA_KEY);
+        imageUrl       = getIntent().getStringExtra(EXTRA_URL);
+        mediaKey       = getIntent().getStringExtra(EXTRA_MEDIA_KEY);
+        isProfilePhoto = getIntent().getBooleanExtra(EXTRA_IS_PROFILE_PHOTO, false);
 
-        bindHeader();
+        if (isProfilePhoto) {
+            // Bare photo view, like WhatsApp/Telegram's profile picture viewer:
+            // no toolbar, no reply bar — just the image. Tap or system back closes it.
+            if (topBar != null) topBar.setVisibility(View.GONE);
+            if (bottomBar != null) bottomBar.setVisibility(View.GONE);
+            if (photoView != null) {
+                photoView.setOnPhotoTapListener((view, x, y) -> finish());
+                photoView.setOnOutsidePhotoTapListener(view -> finish());
+            }
+        } else {
+            bindHeader();
 
-        ImageButton btnClose = findViewById(R.id.btn_close);
-        if (btnClose != null) btnClose.setOnClickListener(v -> finish());
+            ImageButton btnClose = findViewById(R.id.btn_close);
+            if (btnClose != null) btnClose.setOnClickListener(v -> finish());
 
-        ImageButton btnSave = findViewById(R.id.btn_save);
-        if (btnSave != null) btnSave.setOnClickListener(v -> saveImageToGallery());
+            ImageButton btnSave = findViewById(R.id.btn_save);
+            if (btnSave != null) btnSave.setOnClickListener(v -> saveImageToGallery());
 
-        ImageButton btnShare = findViewById(R.id.btn_share);
-        if (btnShare != null) btnShare.setOnClickListener(v -> shareImage());
+            ImageButton btnShare = findViewById(R.id.btn_share);
+            if (btnShare != null) btnShare.setOnClickListener(v -> shareImage());
 
-        ImageButton btnMore = findViewById(R.id.btn_more);
-        if (btnMore != null) btnMore.setOnClickListener(this::showMoreMenu);
+            ImageButton btnMore = findViewById(R.id.btn_more);
+            if (btnMore != null) btnMore.setOnClickListener(this::showMoreMenu);
 
-        ImageButton btnForward = findViewById(R.id.btn_forward);
-        if (btnForward != null) btnForward.setOnClickListener(v -> forwardImage());
+            ImageButton btnForward = findViewById(R.id.btn_forward);
+            if (btnForward != null) btnForward.setOnClickListener(v -> forwardImage());
 
-        View.OnClickListener rotate = v -> rotateImage();
-        ImageButton btnRotate = findViewById(R.id.btn_rotate);
-        if (btnRotate != null) btnRotate.setOnClickListener(rotate);
+            View.OnClickListener rotate = v -> rotateImage();
+            ImageButton btnRotate = findViewById(R.id.btn_rotate);
+            if (btnRotate != null) btnRotate.setOnClickListener(rotate);
 
-        // Single tap on the photo toggles the chrome (immersive, like WhatsApp/Telegram).
-        // PhotoView surfaces this via its own tap listener so it never fights pinch/zoom.
-        if (photoView != null) {
-            photoView.setOnPhotoTapListener((view, x, y) -> toggleChrome());
-            photoView.setOnOutsidePhotoTapListener(view -> toggleChrome());
+            // Single tap on the photo toggles the chrome (immersive, like WhatsApp/Telegram).
+            // PhotoView surfaces this via its own tap listener so it never fights pinch/zoom.
+            if (photoView != null) {
+                photoView.setOnPhotoTapListener((view, x, y) -> toggleChrome());
+                photoView.setOnOutsidePhotoTapListener(view -> toggleChrome());
+            }
         }
 
         if (imageUrl != null && photoView != null) loadImageIntoViewer();

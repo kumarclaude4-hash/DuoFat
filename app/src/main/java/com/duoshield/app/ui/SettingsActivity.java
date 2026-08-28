@@ -103,6 +103,11 @@ public class SettingsActivity extends BaseActivity {
         // then fall back to authenticated B2 download.
         loadProfilePhoto();
 
+        // Restore display name from the cloud the same way the photo is restored:
+        // a fresh install/new device has no local "my_display_name" pref yet, so
+        // fetch the previously-saved Firestore value and repopulate it.
+        reconcileDisplayName(myName);
+
         if (layoutProfileNameRow != null)
             layoutProfileNameRow.setOnClickListener(v -> showNameEditDialog());
         if (btnChangePhoto != null)
@@ -536,6 +541,33 @@ public class SettingsActivity extends BaseActivity {
     }
 
     /** Local-first display followed by an authoritative Firestore reconciliation. */
+    /**
+     * Mirrors {@link #loadProfilePhoto()}: if this device has no locally-saved
+     * display name (fresh install / new device), fetch the previously-saved
+     * name from {@code users/{uid}.displayName} and repopulate it, both in
+     * prefs and on screen.
+     */
+    private void reconcileDisplayName(String localName) {
+        if (localName != null && !localName.trim().isEmpty()) return;
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
+
+        FirebaseFirestore.getInstance().collection("users").document(user.getUid()).get()
+                .addOnSuccessListener(doc -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    String remoteName = doc.getString("displayName");
+                    if (remoteName == null || remoteName.trim().isEmpty()) return;
+                    // Another write may have landed while this request was in flight.
+                    String currentLocal = prefs.getString("my_display_name", null);
+                    if (currentLocal != null && !currentLocal.trim().isEmpty()) return;
+
+                    prefs.edit().putString("my_display_name", remoteName).apply();
+                    if (tvProfileDisplayName != null) tvProfileDisplayName.setText(remoteName);
+                })
+                .addOnFailureListener(e ->
+                        android.util.Log.w(TAG, "Could not reconcile display name", e));
+    }
+
     private void loadProfilePhoto() {
         if (ivProfilePhoto == null) return;
         applyPlaceholderAvatarView();
@@ -814,6 +846,7 @@ public class SettingsActivity extends BaseActivity {
         }
         Intent i = new Intent(this, com.duoshield.app.FullScreenImageActivity.class);
         i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, urlToShow);
+        i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_IS_PROFILE_PHOTO, true);
         // No media key — avatars are plain JPEGs (not AES-encrypted).
         startActivity(i);
     }

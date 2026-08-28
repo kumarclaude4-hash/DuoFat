@@ -31,6 +31,16 @@ public class SearchResultsAdapter extends RecyclerView.Adapter<SearchResultsAdap
     private String              currentQuery = "";
     private OnResultClickListener clickListener;
 
+    /**
+     * True for a cross-conversation list (global search / Starred Messages), where each
+     * row can belong to a different chat — so the label must show which chat it's from
+     * rather than the fixed "You"/"Partner" used for a single-conversation search.
+     */
+    private boolean globalMode;
+
+    /** conversationId -> display name (contact or group name), populated only in global mode. */
+    private java.util.Map<String, String> conversationNames;
+
     public SearchResultsAdapter(List<Message> messages) {
         this.messages = messages != null ? messages : new ArrayList<>();
     }
@@ -38,6 +48,15 @@ public class SearchResultsAdapter extends RecyclerView.Adapter<SearchResultsAdap
     public void setUids(String myUid, String partnerName) {
         this.myUid       = myUid;
         this.partnerName = partnerName;
+    }
+
+    public void setGlobalMode(boolean global) {
+        this.globalMode = global;
+    }
+
+    public void setConversationNames(java.util.Map<String, String> names) {
+        this.conversationNames = names;
+        if (globalMode) notifyDataSetChanged();
     }
 
     public void setQuery(String query) {
@@ -81,9 +100,17 @@ public class SearchResultsAdapter extends RecyclerView.Adapter<SearchResultsAdap
         Message m = messages.get(pos);
 
         // ── Sender label ──────────────────────────────────────────────
+        // In global mode (all conversations mixed together) this shows which chat the
+        // result is from, since "You"/"Partner" alone can't distinguish between chats.
+        // In single-conversation mode it shows who sent the message, as before.
         if (h.tvSender != null) {
-            boolean mine = myUid != null && myUid.equals(m.getSender());
-            h.tvSender.setText(mine ? "You" : (partnerName != null ? partnerName : "Partner"));
+            if (globalMode) {
+                String name = conversationNames != null ? conversationNames.get(m.getConversationId()) : null;
+                h.tvSender.setText(name != null ? name : "Unknown chat");
+            } else {
+                boolean mine = myUid != null && myUid.equals(m.getSender());
+                h.tvSender.setText(mine ? "You" : (partnerName != null ? partnerName : "Partner"));
+            }
         }
 
         // ── Timestamp ─────────────────────────────────────────────────

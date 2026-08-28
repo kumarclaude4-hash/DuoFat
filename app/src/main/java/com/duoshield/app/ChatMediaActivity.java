@@ -870,6 +870,7 @@ public class ChatMediaActivity extends BaseActivity {
         if (currentPartnerPhotoUrl == null || currentPartnerPhotoUrl.isEmpty()) return;
         Intent i = new Intent(this, com.duoshield.app.FullScreenImageActivity.class);
         i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, currentPartnerPhotoUrl);
+        i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_IS_PROFILE_PHOTO, true);
         // Avatars are uploaded as plain (unencrypted) JPEGs — no media key to pass.
         startActivity(i);
     }
@@ -1239,7 +1240,7 @@ public class ChatMediaActivity extends BaseActivity {
 
     // ══════════════════════════════════════════════════════════════
     // VOICE PLAYBACK
-    // ══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════��══════════════════
 
     /**
      * Tapped the "1x"-style pill on a currently-playing voice note. Cycles
