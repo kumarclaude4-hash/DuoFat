@@ -89,6 +89,10 @@ public final class MessageOutboxWorker extends Worker {
                             .collection("messages").document(item.id).set(doc),
                             30, TimeUnit.SECONDS);
                     database.outboxDao().delete(item.id);
+                    // The realtime listener may be detached after process death. Reconcile the
+                    // local optimistic row immediately so a successful retry is not left visibly
+                    // failed until the chat is opened again.
+                    database.messageDao().updateStatus(item.id, "sent");
                 } catch (Exception error) {
                     retry = true;
                     int attempts = item.attemptCount + 1;
