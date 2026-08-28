@@ -63,19 +63,6 @@ public class SplashActivity extends AppCompatActivity {
     private MatrixRainView matrixRainView;
     private SignalPulseView signalPulseView;
 
-    // ── Startup latency overlap (main-thread-only state) ─────────────────────
-    // Routing used to *begin* only after the 2100 ms splash timeline finished, so the
-    // FirebaseAuth resolution and the blocking resume/drain I/O were pure dead time stacked
-    // on top of the animation. They are now kicked off in onCreate so they run *during* the
-    // animation; the transition fires as soon as BOTH (a) the visual hold has elapsed and
-    // (b) routing has resolved. On a slow in-order A53 (Poco C51) this removes the auth+I/O
-    // tail from every single launch without changing the routing decision or the visuals.
-    private Intent pendingDestination;   // set once the auth listener has decided the route
-    private boolean minHoldElapsed;      // set when the splash timeline reaches its hold point
-    private boolean navigated;           // guards against a double startActivity()
-    private FirebaseAuth.AuthStateListener authListener;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -83,12 +70,6 @@ public class SplashActivity extends AppCompatActivity {
 
         matrixRainView  = findViewById(R.id.matrixRainView);
         signalPulseView = findViewById(R.id.signalPulseView);
-
-        // Resolve where to go NOW, in parallel with the entrance animation, instead of
-        // waiting for the animation to end. The actual screen transition is still gated on
-        // the visual hold (see tryNavigate), so the timeline is unchanged — only the dead
-        // wait for auth + disk I/O is removed.
-        beginRoutingResolution();
 
         View logo = findViewById(R.id.ivSplashLogo);
 
@@ -129,28 +110,18 @@ public class SplashActivity extends AppCompatActivity {
     // ── NAVIGATION ────────────────────────────────────────────────────────────
 
     private void scheduleNavigation() {
-        // The visual hold: mark the timeline complete, then attempt the transition. If routing
-        // already resolved during the animation (the common case), this navigates immediately;
-        // otherwise tryNavigate() is a no-op here and the auth listener fires it the moment the
-        // route resolves.
-        mainHandler.postDelayed(() -> {
-            minHoldElapsed = true;
-            tryNavigate();
-        }, POST_ENTRANCE_HOLD_MS);
+        new Handler(Looper.getMainLooper()).postDelayed(
+                this::navigate, POST_ENTRANCE_HOLD_MS);
     }
 
-    /**
-     * Kicks off everything needed to decide the destination, in parallel with the entrance
-     * animation. Called from {@link #onCreate}. Nothing here touches the UI or transitions —
-     * it only computes {@link #pendingDestination}; {@link #tryNavigate()} performs the actual
-     * screen change once the visual hold has also elapsed.
-     */
-    private void beginRoutingResolution() {
+    private void navigate() {
         // S06-M5 / S06-H3: resume any interrupted teardown and drain any pending
-        // account-lock intent so routing decisions are made against a resolved state. Both do
-        // blocking I/O — per their javadocs they must not run on the main thread — hence the
-        // background thread. Starting it here (rather than after the animation) gives it the
-        // full ~2 s of the splash timeline to finish before the routing read below needs it.
+        // account-lock intent BEFORE the auth-state check below runs, so routing
+        // decisions are made against a state where both are already resolved for
+        // this launch, rather than racing them. Both do blocking I/O — per their
+        // javadocs they must not run on the main thread — hence the background
+        // thread. DuressManager.isResetPending()/PendingLockStore-backed reads are
+        // what feed the routing decision below, not this thread's completion.
         new Thread(() -> {
             try {
                 com.duoshield.app.security.DuressManager.resumeInterruptedResetIfNeeded(
@@ -165,11 +136,10 @@ public class SplashActivity extends AppCompatActivity {
         // addAuthStateListener fires immediately if auth state is already
         // known, preventing a false-logout on cold start (see splash-auth-fix
         // memory entry).
-        authListener = new FirebaseAuth.AuthStateListener() {
+        FirebaseAuth.getInstance().addAuthStateListener(new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth auth) {
                 auth.removeAuthStateListener(this);
-                authListener = null;
                 if (isFinishing() || isDestroyed()) return;
 
                 FirebaseUser      user          = auth.getCurrentUser();
@@ -205,26 +175,11 @@ public class SplashActivity extends AppCompatActivity {
                     next = new Intent(SplashActivity.this, SignInActivity.class);
                 }
                 next.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                pendingDestination = next;
-                tryNavigate();
+                startActivity(next);
+                overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+                finish();
             }
-        };
-        FirebaseAuth.getInstance().addAuthStateListener(authListener);
-    }
-
-    /**
-     * Performs the screen transition exactly once, and only when both preconditions hold: the
-     * destination has been resolved AND the splash's visual hold has elapsed. Whichever of the
-     * two finishes last triggers the actual navigation, so neither the animation nor the
-     * auth/I/O work is ever wasted waiting on the other.
-     */
-    private void tryNavigate() {
-        if (navigated || pendingDestination == null || !minHoldElapsed) return;
-        if (isFinishing() || isDestroyed()) return;
-        navigated = true;
-        startActivity(pendingDestination);
-        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
-        finish();
+        });
     }
 
     @Override
@@ -232,10 +187,5 @@ public class SplashActivity extends AppCompatActivity {
         super.onDestroy();
         if (breatheX != null) breatheX.cancel();
         if (breatheY != null) breatheY.cancel();
-        mainHandler.removeCallbacksAndMessages(null);
-        if (authListener != null) {
-            FirebaseAuth.getInstance().removeAuthStateListener(authListener);
-            authListener = null;
-        }
     }
 }
