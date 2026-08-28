@@ -468,15 +468,6 @@ const AUTH_RATE_LIMITS = {
   // when a conversation is first opened; 120/min covers that while still
   // bounding how fast a compromised account can enumerate media.
   mediaToken:       120,
-  // YouTube search (Watch Together). Deliberately the tightest limit on this
-  // list. A search.list call costs 100 YouTube quota units against a 10,000/day
-  // free allowance — about 100 searches per DAY for the entire deployment — so
-  // this is a shared, exhaustible resource, unlike every other endpoint here
-  // where the cost is only CPU. 6/min per user still feels instant to a human
-  // typing a query, but stops one account from draining the day's budget in
-  // seconds. Cache hits are served before this gate is consulted, so repeated
-  // identical searches do not count against it.
-  youtubeSearch:      6,
   // S06-M6: one-shot completion call for the forced post-unfreeze rotation —
   // clears accountLock/{uid}.rotationRequired once both new-PIN screens finish.
   // Same reasoning as requestLockNonce: never legitimately needed more than a
@@ -565,67 +556,6 @@ if (!MEDIA_TOKEN_SECRET) {
 // Short TTL: long enough to cover a slow upload on a poor connection, short
 // enough that a token captured from logs or a proxy is quickly worthless.
 const MEDIA_TOKEN_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-// ── YouTube Data API key (Watch Together search) ──────────────────────────────
-// Set on Render as an environment variable:
-//   YOUTUBE_API_KEY = <key from Google Cloud console, YouTube Data API v3>
-//
-// This value lives ONLY here, server-side. It is deliberately absent from the
-// Android app: no BuildConfig field, no resource, no gradle property, no asset.
-// The APK is distributable and decompilable, so a key shipped in it is a public
-// key — and a public YouTube key can be extracted and used by anyone until the
-// project's daily quota is exhausted, which breaks search for every real user.
-// Restrict the key in Google Cloud to the YouTube Data API v3 and (optionally)
-// to this server's egress IP for defence in depth.
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
-if (!YOUTUBE_API_KEY) {
-  console.warn(
-    "YOUTUBE_API_KEY is not set — /youtubeSearch will return 503 and Watch Together " +
-    "search will be unavailable. Set it in the Render environment."
-  );
-}
-
-// Optional: biases results toward a region (e.g. "US", "IN"). Costs no extra quota.
-const YOUTUBE_REGION_CODE = (process.env.YOUTUBE_REGION_CODE || "").trim();
-
-// ── YouTube search response cache ─────────────────────────────────────────────
-// Quota, not latency, is the reason this exists. Two people on a call searching
-// "lofi" a few seconds apart, or one person retrying after a network blip, must
-// not cost 100 units each. A short TTL keeps results fresh enough that a newly
-// uploaded video appears within minutes while still absorbing the bursts that
-// dominate real usage.
-const SEARCH_CACHE_TTL_MS  = 10 * 60 * 1000; // 10 minutes
-// Bounded so the Map cannot grow without limit on a long-lived Render instance.
-// Eviction is oldest-insertion-first, which Map iteration order gives us free.
-const SEARCH_CACHE_MAX     = 300;
-const searchCache = new Map(); // key → { results, expiresAt }
-
-function searchCacheGet(key) {
-  const hit = searchCache.get(key);
-  if (!hit) return null;
-  if (Date.now() > hit.expiresAt) {
-    searchCache.delete(key);
-    return null;
-  }
-  return hit.results;
-}
-
-function searchCachePut(key, results) {
-  if (searchCache.size >= SEARCH_CACHE_MAX) {
-    const oldest = searchCache.keys().next().value;
-    if (oldest !== undefined) searchCache.delete(oldest);
-  }
-  searchCache.set(key, { results, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
-}
-
-// Drop expired entries periodically so an idle instance does not hold results
-// (and their titles) in memory indefinitely.
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of searchCache) {
-    if (now > entry.expiresAt) searchCache.delete(key);
-  }
-}, SEARCH_CACHE_TTL_MS).unref?.();
 
 const MEDIA_OPS = new Set(["read", "write", "delete"]);
 
@@ -2277,7 +2207,7 @@ document.getElementById("gateForm").addEventListener("submit", () => {
   btn.textContent = "Verifying…";
 });
 
-// ── Toolbar / section-refresh button wiring ──────────────────────────────────
+// ── Toolbar / section-refresh button wiring ────��─────────────────────────────
 // These buttons cannot use inline onclick="" attributes: the /admin page ships a
 // strict CSP (script-src 'nonce-...' with no 'unsafe-inline'/'unsafe-hashes'),
 // under which browsers refuse to run inline event-handler attributes. That made
@@ -3853,131 +3783,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── /youtubeSearch — server-side YouTube Data API search (Watch Together) ──
-  // Android → this endpoint → YouTube Data API → minimal JSON → Android.
-  //
-  // The whole point of the hop is that the API key stays here. The client sends
-  // only a query string and receives only {videoId, title, channel, thumbnail}
-  // rows, which it feeds into the EXISTING Watch Together player by videoId.
-  //
-  // Gate order is deliberate and cost-driven: auth → validate → cache → rate
-  // limit → YouTube. Everything cheap and everything that can reject runs before
-  // the one step that spends a finite shared resource (100 quota units/call).
-  // Cache lookup sits ahead of the rate limiter on purpose, so a user scrolling
-  // back to a query they already ran is never told to slow down for a response
-  // that costs nothing.
-  if (req.method === "POST" && req.url === "/youtubeSearch") {
-    collectBody(req, res, async (body) => {
-      const sendJson = (status, payload) => {
-        res.writeHead(status, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(payload));
-      };
-      try {
-        // 1. Authentication — Firebase ID token, same as every other endpoint.
-        const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/, "").trim();
-        if (!tok) return sendJson(401, { error: "Unauthorized" });
-        let ytUid;
-        try {
-          ytUid = (await admin.auth().verifyIdToken(tok)).uid;
-        } catch {
-          return sendJson(401, { error: "Invalid token" });
-        }
-
-        // Fail closed when unconfigured, before touching quota or the cache.
-        if (!YOUTUBE_API_KEY) {
-          console.error("/youtubeSearch called but YOUTUBE_API_KEY is not configured");
-          return sendJson(503, { error: "Search is not configured" });
-        }
-
-        // 2. Input validation — costs zero quota, so it runs before anything else.
-        let parsedBody;
-        try {
-          parsedBody = JSON.parse(body);
-        } catch {
-          return sendJson(400, { error: "Bad JSON" });
-        }
-        const validated = pure.validateSearchQuery(parsedBody && parsedBody.q);
-        if (!validated.ok) {
-          return sendJson(400, { error: validated.error });
-        }
-        const query      = validated.query;
-        const maxResults = pure.clampMaxResults(parsedBody && parsedBody.maxResults);
-
-        // 3. Cache — a hit costs no quota and is not rate limited.
-        const cacheKey = pure.searchCacheKey(query, maxResults);
-        const cached   = searchCacheGet(cacheKey);
-        if (cached) {
-          return sendJson(200, { results: cached, cached: true });
-        }
-
-        // 4. Per-user rate limit — only reached when we are about to spend quota.
-        if (!checkAuthRateLimit(ytUid, "youtubeSearch")) {
-          return sendJson(429, { error: "Too many searches — try again in a minute" });
-        }
-
-        // 5. Outbound call to the official YouTube Data API v3.
-        const requestUrl = pure.buildYouTubeSearchUrl({
-          query,
-          maxResults,
-          apiKey: YOUTUBE_API_KEY,
-          regionCode: YOUTUBE_REGION_CODE,
-        });
-
-        const ctrl    = new AbortController();
-        const timeout = setTimeout(() => ctrl.abort(), 8000);
-        let upstream;
-        try {
-          upstream = await fetch(requestUrl, {
-            signal: ctrl.signal,
-            headers: { Accept: "application/json" },
-          });
-        } catch (fetchErr) {
-          // Network failure or our own 8 s timeout. redactApiKey because fetch
-          // errors embed the request URL — which carries the key.
-          console.warn("/youtubeSearch upstream fetch failed:", pure.redactApiKey(fetchErr.message));
-          return sendJson(504, { error: "Search timed out. Try again." });
-        } finally {
-          clearTimeout(timeout);
-        }
-
-        if (!upstream.ok) {
-          // Never forward the upstream body: it can contain the request URL,
-          // the project number, and internal reason codes.
-          const mapped = pure.mapYouTubeError(upstream.status);
-          console.warn(
-            `/youtubeSearch upstream status=${upstream.status} uid=${uidTag(ytUid)} ` +
-            `-> ${mapped.status}`
-          );
-          return sendJson(mapped.status, { error: mapped.error });
-        }
-
-        let upstreamBody;
-        try {
-          upstreamBody = await upstream.json();
-        } catch (parseErr) {
-          console.warn("/youtubeSearch malformed upstream JSON:", pure.redactApiKey(parseErr.message));
-          return sendJson(502, { error: "Search failed. Try again." });
-        }
-
-        // 6. Allow-list projection. Only the four UI fields can escape.
-        const results = pure.transformYouTubeSearchResponse(upstreamBody);
-
-        // Cache even an empty result set: "no matches for this typo" is a real,
-        // stable answer and re-asking YouTube would cost another 100 units.
-        searchCachePut(cacheKey, results);
-
-        console.log(
-          `/youtubeSearch uid=${uidTag(ytUid)} len=${query.length} results=${results.length}`
-        );
-        return sendJson(200, { results, cached: false });
-      } catch (e) {
-        // sendServerError keeps detail in the log and returns a correlation id.
-        sendServerError(res, "/youtubeSearch", e);
-      }
-    });
-    return;
-  }
-
   // ── /removeGroupMember — admin removes member + revokes key (F3) ─────────
   if (req.method === "POST" && req.url === "/removeGroupMember") {
     collectBody(req, res, async (body) => {
@@ -4809,7 +4614,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // ── POST /admin/api/duress/enroll ─────────────────────────────────────────
+  // ── POST /admin/api/duress/enroll ���────────────────────────────────────────
   //
   // Body: { uid }. Auth: x-admin-token header, or an existing valid session (requireAdminAuth accepts either).
   // Creates or updates duressEligibility/{uid} with eligible:true so the app

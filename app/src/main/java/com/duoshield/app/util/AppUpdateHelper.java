@@ -31,8 +31,10 @@ import java.util.concurrent.Executors;
 
 /** In-app updater for signed APKs published by the DuoFat GitHub release workflow. */
 public final class AppUpdateHelper {
+    // Lists releases newest-first (includes pre-releases). The GitHub "releases/latest"
+    // endpoint hides pre-releases and drafts, so it can miss the actual newest release.
     private static final String RELEASES_API =
-            "https://api.github.com/repos/kumarclaude4-hash/DuoFatass/releases/latest";
+            "https://api.github.com/repos/kumarclaude4-hash/DuoFatass/releases?per_page=20";
     private static final String PROVIDER_SUFFIX = ".provider";
     private static final int CONNECT_TIMEOUT_MS = 12_000;
     private static final int READ_TIMEOUT_MS = 30_000;
@@ -95,7 +97,17 @@ public final class AppUpdateHelper {
         worker.execute(() -> {
             try {
                 String json = readText(new URL(RELEASES_API));
-                JSONObject release = new JSONObject(json);
+                JSONArray releases = new JSONArray(json);
+                JSONObject release = null;
+                for (int i = 0; i < releases.length(); i++) {
+                    JSONObject candidate = releases.getJSONObject(i);
+                    // Releases are returned newest-first; take the first published one.
+                    if (!candidate.optBoolean("draft", false)) {
+                        release = candidate;
+                        break;
+                    }
+                }
+                if (release == null) throw new Exception("No published release was found");
                 String tag = release.optString("tag_name", "").trim();
                 String remoteVersion = tag.startsWith("v") ? tag.substring(1) : tag;
                 if (remoteVersion.isEmpty()) throw new Exception("Release version is missing");

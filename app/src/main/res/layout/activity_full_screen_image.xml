@@ -77,7 +77,7 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Download"
             android:padding="12dp"
-            android:src="@drawable/ic_arrow_down"
+            android:src="@drawable/ic_download"
             app:tint="#FFFFFF" />
 
         <ImageButton
