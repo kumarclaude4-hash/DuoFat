@@ -48,16 +48,19 @@ public class MessageSearchActivity extends BaseActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_message_search);
 
+        // Starred-only mode is always a form of global (cross-conversation) search.
+        starredOnly  = getIntent().getBooleanExtra(EXTRA_STARRED_ONLY, false);
+        globalSearch = starredOnly || getIntent().getBooleanExtra(EXTRA_GLOBAL_SEARCH, false);
+
         androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-            getSupportActionBar().setTitle("Search Messages");
+            getSupportActionBar().setTitle(starredOnly ? "Starred Messages" : "Search Messages");
         }
         if (toolbar != null) toolbar.setNavigationOnClickListener(v -> finish());
 
         SharedPreferences prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
-        boolean globalSearch = getIntent().getBooleanExtra(EXTRA_GLOBAL_SEARCH, false);
         conversationId = globalSearch ? null : prefs.getString("conversation_id", null);
         myUid       = prefs.getString("my_uid", null);
         String partnerName = globalSearch ? "Conversation" : prefs.getString("partner_name", null);
@@ -69,6 +72,8 @@ public class MessageSearchActivity extends BaseActivity {
 
         adapter = new SearchResultsAdapter(new ArrayList<>());
         adapter.setUids(myUid, partnerName);
+        // In cross-conversation lists each row shows which chat it belongs to.
+        adapter.setGlobalMode(globalSearch);
         adapter.setOnResultClickListener(msg -> {
             if (globalSearch) {
                 openGlobalResult(msg);
@@ -85,7 +90,15 @@ public class MessageSearchActivity extends BaseActivity {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));
             recyclerView.setAdapter(adapter);
         }
-        setupFilters();
+        if (starredOnly) {
+            // Scope is fixed to starred, so the chip row is meaningless here.
+            activeFilter = SearchHelper.Filter.STARRED;
+            View filterScroll = findViewById(R.id.filter_scroll);
+            if (filterScroll != null) filterScroll.setVisibility(View.GONE);
+            if (svSearch != null) svSearch.setHint("Search starred messages");
+        } else {
+            setupFilters();
+        }
 
         if (svSearch != null) {
             svSearch.addTextChangedListener(new TextWatcher() {
@@ -95,6 +108,14 @@ public class MessageSearchActivity extends BaseActivity {
                     String q = s.toString().trim();
                     if (debounceRunnable != null) debounceHandler.removeCallbacks(debounceRunnable);
                     if (q.length() < 2) {
+                        // In starred mode an empty/short query means "show the full starred list",
+                        // not "clear results" — the STARRED filter drives the results on its own.
+                        if (starredOnly) {
+                            adapter.setQuery("");
+                            debounceRunnable = () -> runSearch("");
+                            debounceHandler.postDelayed(debounceRunnable, DEBOUNCE_MS);
+                            return;
+                        }
                         adapter.setQuery("");
                         adapter.setMessages(new ArrayList<>());
                         if (tvEmpty  != null) tvEmpty.setVisibility(View.GONE);
@@ -105,20 +126,60 @@ public class MessageSearchActivity extends BaseActivity {
                     debounceHandler.postDelayed(debounceRunnable, DEBOUNCE_MS);
                 }
             });
-            svSearch.requestFocus();
+            // WhatsApp's starred list lands as a calm list, so skip the auto-focused keyboard there.
+            if (!starredOnly) svSearch.requestFocus();
         }
+
+        // Load the full starred list immediately, no typing required.
+        if (starredOnly) runSearch("");
     }
 
     private void runSearch(String query) {
-        if (conversationId == null && !getIntent().getBooleanExtra(EXTRA_GLOBAL_SEARCH, false)) return;
+        if (conversationId == null && !globalSearch) return;
         if (progress != null) progress.setVisibility(View.VISIBLE);
         adapter.setQuery(query);
         SearchHelper.runSearch(this, conversationId, query, activeFilter, myUid,
-                results -> runOnUiThread(() -> {
-            if (progress != null) progress.setVisibility(View.GONE);
-            adapter.setMessages(results);
-            if (tvEmpty != null) tvEmpty.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
-                }));
+                results -> {
+            // This callback runs on SearchHelper's background thread, so resolving each
+            // result's chat name from Room here keeps the point-queries off the UI thread.
+            final java.util.Map<String, String> names =
+                    globalSearch ? resolveConversationNames(results) : null;
+            runOnUiThread(() -> {
+                if (progress != null) progress.setVisibility(View.GONE);
+                if (names != null) adapter.setConversationNames(names);
+                adapter.setMessages(results);
+                if (tvEmpty != null) tvEmpty.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
+            });
+                });
+    }
+
+    /**
+     * Resolves each distinct conversationId in {@code results} to a display name using local Room
+     * data only (no network): groups via {@link com.duoshield.app.db.GroupDao}, otherwise the
+     * contact matched by conversationId. Falls back to "Unknown chat".
+     */
+    private java.util.Map<String, String> resolveConversationNames(
+            java.util.List<com.duoshield.app.models.Message> results) {
+        java.util.Map<String, String> names = new java.util.HashMap<>();
+        if (results == null || results.isEmpty()) return names;
+        com.duoshield.app.db.AppDatabase db = com.duoshield.app.db.AppDatabase.getInstance(this);
+        for (com.duoshield.app.models.Message m : results) {
+            String id = m.getConversationId();
+            if (id == null || id.isEmpty() || names.containsKey(id)) continue;
+            String name = null;
+            com.duoshield.app.models.Group group = db.groupDao().getGroupById(id);
+            if (group != null && group.name != null && !group.name.isEmpty()) {
+                name = group.name;
+            } else {
+                com.duoshield.app.models.Contact contact = db.contactDao().getByConversationId(id);
+                if (contact != null && contact.displayName != null
+                        && !contact.displayName.isEmpty()) {
+                    name = contact.displayName;
+                }
+            }
+            names.put(id, name != null ? name : "Unknown chat");
+        }
+        return names;
     }
 
     private void openGlobalResult(com.duoshield.app.models.Message message) {
