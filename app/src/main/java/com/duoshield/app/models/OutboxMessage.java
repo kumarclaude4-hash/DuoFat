@@ -25,6 +25,14 @@ public class OutboxMessage {
     public int attemptCount;
     public long nextAttemptAt;
     public String lastError;
+    /** Already-uploaded encrypted object metadata; never plaintext media. */
+    public String mediaPath;
+    public String mediaKey;
+    public String thumbnail;
+    public String caption;
+    public boolean chunked;
+    public String waveformJson;
+    public int durationMs;
 
     public OutboxMessage(@NonNull String id, String conversationId, String recipientUid,
                          String senderUid, String ciphertext, int sigType, String messageType,
@@ -41,5 +49,19 @@ public class OutboxMessage {
         this.expiresAt = expiresAt;
         this.createdAt = createdAt;
         this.nextAttemptAt = createdAt;
+    }
+
+    public void setMediaMetadata(String mediaPath, String mediaKey, String thumbnail,
+                                 String caption, boolean chunked) {
+        this.mediaPath = mediaPath;
+        this.mediaKey = mediaKey;
+        this.thumbnail = thumbnail;
+        this.caption = caption;
+        this.chunked = chunked;
+    }
+
+    public void setVoiceMetadata(String waveformJson, int durationMs) {
+        this.waveformJson = waveformJson;
+        this.durationMs = durationMs;
     }
 }

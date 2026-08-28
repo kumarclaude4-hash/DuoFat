@@ -22,7 +22,7 @@ import net.sqlcipher.database.SupportFactory;
         Message.class, SignalSessionRecord.class, OutboxMessage.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 28
+    version = 30
 )
 public abstract class AppDatabase extends RoomDatabase {
 
@@ -127,8 +127,9 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
-                MIGRATION_27_28)
+                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26,                 MIGRATION_26_27,
+                MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30)
+
             .addCallback(new RoomDatabase.Callback() {
                 @Override public void onCreate(SupportSQLiteDatabase db) {
                     createSearchIndex(db);
@@ -387,6 +388,23 @@ public abstract class AppDatabase extends RoomDatabase {
      * maintained by SQLite triggers so Room, Firestore listeners, retries, edits,
      * tombstones, and optimistic sends all follow the same invariant.
      */
+    static final Migration MIGRATION_29_30 = new Migration(29, 30) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN waveformJson TEXT");
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+
+    static final Migration MIGRATION_28_29 = new Migration(28, 29) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN mediaPath TEXT");
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN mediaKey TEXT");
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN thumbnail TEXT");
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN caption TEXT");
+            db.execSQL("ALTER TABLE outbox_messages ADD COLUMN chunked INTEGER NOT NULL DEFAULT 0");
+        }
+    };
+
     static final Migration MIGRATION_27_28 = new Migration(27, 28) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("CREATE TABLE IF NOT EXISTS outbox_messages (" +

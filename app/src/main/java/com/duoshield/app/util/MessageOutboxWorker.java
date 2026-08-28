@@ -20,6 +20,7 @@ import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.FirebaseFirestore;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,7 +79,35 @@ public final class MessageOutboxWorker extends Worker {
                     doc.put("text", item.ciphertext);
                     doc.put("isEncrypted", true);
                     doc.put("sigType", item.sigType);
-                    doc.put("type", item.messageType != null ? item.messageType : "text");
+                    String messageType = item.messageType != null ? item.messageType : "text";
+                    doc.put("type", messageType);
+                    if (item.mediaPath != null && !item.mediaPath.isEmpty()) {
+                        doc.put("path", item.mediaPath);
+                        doc.put("mediaType", messageType);
+                        doc.put("mediaKey", item.mediaKey);
+                        if (item.thumbnail != null && !item.thumbnail.isEmpty()) {
+                            doc.put("thumb", item.thumbnail);
+                        }
+                        if (item.caption != null && !item.caption.isEmpty()) {
+                            doc.put("caption", item.caption);
+                        }
+                        if (item.chunked) doc.put("chunked", true);
+                        if ("voice".equals(messageType)) {
+                            if (item.waveformJson != null && !item.waveformJson.isEmpty()) {
+                                try {
+                                    org.json.JSONArray arr = new org.json.JSONArray(item.waveformJson);
+                                    ArrayList<Integer> amplitudes = new ArrayList<>();
+                                    for (int i = 0; i < arr.length(); i++) {
+                                        amplitudes.add(arr.optInt(i, 0));
+                                    }
+                                    doc.put("amplitudes", amplitudes);
+                                } catch (org.json.JSONException ignored) {
+                                    Log.w(TAG, "Ignoring malformed voice waveform for " + item.id);
+                                }
+                            }
+                            if (item.durationMs > 0) doc.put("durationMs", item.durationMs);
+                        }
+                    }
                     doc.put("status", "sent");
                     doc.put("expiresAt", item.expiresAt);
                     if (item.replyToId != null) doc.put("replyToId", item.replyToId);

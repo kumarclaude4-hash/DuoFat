@@ -1202,10 +1202,22 @@ public class ChatMediaActivity extends BaseActivity {
         doc.put("durationMs", durationMs);
         doc.put("expiresAt", m.getExpiresAt());
         doc.put("timestamp", FieldValue.serverTimestamp());
+
+        // The encrypted voice object is already uploaded. Persist its Firestore metadata so
+        // a transient document-write failure can retry without re-recording or re-uploading.
+        OutboxMessage queued = new OutboxMessage(msgId, conversationId, partnerUid, myUid,
+                "", 0, "voice", null, null, m.getExpiresAt(), now);
+        queued.setMediaMetadata(storagePath, mediaKey, null, null, false);
+        queued.setVoiceMetadata(new org.json.JSONArray(sampledAmps).toString(), durationMs);
+        AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
+        MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
           .addOnSuccessListener(v -> {
               FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordWrites(1);
+              dbExecutor.execute(() -> AppDatabase.getInstance(ChatMediaActivity.this)
+                      .outboxDao().delete(msgId));
               voiceMessage.setStatus("sent");
               adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
               saveToRoom(voiceMessage);
@@ -1216,8 +1228,9 @@ public class ChatMediaActivity extends BaseActivity {
               voiceMessage.setStatus("failed");
               adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
               saveToRoom(voiceMessage);
+              MessageOutboxWorker.enqueue(ChatMediaActivity.this);
               Toast.makeText(ChatMediaActivity.this,
-                      "Failed to send voice note. Tap to retry.", Toast.LENGTH_SHORT).show();
+                      "Voice note failed. It will retry automatically.", Toast.LENGTH_SHORT).show();
           });
     }
 
@@ -3638,12 +3651,23 @@ public class ChatMediaActivity extends BaseActivity {
         // legacy whole-blob format — so an explicit false would add a field to the majority of
         // message documents to say nothing, and readers already have to handle its absence for
         // every message that predates the format.
-        if (chunked) doc.put("chunked", true);
+                if (chunked) doc.put("chunked", true);
+
+        // The encrypted object is already uploaded, so queue only its metadata and media key.
+        // Retries reuse this object and never upload or encrypt the media a second time.
+        OutboxMessage queued = new OutboxMessage(msgId, conversationId, partnerUid, myUid,
+                "", 0, mediaType, null, null, exp, now);
+        queued.setMediaMetadata(storagePath, mediaKey, sealedThumb, caption, chunked);
+        AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
+        MessageOutboxWorker.enqueue(ChatMediaActivity.this);
 
         db.collection("chats").document(conversationId)
+
           .collection("messages").document(msgId).set(doc)
           .addOnSuccessListener(v -> {
               FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordWrites(1);
+              dbExecutor.execute(() -> AppDatabase.getInstance(ChatMediaActivity.this)
+                      .outboxDao().delete(msgId));
               m.setStatus("sent");
               adapter.updateMessage(msgId, msg -> msg.setStatus("sent"));
               saveToRoom(m);
@@ -3660,20 +3684,14 @@ public class ChatMediaActivity extends BaseActivity {
           })
           .addOnFailureListener(e -> {
               Log.e(TAG, "Failed to send media message to Firestore: " + e.getMessage());
-              // Delete the orphaned B2 file — it can never be found without a Firestore doc
-              if (B2StorageHelper.isB2Path(storagePath)) {
-                  executor.execute(() -> {
-                      try { B2StorageHelper.deleteFile(storagePath); }
-                      catch (Exception ex) { Log.w(TAG, "B2 cleanup failed: " + ex.getMessage()); }
-                  });
-                  m.setMediaUrl(null); // clear so retry shows "re-select media"
-                  adapter.updateMessage(msgId, msg -> { msg.setStatus("failed"); msg.setMediaUrl(null); });
-              } else {
-                  adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
-              }
+              // Keep the encrypted object: the outbox has enough metadata to retry the
+              // Firestore write without re-uploading or re-encrypting the media.
               m.setStatus("failed");
+              adapter.updateMessage(msgId, msg -> msg.setStatus("failed"));
               saveToRoom(m);
-              Toast.makeText(ChatMediaActivity.this, "Failed to send media. Please re-select and try again.", Toast.LENGTH_LONG).show();
+              MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+              Toast.makeText(ChatMediaActivity.this,
+                      "Media send failed. It will retry automatically.", Toast.LENGTH_LONG).show();
           });
     }
 
