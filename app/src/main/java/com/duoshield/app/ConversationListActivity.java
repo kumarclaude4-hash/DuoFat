@@ -430,6 +430,7 @@ public class ConversationListActivity extends BaseActivity {
                     Object ts = doc.get("lastMessageTs");
                     conv.lastMessageTs = ts instanceof com.google.firebase.Timestamp
                             ? ((com.google.firebase.Timestamp) ts).toDate().getTime() : 0;
+                    conv.sortTs = resolveSortTs(doc, conv.lastMessageTs);
 
                     Object unread = doc.get("unread_" + myUid);
                     conv.unreadCount = unread instanceof Long ? ((Long) unread).intValue() : 0;
@@ -479,6 +480,48 @@ public class ConversationListActivity extends BaseActivity {
             });
     }
 
+    /**
+     * Picks the timestamp a chat row should sort on, newest first.
+     *
+     * <p>{@code lastMessageTs} alone is not enough:
+     * <ul>
+     *   <li>A chat created by "New Chat" has no messages, so the field is absent → 0.</li>
+     *   <li>{@code ConversationMetaUpdater} writes it with {@code serverTimestamp()}, which is
+     *       {@code null} in the local (latency-compensated) snapshot until the server round-trip
+     *       lands — so a chat the user just messaged momentarily reads 0 too.</li>
+     * </ul>
+     * Every such row collapsed to the same key, and {@link Collections#sort} is stable, so they
+     * kept whatever order Firestore returned them in — which is why a brand-new conversation
+     * appeared below an older one. Falling back to the pending server value and then to the
+     * chat's own creation time gives each row a distinct, monotonic key.
+     */
+    private static long resolveSortTs(com.google.firebase.firestore.DocumentSnapshot doc,
+                                      long lastMessageTs) {
+        if (lastMessageTs > 0) return lastMessageTs;
+
+        // An unresolved serverTimestamp() reads null locally; ESTIMATE fills it with the
+        // device's best guess so the row sorts to the top immediately instead of falling to 0
+        // and then jumping into place once the server confirms.
+        try {
+            Object est = doc.get("lastMessageTs",
+                    com.google.firebase.firestore.DocumentSnapshot
+                            .ServerTimestampBehavior.ESTIMATE);
+            if (est instanceof com.google.firebase.Timestamp) {
+                long ms = ((com.google.firebase.Timestamp) est).toDate().getTime();
+                if (ms > 0) return ms;
+            }
+        } catch (RuntimeException ignored) {
+            // Field missing or not a timestamp — fall through to createdAt.
+        }
+
+        Object created = doc.get("createdAt");
+        if (created instanceof com.google.firebase.Timestamp) {
+            return ((com.google.firebase.Timestamp) created).toDate().getTime();
+        }
+        if (created instanceof Long) return (Long) created;
+        return 0L;
+    }
+
     /** Loads groups from Room and merges them with the direct conversation list. */
     private void loadGroupsFromRoom() {
         executor.execute(() -> {
@@ -493,13 +536,25 @@ public class ConversationListActivity extends BaseActivity {
         });
     }
 
-    /** Combines direct + group conversations (sorted by lastMessageTs desc) and filters. */
+    /**
+     * Combines direct + group conversations, newest first, and re-applies the active filter.
+     *
+     * <p>Sorts on {@code sortTs} rather than {@code lastMessageTs} so chats that have no message
+     * yet (or a server timestamp still in flight) still order by recency instead of tying at 0.
+     * Name is the tiebreaker so two rows that genuinely share a timestamp — e.g. groups restored
+     * from a backup — keep a stable, predictable order across snapshots rather than shuffling.
+     */
     private void mergeAndFilter() {
         allConversations.clear();
         allConversations.addAll(directConversations);
         allConversations.addAll(groupConversations);
-        Collections.sort(allConversations, (a, b) ->
-            Long.compare(b.lastMessageTs, a.lastMessageTs));
+        Collections.sort(allConversations, (a, b) -> {
+            int byTime = Long.compare(b.sortTs, a.sortTs);
+            if (byTime != 0) return byTime;
+            String an = a.partnerName != null ? a.partnerName : "";
+            String bn = b.partnerName != null ? b.partnerName : "";
+            return an.compareToIgnoreCase(bn);
+        });
         filterConversations(etSearch.getText().toString().trim());
     }
 
