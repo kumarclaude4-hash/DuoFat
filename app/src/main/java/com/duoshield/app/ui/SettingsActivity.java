@@ -128,6 +128,16 @@ public class SettingsActivity extends BaseActivity {
                 startActivity(new Intent(this, AppearanceNotificationsSettingsActivity.class)));
         }
 
+        LinearLayout rowStarredMessages = findViewById(R.id.rowStarredMessages);
+        if (rowStarredMessages != null) {
+            rowStarredMessages.setOnClickListener(v -> {
+                Intent intent = new Intent(this, com.duoshield.app.MessageSearchActivity.class);
+                intent.putExtra(com.duoshield.app.MessageSearchActivity.EXTRA_GLOBAL_SEARCH, true);
+                intent.putExtra(com.duoshield.app.MessageSearchActivity.EXTRA_STARRED_ONLY, true);
+                startActivity(intent);
+            });
+        }
+
         LinearLayout rowBackupStorage = findViewById(R.id.rowBackupStorage);
         if (rowBackupStorage != null) {
             rowBackupStorage.setOnClickListener(v ->

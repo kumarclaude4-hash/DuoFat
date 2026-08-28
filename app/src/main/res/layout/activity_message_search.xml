@@ -25,7 +25,8 @@
             android:textSize="15sp" android:inputType="text"
             android:imeOptions="actionSearch" android:singleLine="true"/>
     </LinearLayout>
-    <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content"
+    <HorizontalScrollView android:id="@+id/filter_scroll"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
         android:scrollbars="none" android:fillViewport="false" android:background="@color/ds_toolbar"
         android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingBottom="6dp">
         <com.google.android.material.chip.ChipGroup android:id="@+id/search_filters"

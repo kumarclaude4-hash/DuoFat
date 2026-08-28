@@ -64,7 +64,14 @@ public class MainActivity extends AppCompatActivity {
         // called from onRequestPermissionsResult() once the user responds. If permission
         // is already granted (or SDK < 33, where no runtime permission is needed), call
         // proceedAfterPermission() directly.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // The first-run PermissionsOnboardingActivity now batch-requests
+        // POST_NOTIFICATIONS (along with camera/mic/media) before we ever get here,
+        // so skip this fallback once that has run — otherwise a user who declined
+        // notifications on the onboarding screen would be re-prompted immediately.
+        // Legacy installs that predate onboarding (flag never set) keep the original
+        // behaviour so they still get asked at least once.
+        if (!com.duoshield.app.ui.PermissionsOnboardingActivity.isCompleted(this)
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
