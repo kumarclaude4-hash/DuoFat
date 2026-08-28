@@ -271,13 +271,12 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
 
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    // NOTE: androidx.activity is deliberately NOT declared here. WatchTogetherActivity uses
-    // OnBackPressedCallback + getOnBackPressedDispatcher() directly, but activity resolves
-    // transitively to 1.8.0 (appcompat asks for 1.6.0; something later in the graph wins the
-    // conflict), which carries both APIs. Pinning it explicitly at 1.6.0 drags
-    // lifecycle-viewmodel-savedstate:2.5.1 metadata into the graph, and since this build
-    // enforces Gradle dependency verification, that unverified artifact fails
-    // :app:checkDebugAarMetadata. If it ever needs declaring, use 1.8.0 and regenerate
+    // NOTE: androidx.activity is deliberately NOT declared here. It resolves transitively to
+    // 1.8.0 (appcompat asks for 1.6.0; something later in the graph wins the conflict), which
+    // carries the OnBackPressedCallback / getOnBackPressedDispatcher() APIs. Pinning it
+    // explicitly at 1.6.0 drags lifecycle-viewmodel-savedstate:2.5.1 metadata into the graph,
+    // and since this build enforces Gradle dependency verification, that unverified artifact
+    // fails :app:checkDebugAarMetadata. If it ever needs declaring, use 1.8.0 and regenerate
     // gradle/verification-metadata.xml in the same change.
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
@@ -445,17 +444,6 @@ dependencies {
 
     // Unit tests
     testImplementation 'junit:junit:4.13.2'
-
-    // Real org.json for JVM unit tests.
-    //
-    // android.jar ships org.json as a stub, and `testOptions.unitTests.returnDefaultValues`
-    // (see above) turns those stubs into silent no-ops instead of exceptions. Without a real
-    // implementation on the test classpath, JSONObject.optString() would quietly return ""
-    // and every YouTubeSearchParser test would PASS while asserting nothing — the worst
-    // possible failure mode. This dependency puts the genuine article ahead of the stub, and
-    // YouTubeSearchParserTest.orgJsonIsTheRealImplementationNotTheAndroidStub() fails loudly
-    // if that ever stops being true. Test-only: it is not packaged into the APK.
-    testImplementation 'org.json:json:20231013'
 
     // Robolectric — real Android implementations for JVM unit tests.
     //

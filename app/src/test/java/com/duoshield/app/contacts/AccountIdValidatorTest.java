@@ -9,8 +9,7 @@ import org.junit.Test;
 /**
  * Unit tests for {@link AccountIdValidator} (S08-L1).
  *
- * <p>Runs on the JVM, no Android dependency — same pattern as
- * {@code YouTubeUrlParserTest}. Covers the shape {@code AddContactActivity.handleDeepLink()}
+ * <p>Runs on the JVM, no Android dependency. Covers the shape {@code AddContactActivity.handleDeepLink()}
  * must now enforce on attacker-controlled deep-link paths (it previously trusted any
  * non-empty path unconditionally), and the shape {@code tryPasteFromClipboard()} already
  * enforced before this fix (kept passing to confirm both entry points now share identical
