@@ -63,6 +63,12 @@
             </intent-filter>
         </activity>
 
+        <!-- First-run permissions onboarding (shown once, before auth routing) -->
+        <activity
+            android:name=".ui.PermissionsOnboardingActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DuoShield" />
+
         <!-- Sign-In (no longer the launcher) -->
         <activity
             android:name=".SignInActivity"
@@ -155,7 +161,7 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- ─��� Add Contact & Settings ─────���────────────────── -->
+        <!-- ─����� Add Contact & Settings ─────���────────────────── -->
         <activity
             android:name=".ui.AddContactActivity"
             android:exported="true">

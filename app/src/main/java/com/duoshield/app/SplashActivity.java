@@ -115,6 +115,22 @@ public class SplashActivity extends AppCompatActivity {
     }
 
     private void navigate() {
+        // First launch ever: show the consolidated permissions screen before any
+        // auth routing. It requests every essential runtime permission in one
+        // batch, then hands off to MainActivity (the routing trampoline), which
+        // makes the same authenticated-vs-signed-out decision the code below would.
+        // The one-shot flag means this only ever happens once; every later launch
+        // falls straight through to the normal routing.
+        if (!com.duoshield.app.ui.PermissionsOnboardingActivity.isCompleted(this)) {
+            Log.i(TAG, "navigate → PermissionsOnboardingActivity (first run)");
+            Intent perms = new Intent(this, com.duoshield.app.ui.PermissionsOnboardingActivity.class);
+            perms.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(perms);
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+            finish();
+            return;
+        }
+
         // S06-M5 / S06-H3: resume any interrupted teardown and drain any pending
         // account-lock intent BEFORE the auth-state check below runs, so routing
         // decisions are made against a state where both are already resolved for
