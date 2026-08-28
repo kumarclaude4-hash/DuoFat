@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bottom scrim behind the "You" label inside the local PiP.
+     Google Meet fades the tile darker toward the bottom edge so the label reads
+     cleanly over the video instead of sitting on a hard black bar. A top→bottom
+     transparent→dark gradient reproduces that. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="90"
+        android:startColor="#00000000"
+        android:endColor="#99000000" />
+</shape>

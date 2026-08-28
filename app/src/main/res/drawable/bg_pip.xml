@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Local video PiP container — ds_surface_2 (#2D2938) with 14 dp corners.
-     Slightly lighter than ds_background so the PiP reads as a raised card
-     over the remote video feed, consistent with the brand elevation system. -->
+<!-- Local video PiP container — Google Meet 1:1 self-tile look.
+     A near-black fill sits behind the self video so the tile reads as a solid
+     rounded card while frames are still arriving, with 16 dp corners to match
+     Meet's self-view rounding. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#2D2938" />
-    <corners android:radius="14dp" />
+    <solid android:color="#12151C" />
+    <corners android:radius="16dp" />
 </shape>

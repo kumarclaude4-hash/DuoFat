@@ -34,11 +34,8 @@ import org.webrtc.EglBase;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoTrack;
 
-import com.duoshield.app.call.TurnBandwidthTracker;
-import com.duoshield.app.call.TurnCredentialFetcher;
-import com.duoshield.app.call.watch.WatchTogetherActivity;
-import com.duoshield.app.call.watch.WatchTogetherRepository;
-import com.duoshield.app.call.watch.WatchTogetherState;
+    import com.duoshield.app.call.TurnBandwidthTracker;
+    import com.duoshield.app.call.TurnCredentialFetcher;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
@@ -113,7 +110,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View                btnFlipLayout;
     private View                btnBack;
     private ImageView           btnChat;
-    private ImageView           btnWatch;
 
     // TURN quota warning banner
     private View     bannerTurnWarning;
@@ -123,7 +119,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     private View     bannerNewMessage;
     private TextView tvNewMsgPreview;
     private View     btnChatLayout;
-    private View     btnWatchLayout;
     private final Handler         bannerDismissHandler = new Handler(Looper.getMainLooper());
     private ListenerRegistration  chatMessageListener;
     private final Set<String>     seenChatMsgIds = new HashSet<>();
@@ -477,8 +472,15 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
     protected void onResume() {
         super.onResume();
         isActivityVisible = true;
-        // Returning here means the in-call chat (or Watch Together) was dismissed.
+        // Returning here means the in-call chat was dismissed.
         chatScreenOpen = false;
+        // Coming back to the call from Home/Recents (the middle button) or another screen:
+        // re-show the self-view PiP so it behaves like Google Meet. The SurfaceViewRenderer
+        // itself recovers its frames automatically once the surface is recreated; we just have
+        // to make sure the tile is visible again for a video call whose camera is still on.
+        if (isVideo && !isCameraOff && localVideoPip != null) {
+            localVideoPip.setVisibility(View.VISIBLE);
+        }
         // Re-attach if a listener error killed the registration while we were away.
         listenForInCallMessages();
         // Surface anything that arrived while the call screen was not on top.
@@ -573,7 +575,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         btnFlipLayout         = findViewById(R.id.btnFlipLayout);
         btnBack               = findViewById(R.id.btnBack);
         btnChat               = findViewById(R.id.btnChat);
-        btnWatch              = findViewById(R.id.btnWatch);
 
         // TURN banner
         bannerTurnWarning = findViewById(R.id.bannerTurnWarning);
@@ -587,7 +588,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         bannerNewMessage = findViewById(R.id.bannerNewMessage);
         tvNewMsgPreview  = findViewById(R.id.tvNewMsgPreview);
         btnChatLayout    = findViewById(R.id.btnChatLayout);
-        btnWatchLayout   = findViewById(R.id.btnWatchLayout);
         if (bannerNewMessage != null) {
             bannerNewMessage.setOnClickListener(v -> {
                 bannerNewMessage.setVisibility(View.GONE);
@@ -604,13 +604,11 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         if (isVideo) {
             btnCameraLayout.setVisibility(View.VISIBLE);
             if (btnChatLayout          != null) btnChatLayout.setVisibility(View.VISIBLE);
-            if (btnWatchLayout         != null) btnWatchLayout.setVisibility(View.VISIBLE);
-            refreshWatchTogetherAwareness();
             // btnFlipLayout lives inside localVideoPip; visible once PiP appears
         }
     }
 
-    // ── Button listeners ──────────────────────────────────────────────────────
+    // ── Button listeners ─────────────────────────────────────────────────────��
 
     private void setupButtons() {
         // Back (ends the call)
@@ -655,11 +653,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // In-call chat
         if (btnChat != null) {
             btnChat.setOnClickListener(v -> openInCallChat());
-        }
-
-        // Watch Together
-        if (btnWatch != null) {
-            btnWatch.setOnClickListener(v -> openWatchTogether());
         }
 
         // Draggable PiP — WhatsApp-style free drag, snaps to edge on release.
@@ -923,6 +916,21 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         remoteVideoView.init(eglBase.getEglBaseContext(), null);
         remoteVideoView.setMirror(false);
         remoteVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
+
+        // ── ROOT CAUSE OF "I can't see my own video" (the transparent PiP) ──
+        // Both the remote feed and the local PiP are GPU SurfaceViews. By default every
+        // SurfaceView punches a hole through the window and is composited BEHIND it, so two
+        // overlapping SurfaceViews render in an undefined Z order — on most devices the
+        // full-screen remote surface wins and the smaller PiP surface is drawn underneath it,
+        // which is exactly why the "You" tile looked see-through (you saw the remote feed
+        // through it) for the first seconds of every call.
+        //
+        // setZOrderMediaOverlay(true) lifts the local surface onto the media-overlay layer so it
+        // composites ON TOP of the remote surface. It MUST be called before init() creates the
+        // surface. This also makes the PiP survive returning to the call from Home/Recents (the
+        // middle button): the overlay ordering is re-applied when the surface is recreated, so
+        // the self-view comes back instead of going blank — matching Google Meet.
+        localVideoView.setZOrderMediaOverlay(true);
         localVideoView.init(eglBase.getEglBaseContext(), null);
         // The capturer starts on the front camera, whose frames are un-mirrored (i.e. reversed
         // from the user's point of view). Mirroring the self-preview makes it behave like a
@@ -1143,7 +1151,7 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
      * <ul>
      *   <li><b>In-call chat open</b> — the message is already visible in the thread, so a
      *       banner would be noise. Skip it.</li>
-     *   <li><b>Call screen hidden</b> (Watch Together, home button, another app) — hold the
+     *   <li><b>Call screen hidden</b> (home button, another app) — hold the
      *       latest preview and show it from {@link #onResume()}.</li>
      *   <li><b>Call screen visible</b> — show it now.</li>
      * </ul>
@@ -1209,53 +1217,6 @@ public class CallActivity extends AppCompatActivity implements CallManager.CallL
         // voice-only call.
         intent.putExtra(InCallChatActivity.EXTRA_IS_VIDEO, isVideo);
         startActivity(intent);
-    }
-
-    // ── Watch Together ──────────────────────────────────────────────────────────
-
-    /**
-     * Launches the Watch Together screen for the active call. Mirrors
-     * {@link #openInCallChat()}: guards on an established call, then passes the
-     * same call/session extras the Watch Together sync layer needs
-     * ({@code callId}, {@code myUid}, {@code partnerName}). The YouTube media is
-     * fetched locally by each client — it never touches the WebRTC path.
-     */
-    private void openWatchTogether() {
-        if (callId == null || myUid == null) {
-            Toast.makeText(this, "Watch Together unavailable — call not yet established",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        Intent intent = new Intent(this, WatchTogetherActivity.class);
-        intent.putExtra(WatchTogetherActivity.EXTRA_CALL_ID,      callId);
-        intent.putExtra(WatchTogetherActivity.EXTRA_MY_UID,       myUid);
-        intent.putExtra(WatchTogetherActivity.EXTRA_PARTNER_NAME, partnerName);
-        startActivity(intent);
-    }
-
-    /**
-     * One-shot awareness hint for the control-bar Watch Together button.
-     *
-     * <p>If a Watch Together session is already active for this call (the partner started
-     * one, or we left and came back), reflect that on the button so the user knows a tap
-     * will <em>rejoin</em> rather than start fresh. This is deliberately a single
-     * {@link WatchTogetherRepository#fetchState} read — <strong>not</strong> a second
-     * always-on listener. The listener that actually drives playback sync lives in
-     * {@link WatchTogetherActivity}; {@code CallActivity} only needs a lightweight, one-time
-     * hint. The read is budget-gated inside the repository, so it is a safe no-op when the
-     * Firestore read budget is exhausted, and the callback is delivered on the main thread.
-     */
-    private void refreshWatchTogetherAwareness() {
-        if (callId == null || btnWatch == null) return;
-        new WatchTogetherRepository(this).fetchState(callId, state -> {
-            if (btnWatch == null) return;
-            boolean sessionActive = state != null && state.isPlayable();
-            btnWatch.setContentDescription(
-                    sessionActive ? "Rejoin Watch Together" : "Watch Together");
-            // Semantic-only emphasis: harmless if the icon has no state-list drawable, and
-            // lights up automatically if a selected state is ever added to it.
-            btnWatch.setSelected(sessionActive);
-        });
     }
 
     // ── TURN quota warning ────────────────────────────────────────��───────────

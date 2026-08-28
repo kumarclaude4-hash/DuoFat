@@ -205,15 +205,11 @@ public class CallSignalRepository {
     }
 
     /**
-     * Deletes the call doc AND all four known subcollections:
-     * callerCandidates, calleeCandidates, chat, watch.
-     *
-     * <p>{@code watch} holds the single ephemeral Watch Together state document
-     * ({@code calls/{callId}/watch/state}). Like in-call chat, it must not outlive the
-     * call.
+     * Deletes the call doc AND all three known subcollections:
+     * callerCandidates, calleeCandidates, chat.
      */
     public void deleteCallDoc(String callId) {
-        String[] subcollections = {"callerCandidates", "calleeCandidates", "chat", "watch"};
+        String[] subcollections = {"callerCandidates", "calleeCandidates", "chat"};
         for (String sub : subcollections) {
             db.collection(COLLECTION).document(callId).collection(sub).get()
                     .addOnSuccessListener(snap -> {
