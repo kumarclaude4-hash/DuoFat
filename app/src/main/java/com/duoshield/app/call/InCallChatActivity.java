@@ -68,24 +68,30 @@ public class InCallChatActivity extends AppCompatActivity {
     private EditText     etMessage;
 
     // ── Floating call PiP ─────────────────────────────────────────────────────
-    private FrameLayout        pipContainer;
-    private SurfaceViewRenderer pipVideoView;
-    private ImageView          ivPipMuteBadge;
-    private TextView           tvPipLabel;
+    private FrameLayout         pipContainer;
+    private SurfaceViewRenderer pipVideoView;      // large tile
+    private FrameLayout         pipSelfContainer;  // inset tile wrapper
+    private SurfaceViewRenderer pipSelfVideoView;  // inset tile
+    private ImageView           ivPipMuteBadge;
+    private TextView            tvPipLabel;
 
     /** True once {@link SurfaceViewRenderer#init} ran — guards a double release(). */
     private boolean pipInitialised = false;
-    /** Which side the PiP is showing. Tapping the PiP flips it. */
-    private boolean pipShowsRemote = true;
     /**
-     * The track this screen's renderer is currently a sink of.
+     * False by default: the partner fills the large tile and our self-view sits in the inset,
+     * matching Google Meet. Tapping the inset flips the two.
+     */
+    private boolean pipSwapped = false;
+    /**
+     * The tracks each renderer is currently a sink of.
      *
-     * <p>Tracked explicitly because it must be detached again in {@link #onPause()} /
+     * <p>Tracked explicitly because they must be detached again in {@link #onPause()} /
      * {@link #onDestroy()}: attaching a second sink to a track that {@code CallActivity} is
      * already rendering is fine, but leaving it attached after this screen goes away leaks the
      * renderer and can crash libwebrtc when the track is disposed at the end of the call.
      */
-    private VideoTrack pipTrack;
+    private VideoTrack pipMainTrack;
+    private VideoTrack pipSelfTrack;
 
     /**
      * Repaint loop for the PiP's non-push state.
@@ -165,8 +171,9 @@ public class InCallChatActivity extends AppCompatActivity {
         // renderer, otherwise repeatedly opening and closing this screen leaks renderers and
         // can crash the GL thread in libwebrtc.
         detachPipSink();
-        if (pipInitialised && pipVideoView != null) {
-            pipVideoView.release();
+        if (pipInitialised) {
+            if (pipVideoView     != null) pipVideoView.release();
+            if (pipSelfVideoView != null) pipSelfVideoView.release();
             pipInitialised = false;
         }
     }
@@ -238,11 +245,13 @@ public class InCallChatActivity extends AppCompatActivity {
      * <p>The PiP stays hidden for voice-only calls and whenever no call session is reachable.
      */
     private void initPip() {
-        pipContainer   = findViewById(R.id.callPipContainer);
-        pipVideoView   = findViewById(R.id.pipVideoView);
-        ivPipMuteBadge = findViewById(R.id.ivPipMuteBadge);
-        tvPipLabel     = findViewById(R.id.tvPipLabel);
-        if (pipContainer == null || pipVideoView == null) return;
+        pipContainer     = findViewById(R.id.callPipContainer);
+        pipVideoView     = findViewById(R.id.pipVideoView);
+        pipSelfContainer = findViewById(R.id.pipSelfContainer);
+        pipSelfVideoView = findViewById(R.id.pipSelfVideoView);
+        ivPipMuteBadge   = findViewById(R.id.ivPipMuteBadge);
+        tvPipLabel       = findViewById(R.id.tvPipLabel);
+        if (pipContainer == null || pipVideoView == null || pipSelfVideoView == null) return;
 
         if (!isVideo) {
             // Voice-only call — nothing to float.
@@ -259,16 +268,21 @@ public class InCallChatActivity extends AppCompatActivity {
         }
 
         pipVideoView.init(egl.getEglBaseContext(), null);
-        pipVideoView.setMirror(false);
         pipVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
         pipVideoView.setEnableHardwareScaler(true);
+
+        pipSelfVideoView.init(egl.getEglBaseContext(), null);
+        pipSelfVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
+        pipSelfVideoView.setEnableHardwareScaler(true);
+        // The inset sits on top of the main tile, so it must draw above it in the same window.
+        pipSelfVideoView.setZOrderMediaOverlay(true);
         pipInitialised = true;
 
         setupPipGestures();
     }
 
     /**
-     * Tap to swap between the partner's video and the self-view; drag to reposition.
+     * Tap the inset to swap which participant fills the large tile; drag to reposition.
      *
      * <p>Free-float rather than corner-snapping: this window shares the screen with a message
      * list and an input row, so the user needs to be able to park it anywhere that is not
@@ -310,29 +324,43 @@ public class InCallChatActivity extends AppCompatActivity {
 
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    if (!dragged[0]) {
-                        pipShowsRemote = !pipShowsRemote;
-                        syncPip();
-                    }
+                    if (!dragged[0]) swapPip();
                     return true;
             }
             return false;
         });
+
+        // The inset is the affordance users reach for first (Meet/WhatsApp behaviour), but it
+        // sits inside the draggable container, so it must not swallow drags: it only claims the
+        // gesture once it resolves to a click.
+        if (pipSelfContainer != null) {
+            pipSelfContainer.setOnClickListener(v -> swapPip());
+        }
+    }
+
+    /** Flips which participant fills the large tile. */
+    private void swapPip() {
+        pipSwapped = !pipSwapped;
+        syncPip();
     }
 
     /**
-     * Points the renderer at the track the user asked for and refreshes the overlays.
+     * Points both renderers at their participant and refreshes the overlays.
      *
-     * <p>Called on resume, on tap, and once a second: the remote track usually arrives after
+     * <p>Called on resume, on swap, and once a second: the remote track usually arrives after
      * this screen is already open, and the mic-mute badge has to track the call's state without
      * a listener.
+     *
+     * <p>While only one side has a renderable track (typically before the answer completes) the
+     * inset collapses and the available video takes the whole window, so the user never sees an
+     * empty black square.
      */
     private void syncPip() {
         if (!pipInitialised || pipContainer == null) return;
 
         CallManager call = CallManager.getActive();
         if (call == null) {
-            // Call ended while the chat was open — stop rendering a track that is about to be
+            // Call ended while the chat was open — stop rendering tracks that are about to be
             // disposed rather than leaving a frozen frame on screen.
             detachPipSink();
             pipContainer.setVisibility(View.GONE);
@@ -341,49 +369,84 @@ public class InCallChatActivity extends AppCompatActivity {
 
         VideoTrack remote = call.getRemoteVideoTrack();
         VideoTrack local  = call.getLocalVideoTrack();
-        // Prefer the partner's video, fall back to the self-view until it arrives.
-        boolean showRemote = pipShowsRemote && remote != null;
-        VideoTrack target  = showRemote ? remote : local;
 
-        if (target == null) {
-            detachPipSink();
-            pipContainer.setVisibility(View.GONE);
-            return;
-        }
+        // The partner owns the large tile unless the user swapped.
+        VideoTrack mainTrack = pipSwapped ? local  : remote;
+        VideoTrack selfTrack = pipSwapped ? remote : local;
+        boolean mainIsLocal  = pipSwapped;
 
-        if (target != pipTrack) {
-            detachPipSink();
-            try {
-                target.addSink(pipVideoView);
-                pipTrack = target;
-            } catch (Exception e) {
-                Log.w(TAG, "PiP addSink failed", e);
+        // Only one side available — promote it to the large tile and hide the inset.
+        if (mainTrack == null || selfTrack == null) {
+            VideoTrack only = mainTrack != null ? mainTrack : selfTrack;
+            if (only == null) {
+                detachPipSink();
                 pipContainer.setVisibility(View.GONE);
                 return;
             }
+            mainIsLocal = (only == local);
+            mainTrack   = only;
+            selfTrack   = null;
         }
 
+        if (!attachPipSink(true, mainTrack)) return;
+        attachPipSink(false, selfTrack);
+
+        pipVideoView.setMirror(mainIsLocal);
+        pipSelfVideoView.setMirror(!mainIsLocal);
+
         pipContainer.setVisibility(View.VISIBLE);
-        if (tvPipLabel != null) {
-            tvPipLabel.setText(showRemote ? partnerName : "You");
+        if (pipSelfContainer != null) {
+            pipSelfContainer.setVisibility(selfTrack != null ? View.VISIBLE : View.GONE);
         }
-        // The badge reflects *our* microphone, so it only belongs on the self-view.
+        if (tvPipLabel != null) {
+            tvPipLabel.setText(mainIsLocal ? "You" : partnerName);
+        }
+        // The badge reflects *our* microphone, so it rides whichever tile is showing us — and
+        // is dropped entirely when the self-view is not on screen at all.
         if (ivPipMuteBadge != null) {
-            ivPipMuteBadge.setVisibility(!showRemote && call.isMicMuted()
+            boolean selfIsUs = selfTrack != null && !mainIsLocal;
+            ivPipMuteBadge.setVisibility(selfIsUs && call.isMicMuted()
                     ? View.VISIBLE : View.GONE);
         }
     }
 
-    /** Detaches the renderer from whatever track it is rendering. Safe to call repeatedly. */
-    private void detachPipSink() {
-        if (pipTrack == null) return;
-        try {
-            pipTrack.removeSink(pipVideoView);
-        } catch (Exception e) {
-            // The track may already be disposed if the call ended first — nothing to undo.
-            Log.w(TAG, "PiP removeSink failed", e);
+    /**
+     * Makes one renderer the sink of {@code target}, detaching whatever it rendered before.
+     *
+     * @param main true for the large tile, false for the inset
+     * @return false only when the large tile could not be attached, i.e. the window was hidden
+     */
+    private boolean attachPipSink(boolean main, VideoTrack target) {
+        SurfaceViewRenderer view = main ? pipVideoView : pipSelfVideoView;
+        VideoTrack current       = main ? pipMainTrack : pipSelfTrack;
+        if (current == target) return true;
+
+        if (current != null) {
+            try {
+                current.removeSink(view);
+            } catch (Exception e) {
+                // The track may already be disposed if the call ended first — nothing to undo.
+                Log.w(TAG, "PiP removeSink failed", e);
+            }
         }
-        pipTrack = null;
+        if (main) pipMainTrack = null; else pipSelfTrack = null;
+
+        if (target == null) return true;
+        try {
+            target.addSink(view);
+            if (main) pipMainTrack = target; else pipSelfTrack = target;
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "PiP addSink failed", e);
+            if (main) pipContainer.setVisibility(View.GONE);
+            return false;
+        }
+    }
+
+    /** Detaches both renderers from whatever they render. Safe to call repeatedly. */
+    private void detachPipSink() {
+        attachPipSink(true, null);
+        attachPipSink(false, null);
     }
 
     // ── Firestore ─────────────────────────────────────────────────────────────

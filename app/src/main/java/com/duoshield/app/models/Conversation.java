@@ -6,6 +6,16 @@ public class Conversation {
     public String partnerUid;
     public String lastMessage;
     public long   lastMessageTs;
+    /**
+     * Timestamp the conversation list sorts on, newest first.
+     *
+     * <p>Separate from {@link #lastMessageTs} because that field is 0 for a chat with no messages
+     * yet (and briefly for a message whose {@code serverTimestamp()} has not resolved). Sorting on
+     * it directly left every such chat tied at 0, so the list fell back to Firestore's arbitrary
+     * document order instead of keeping the newest conversation on top. Populated by the list
+     * screen — see {@code ConversationListActivity.resolveSortTs}.
+     */
+    public long   sortTs;
     public int    unreadCount;
     public boolean isTyping;
     public boolean isOnline;
@@ -36,6 +46,9 @@ public class Conversation {
         c.partnerName   = g.name;
         c.lastMessage   = g.lastMessage;
         c.lastMessageTs = g.lastMessageTs;
+        // A freshly created group has no messages, so fall back to when it was created —
+        // otherwise it sorts at 0 and lands at the bottom of the list instead of the top.
+        c.sortTs        = g.lastMessageTs > 0 ? g.lastMessageTs : g.createdAt;
         return c;
     }
 }
