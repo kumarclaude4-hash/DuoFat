@@ -142,6 +142,7 @@ public class ConversationAdapter
                 android.content.Intent i = new android.content.Intent(
                         h.avatar.getContext(), com.duoshield.app.FullScreenImageActivity.class);
                 i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, finalAvatarUrl);
+                i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_IS_PROFILE_PHOTO, true);
                 h.avatar.getContext().startActivity(i);
             });
         } else {

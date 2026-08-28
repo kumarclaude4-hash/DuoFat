@@ -1482,6 +1482,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 android.content.Intent i = new android.content.Intent(
                         ctx, com.duoshield.app.FullScreenImageActivity.class);
                 i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_URL, avatarSnapshot);
+                i.putExtra(com.duoshield.app.FullScreenImageActivity.EXTRA_IS_PROFILE_PHOTO, true);
                 ctx.startActivity(i);
             });
         } else {
