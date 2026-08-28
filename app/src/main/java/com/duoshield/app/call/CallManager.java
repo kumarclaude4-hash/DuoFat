@@ -1260,6 +1260,16 @@ public class CallManager {
     }
 
     private void setState(CallState state) {
+        if (state == null) return;
+        // Terminal calls cannot be resurrected by a late ICE, SDP, or Firestore callback.
+        // This is especially important after cleanup(), when a queued callback may still
+        // arrive from a WebRTC or listener thread.
+        if ((currentState == CallState.ENDED || currentState == CallState.FAILED)
+                && state != currentState) {
+            Log.d(TAG, "Ignoring late state " + state + " after " + currentState);
+            return;
+        }
+        if (currentState == state) return;
         currentState = state;
         if (listener != null) listener.onCallStateChanged(state);
 
