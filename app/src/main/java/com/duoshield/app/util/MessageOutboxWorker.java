@@ -43,6 +43,10 @@ public final class MessageOutboxWorker extends Worker {
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(MessageOutboxWorker.class)
                 .setConstraints(constraints)
+                // Foreground send paths write directly to Firestore after enqueueing the
+                // durable row. Give that write time to finish so the worker is recovery-only,
+                // not a competing second writer for the same document ID.
+                .setInitialDelay(30, TimeUnit.SECONDS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
                 .addTag(UNIQUE_WORK)
                 .build();

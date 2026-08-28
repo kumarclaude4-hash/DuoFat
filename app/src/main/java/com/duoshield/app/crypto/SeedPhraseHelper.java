@@ -600,13 +600,13 @@ public final class SeedPhraseHelper {
     /**
      * Derives a deterministic DuoShield User ID from the 64-byte seed.
      *
-     * <p>SHA-256(seed) → first 8 bytes → Base32 custom alphabet → 13 chars
+     * <p>SHA-256(seed) → first 8 bytes → custom 31-symbol alphabet → 13 chars
      * formatted as {@code XXXXX-XXXXX-XXX}.
      *
-     * <p>Alphabet is 32 characters with no visually ambiguous glyphs:
-     * {@code 23456789ABCDEFGHJKLMNPQRSTUVWXYZ} (omits O, I, L, 0, 1).
+     * <p>Alphabet has no visually ambiguous glyphs:
+     * {@code 23456789ABCDEFGHJKMNPQRSTUVWXYZ} (omits O, I, L, 0, 1).
      *
-     * <p>Uses 8 bytes (64 bits) → ~13 base-32 digits, giving approximately
+     * <p>Uses 8 bytes (64 bits) → ~13 base-31 digits, giving approximately
      * 1.8 × 10¹⁹ unique IDs — same collision resistance as the old hex format
      * but far more readable and user-friendly.
      *
@@ -614,7 +614,7 @@ public final class SeedPhraseHelper {
      * @return User ID string like {@code "K3MNP-Q8RXA-7BC"}.
      */
     public static String deriveUserId(byte[] seed) throws Exception {
-        final String ALPHA = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 unambiguous chars
+        final String ALPHA = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // 32 unambiguous chars (omits I, L, O, 0, 1)
         byte[] hash = sha256(seed);
 
         // Pack first 8 bytes into a positive BigInteger
@@ -622,7 +622,7 @@ public final class SeedPhraseHelper {
         System.arraycopy(hash, 0, slice, 1, 8);
         BigInteger n = new BigInteger(slice);
 
-        BigInteger base = BigInteger.valueOf(32);
+        BigInteger base = BigInteger.valueOf(ALPHA.length());
         char[] digits = new char[13];
         for (int i = 12; i >= 0; i--) {
             BigInteger[] dr = n.divideAndRemainder(base);

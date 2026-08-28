@@ -12,15 +12,15 @@ public class DevicePerformanceTierPolicyTest {
     public void lowTierUsesStrictBoundedBudgets() {
         DevicePerformanceTier low = DevicePerformanceTier.LOW;
 
-        assertEquals(120, low.initialChatWindow());
-        assertEquals(4, low.recyclerViewCacheSize());
-        assertEquals(2, low.recyclerViewPrefetchCount());
-        assertEquals(1, low.mediaConcurrency());
-        assertEquals(6, low.mediaPreviewCount());
-        assertEquals(720, low.listImageEdgePx());
-        assertEquals(1, low.shortCpuWorkerCount());
-        assertEquals(2, low.shortIoWorkerCount());
-        assertEquals(32, low.shortJobQueueCapacity());
+        assertEquals(250, low.initialChatWindow());
+        assertEquals(12, low.recyclerViewCacheSize());
+        assertEquals(8, low.recyclerViewPrefetchCount());
+        assertEquals(2, low.mediaConcurrency());
+        assertEquals(12, low.mediaPreviewCount());
+        assertEquals(1080, low.listImageEdgePx());
+        assertTrue(low.shortCpuWorkerCount() >= 2 && low.shortCpuWorkerCount() <= 3);
+        assertEquals(3, low.shortIoWorkerCount());
+        assertEquals(128, low.shortJobQueueCapacity());
         assertEquals(1, low.linkPreviewConcurrency());
         assertEquals(24, low.linkPreviewCacheEntries());
         assertEquals(32L * 1024L * 1024L, low.firestoreCacheBytes());

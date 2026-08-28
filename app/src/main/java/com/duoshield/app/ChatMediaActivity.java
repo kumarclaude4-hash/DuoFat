@@ -1209,8 +1209,10 @@ public class ChatMediaActivity extends BaseActivity {
                 "", 0, "voice", null, null, m.getExpiresAt(), now);
         queued.setMediaMetadata(storagePath, mediaKey, null, null, false);
         queued.setVoiceMetadata(new org.json.JSONArray(sampledAmps).toString(), durationMs);
-        AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
-        MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+        dbExecutor.execute(() -> {
+            AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
+            MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+        });
 
         db.collection("chats").document(conversationId)
           .collection("messages").document(msgId).set(doc)
@@ -3658,8 +3660,10 @@ public class ChatMediaActivity extends BaseActivity {
         OutboxMessage queued = new OutboxMessage(msgId, conversationId, partnerUid, myUid,
                 "", 0, mediaType, null, null, exp, now);
         queued.setMediaMetadata(storagePath, mediaKey, sealedThumb, caption, chunked);
-        AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
-        MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+        dbExecutor.execute(() -> {
+            AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(queued);
+            MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+        });
 
         db.collection("chats").document(conversationId)
 

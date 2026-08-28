@@ -67,6 +67,9 @@ public class AccountIdValidatorTest {
         assertNull(AccountIdValidator.canonicalizeOrNull("K3MN0-Q8RXA-7BC"));
         assertNull(AccountIdValidator.canonicalizeOrNull("K3MNO-Q8RXA-7BC".replace('O', '0')));
         assertNull(AccountIdValidator.canonicalizeOrNull("K3MN1-Q8RXA-7BC"));
+        assertNull(AccountIdValidator.canonicalizeOrNull("K3MNL-Q8RXA-7BC"));
+        assertNull(AccountIdValidator.canonicalizeOrNull("K3MNI-Q8RXA-7BC"));
+        assertNull(AccountIdValidator.canonicalizeOrNull("K3MNO-Q8RXA-7BC"));
     }
 
     @Test

@@ -256,7 +256,7 @@ public class SeedPhraseHelperTest {
         // and the acceptance regex in AddContactActivity.
         assertEquals("userId must be 15 chars total (5+1+5+1+3)", 15, userId.length());
         assertTrue("userId must match XXXXX-XXXXX-XXX Base32 format",
-                userId.matches("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}"));
+                userId.matches("[23456789A-HJKMNP-Z]{5}-[23456789A-HJKMNP-Z]{5}-[23456789A-HJKMNP-Z]{3}"));
         assertFalse("Base32 alphabet must exclude ambiguous chars O, I, L, 0, 1",
                 userId.matches(".*[OIL01].*"));
         System.out.println("Derived userId: [REDACTED — format OK]");

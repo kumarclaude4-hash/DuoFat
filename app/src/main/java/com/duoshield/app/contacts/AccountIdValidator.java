@@ -36,7 +36,7 @@ public final class AccountIdValidator {
 
     /** Five, dash, five, dash, three — unambiguous base32 alphabet only. */
     private static final Pattern ACCOUNT_ID_PATTERN =
-            Pattern.compile("[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{5}-[23456789A-HJ-NP-Z]{3}");
+            Pattern.compile("[23456789A-HJKMNP-Z]{5}-[23456789A-HJKMNP-Z]{5}-[23456789A-HJKMNP-Z]{3}");
 
     /**
      * Canonicalizes {@code raw} (trims surrounding whitespace, upper-cases) and returns
