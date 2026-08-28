@@ -41,6 +41,7 @@ import com.duoshield.app.crypto.signal.SignalSessionManager;
 import com.duoshield.app.db.AppDatabase;
 import org.signal.libsignal.protocol.message.CiphertextMessage;
 import com.duoshield.app.models.Message;
+import com.duoshield.app.models.OutboxMessage;
 // Biometric unlock removed — lock handled entirely by BaseActivity via PIN
 import com.duoshield.app.ui.MessageAdapter;
 import com.duoshield.app.ui.SettingsActivity;
@@ -73,6 +74,7 @@ import com.duoshield.app.util.InlineThumb;
 import com.duoshield.app.util.PresenceThrottle;
 import com.duoshield.app.util.ButtonPressAnimator;
 import com.duoshield.app.util.HapticHelper;
+import com.duoshield.app.util.MessageOutboxWorker;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 
@@ -3843,14 +3845,24 @@ public class ChatMediaActivity extends BaseActivity {
                 doc.put("isEncrypted", true); doc.put("sigType", r.sigType);
                 doc.put("type", "text"); doc.put("status", "sent");
                 doc.put("expiresAt", exp);
-                if (finalRId != null) { doc.put("replyToId", finalRId); doc.put("replyPreview", finalRPrv); }
+                                if (finalRId != null) { doc.put("replyToId", finalRId); doc.put("replyPreview", finalRPrv); }
                 doc.put("timestamp", FieldValue.serverTimestamp());
 
+                // Persist the encrypted envelope before the network write. A retry must replay
+                // this exact ciphertext; re-encrypting would advance the Signal ratchet again.
+                AppDatabase.getInstance(ChatMediaActivity.this).outboxDao().insert(
+                        new OutboxMessage(msgId, conversationId, partnerUid, myUid,
+                                r.ciphertextB64, r.sigType, "text", finalRId, finalRPrv, exp, now));
+                MessageOutboxWorker.enqueue(ChatMediaActivity.this);
+
                 db.collection("chats").document(conversationId)
+
                   .collection("messages").document(msgId).set(doc)
                   .addOnSuccessListener(v -> {
                       runOnUiThread(() -> { if (sendButton != null) sendButton.setEnabled(true); });
                       FirebaseCostGuard.getInstance(ChatMediaActivity.this).recordWrites(1);
+                      dbExecutor.execute(() -> AppDatabase.getInstance(ChatMediaActivity.this)
+                              .outboxDao().delete(msgId));
                       adapter.updateMessage(msgId, m -> m.setStatus("sent"));
                       // Store plaintext (not ciphertext) in Room — search & export use Room
                       Message stored = new Message(msgId, conversationId, myUid, plaintext, now, false);
@@ -3872,8 +3884,9 @@ public class ChatMediaActivity extends BaseActivity {
                       optimistic.setStatus("failed");
                       adapter.updateMessage(msgId, m -> m.setStatus("failed"));
                       saveToRoom(optimistic);
+                      MessageOutboxWorker.enqueue(ChatMediaActivity.this);
                       Toast.makeText(ChatMediaActivity.this,
-                              "Failed to send. Tap to retry.", Toast.LENGTH_SHORT).show();
+                              "Failed to send. It will retry automatically.", Toast.LENGTH_SHORT).show();
                   });
 
             } catch (Exception e) {

@@ -128,14 +128,17 @@ public class DuoShieldMessagingService extends FirebaseMessagingService {
         String senderName = remoteMessage.getData().get("senderName");
         String title = (senderName != null && !senderName.isEmpty()) ? senderName : "DuoShield";
 
+        // Privacy default: FCM payloads may contain a preview for delivery UX, but it must
+        // never reach the lock screen unless the user explicitly enables previews locally.
         String body = "New encrypted message";
-        // Prefer data body (push server always sets it)
-        String dataBody = remoteMessage.getData().get("body");
-        if (dataBody != null && !dataBody.isEmpty()) body = dataBody;
-        // Only use notification block body as last resort
-        if (remoteMessage.getNotification() != null) {
-            String nb = remoteMessage.getNotification().getBody();
-            if (nb != null && !nb.isEmpty() && body.equals("New encrypted message")) body = nb;
+        boolean previewsEnabled = prefs.getBoolean("notification_previews_enabled", false);
+        if (previewsEnabled) {
+            String dataBody = remoteMessage.getData().get("body");
+            if (dataBody != null && !dataBody.isEmpty()) body = dataBody;
+            if (remoteMessage.getNotification() != null) {
+                String nb = remoteMessage.getNotification().getBody();
+                if (nb != null && !nb.isEmpty() && body.equals("New encrypted message")) body = nb;
+            }
         }
 
         String senderUid = remoteMessage.getData().get("senderUid");

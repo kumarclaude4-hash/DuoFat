@@ -12,22 +12,24 @@ import com.duoshield.app.models.Group;
 import com.duoshield.app.models.GroupMember;
 import com.duoshield.app.models.Message;
 import com.duoshield.app.models.SignalSessionRecord;
+import com.duoshield.app.models.OutboxMessage;
 import com.duoshield.app.db.CallRecord;
 import net.sqlcipher.database.SQLiteDatabase;
 import net.sqlcipher.database.SupportFactory;
 
 @Database(
     entities = {
-        Message.class, SignalSessionRecord.class,
+        Message.class, SignalSessionRecord.class, OutboxMessage.class,
         Contact.class, Group.class, GroupMember.class, CallRecord.class
     },
-    version = 27
+    version = 28
 )
 public abstract class AppDatabase extends RoomDatabase {
 
     private static volatile AppDatabase instance;
 
     public abstract MessageDao      messageDao();
+    public abstract OutboxDao       outboxDao();
     public abstract SignalSessionDao signalSessionDao();
     public abstract ContactDao      contactDao();
     public abstract GroupDao        groupDao();
@@ -125,7 +127,8 @@ public abstract class AppDatabase extends RoomDatabase {
                 MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                 MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                 MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
-                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27)
+                MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27,
+                MIGRATION_27_28)
             .addCallback(new RoomDatabase.Callback() {
                 @Override public void onCreate(SupportSQLiteDatabase db) {
                     createSearchIndex(db);
@@ -384,6 +387,19 @@ public abstract class AppDatabase extends RoomDatabase {
      * maintained by SQLite triggers so Room, Firestore listeners, retries, edits,
      * tombstones, and optimistic sends all follow the same invariant.
      */
+    static final Migration MIGRATION_27_28 = new Migration(27, 28) {
+        @Override public void migrate(SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS outbox_messages (" +
+                    "id TEXT NOT NULL PRIMARY KEY, conversationId TEXT, recipientUid TEXT, " +
+                    "senderUid TEXT, ciphertext TEXT, sigType INTEGER NOT NULL, " +
+                    "messageType TEXT, replyToId TEXT, replyPreview TEXT, " +
+                    "expiresAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, " +
+                    "attemptCount INTEGER NOT NULL, nextAttemptAt INTEGER NOT NULL, lastError TEXT)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_outbox_messages_nextAttemptAt " +
+                    "ON outbox_messages(nextAttemptAt)");
+        }
+    };
+
     static final Migration MIGRATION_26_27 = new Migration(26, 27) {
         @Override public void migrate(SupportSQLiteDatabase db) {
             db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS message_search_fts USING fts5(" +

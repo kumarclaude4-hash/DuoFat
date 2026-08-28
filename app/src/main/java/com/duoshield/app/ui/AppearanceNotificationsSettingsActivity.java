@@ -25,6 +25,7 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
 
     private SharedPreferences prefs;
     private SwitchCompat switchNotifications;
+    private SwitchCompat switchNotificationPreviews;
     private TextView textLanguageSummary;
     private String[] languageTags;
     private String[] languageLabels;
@@ -58,12 +59,17 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
         prefs = getSharedPreferences("duoshield_prefs", MODE_PRIVATE);
 
         switchNotifications = findViewById(R.id.switchNotifications);
+        switchNotificationPreviews = findViewById(R.id.switchNotificationPreviews);
         textLanguageSummary = findViewById(R.id.textLanguageSummary);
         languageTags   = getResources().getStringArray(R.array.language_tags);
         languageLabels = getResources().getStringArray(R.array.language_labels);
 
         // ── Restore saved state ───────────────────────────────────────────────
         switchNotifications.setChecked(prefs.getBoolean("notifications_enabled", true));
+        if (switchNotificationPreviews != null) {
+            switchNotificationPreviews.setChecked(
+                    prefs.getBoolean("notification_previews_enabled", false));
+        }
         updateLanguageSummary();
 
         // ── Populate all pickers ──────────────────────────────────────────────
@@ -80,6 +86,10 @@ public class AppearanceNotificationsSettingsActivity extends BaseActivity {
         // ── Notifications switch ──────────────────────────────────────────────
         switchNotifications.setOnCheckedChangeListener((b, c) ->
                 prefs.edit().putBoolean("notifications_enabled", c).apply());
+        if (switchNotificationPreviews != null) {
+            switchNotificationPreviews.setOnCheckedChangeListener((b, c) ->
+                    prefs.edit().putBoolean("notification_previews_enabled", c).apply());
+        }
 
         findViewById(R.id.rowLanguage).setOnClickListener(v -> showLanguagePicker());
     }
