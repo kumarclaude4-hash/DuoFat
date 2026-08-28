@@ -19,6 +19,9 @@ public interface ContactDao {
     @Query("SELECT * FROM contacts WHERE uid = :uid LIMIT 1")
     Contact getByUid(String uid);
 
+    @Query("SELECT * FROM contacts WHERE conversationId = :conversationId LIMIT 1")
+    Contact getByConversationId(String conversationId);
+
     @Query("DELETE FROM contacts WHERE uid = :uid")
     void deleteByUid(String uid);
 

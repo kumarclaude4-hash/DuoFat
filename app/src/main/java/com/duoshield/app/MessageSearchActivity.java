@@ -20,6 +20,13 @@ public class MessageSearchActivity extends BaseActivity {
     public static final String EXTRA_MSG_ID = "msg_id";
     public static final String EXTRA_CONVERSATION_ID = "conversation_id";
     public static final String EXTRA_GLOBAL_SEARCH = "global_search";
+    /**
+     * Dedicated "Starred Messages" mode (Settings → Starred Messages), like WhatsApp's
+     * standalone starred list: locked to the STARRED filter, filter chips hidden, and the
+     * list loads immediately with no query needed. Always pass this together with
+     * {@link #EXTRA_GLOBAL_SEARCH} = true.
+     */
+    public static final String EXTRA_STARRED_ONLY = "starred_only";
 
     private EditText                 svSearch;
     private RecyclerView             recyclerView;
@@ -29,6 +36,8 @@ public class MessageSearchActivity extends BaseActivity {
     private String                   conversationId;
     private String                   myUid;
     private SearchHelper.Filter      activeFilter = SearchHelper.Filter.ALL;
+    private boolean                  globalSearch;
+    private boolean                  starredOnly;
 
     private final Handler   debounceHandler = new Handler(Looper.getMainLooper());
     private Runnable        debounceRunnable;
