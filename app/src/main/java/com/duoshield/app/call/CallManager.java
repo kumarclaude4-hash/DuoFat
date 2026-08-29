@@ -485,19 +485,31 @@ public class CallManager {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initOptions);
 
-        // Always capture through Android's communications path. On devices with approved
-        // platform effects this enables the vendor-tuned acoustic echo canceller and noise
-        // suppressor close to the microphone, which is the best first line of defence against
-        // speaker echo, fan noise, and low-frequency handling/table impacts.
+        // ── Voice isolation chain ────────────────────────────────────────────
+        // Capture always runs through Android's communications path so the microphone is
+        // tuned for speech rather than general recording.
+        //
+        // Hardware AEC stays on where the vendor ships an approved effect: echo cancellation
+        // benefits from sitting physically close to the capture buffer, where it still has an
+        // accurate reference of what the speaker just played.
+        //
+        // Hardware NS is deliberately left OFF even when supported. libwebrtc skips its own
+        // noise suppressor whenever the platform one is active — stacking both causes audible
+        // pumping — and vendor NS is tuned for stationary noise (fans, hum, street hiss). By
+        // owning suppression in software we get WebRTC's full APM instead: NS at its highest
+        // level, AGC2, the high-pass filter that removes the low-frequency energy of table
+        // knocks and handling thuds, and transient/typing-noise detection. That chain is also
+        // identical on every device, so behaviour no longer depends on the vendor's tuning.
         boolean hardwareAec = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported();
-        boolean hardwareNs = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported();
+        boolean hardwareNsAvailable = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported();
         audioDeviceModule = JavaAudioDeviceModule.builder(context)
                 .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 .setUseHardwareAcousticEchoCanceler(hardwareAec)
-                .setUseHardwareNoiseSuppressor(hardwareNs)
+                .setUseHardwareNoiseSuppressor(false)
                 .createAudioDeviceModule();
-        Log.i(TAG, "Voice isolation: source=VOICE_COMMUNICATION, hardwareAEC="
-                + hardwareAec + ", hardwareNS=" + hardwareNs);
+        Log.i(TAG, "Voice isolation: source=VOICE_COMMUNICATION, hardwareAEC=" + hardwareAec
+                + ", hardwareNS=off (available=" + hardwareNsAvailable
+                + ") — software APM owns noise suppression");
 
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         factory = PeerConnectionFactory.builder()
@@ -722,10 +734,12 @@ public class CallManager {
     // ─── Local media ─────────────────────────────────────────────────────────
 
     private void createLocalTracks(boolean withVideo) {
-        // Keep WebRTC audio processing enabled even when Android hardware effects are present.
-        // It is the fallback on unsupported devices and adds AGC, high-pass filtering for
-        // low-frequency thuds, and transient/typing-noise detection. The cutoff and suppression
-        // strength are managed internally by WebRTC to avoid clipping quiet conversational speech.
+        // Software APM is the primary noise-suppression stage (see initFactory: hardware NS is
+        // intentionally disabled so this chain is never bypassed). Ordering inside libwebrtc is
+        // fixed: high-pass filter → echo cancellation → noise suppression → gain control, which
+        // is why the low-frequency energy of table knocks is attenuated before NS has to judge
+        // whether the residue is speech. Suppression strength stays at WebRTC's own defaults
+        // rather than a hard gate, so quiet conversational speech is not clipped.
         MediaConstraints audioConstraints = new MediaConstraints();
         audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
@@ -745,6 +759,15 @@ public class CallManager {
                 new MediaConstraints.KeyValuePair("googHighpassFilter", "true"));
         audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googTypingNoiseDetection", "true"));
+        // Newer APM implementations of NS and AGC where the build provides them; ignored by
+        // builds that do not, so this is safe to request unconditionally.
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googExperimentalNoiseSuppression", "true"));
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googExperimentalAutoGainControl", "true"));
+        // One microphone, so channel swapping can only smear the signal.
+        audioConstraints.mandatory.add(
+                new MediaConstraints.KeyValuePair("googAudioMirroring", "false"));
         audioSource = factory.createAudioSource(audioConstraints);
         localAudioTrack = factory.createAudioTrack("audio0", audioSource);
         localAudioTrack.setEnabled(true);
@@ -1014,7 +1037,7 @@ public class CallManager {
         listenForCallStatus();
     }
 
-    // ─── SDP quality tuning ───────────────────────────────────────────────────
+    // ─── SDP quality tuning ─────────────────���─────────────────────────────────
 
     /**
      * Raises the negotiated audio and video quality ceiling on a locally created SDP.
