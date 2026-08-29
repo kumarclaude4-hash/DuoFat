@@ -2,6 +2,7 @@ package com.duoshield.app.call;
 
 import android.content.Context;
 import android.media.AudioManager;
+import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -40,6 +41,7 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
+import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -104,6 +106,11 @@ public class CallManager {
 
     private EglBase eglBase;
     private PeerConnectionFactory factory;
+    /**
+     * Explicit Android audio device module used to keep communications capture and supported
+     * platform voice processing active for the full call. Released after the factory.
+     */
+    private JavaAudioDeviceModule audioDeviceModule;
     private PeerConnection peerConnection;
     private CameraVideoCapturer videoCapturer;
     private SurfaceTextureHelper surfaceTextureHelper;
@@ -475,9 +482,24 @@ public class CallManager {
                         .createInitializationOptions();
         PeerConnectionFactory.initialize(initOptions);
 
+        // Always capture through Android's communications path. On devices with approved
+        // platform effects this enables the vendor-tuned acoustic echo canceller and noise
+        // suppressor close to the microphone, which is the best first line of defence against
+        // speaker echo, fan noise, and low-frequency handling/table impacts.
+        boolean hardwareAec = JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported();
+        boolean hardwareNs = JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported();
+        audioDeviceModule = JavaAudioDeviceModule.builder(context)
+                .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                .setUseHardwareAcousticEchoCanceler(hardwareAec)
+                .setUseHardwareNoiseSuppressor(hardwareNs)
+                .createAudioDeviceModule();
+        Log.i(TAG, "Voice isolation: source=VOICE_COMMUNICATION, hardwareAEC="
+                + hardwareAec + ", hardwareNS=" + hardwareNs);
+
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         factory = PeerConnectionFactory.builder()
                 .setOptions(options)
+                .setAudioDeviceModule(audioDeviceModule)
                 .setVideoEncoderFactory(new DefaultVideoEncoderFactory(
                         eglBase.getEglBaseContext(), true, true))
                 .setVideoDecoderFactory(new DefaultVideoDecoderFactory(
@@ -674,10 +696,10 @@ public class CallManager {
     // ─── Local media ─────────────────────────────────────────────────────────
 
     private void createLocalTracks(boolean withVideo) {
-        // Echo cancellation, noise suppression, and AGC are mandatory for voice quality.
-        // Without these the remote party hears their own voice echoed back and
-        // background noise bleeds through during silence gaps — the same constraints
-        // WhatsApp, Meet, and Signal use in their Android WebRTC stacks.
+        // Keep WebRTC audio processing enabled even when Android hardware effects are present.
+        // It is the fallback on unsupported devices and adds AGC, high-pass filtering for
+        // low-frequency thuds, and transient/typing-noise detection. The cutoff and suppression
+        // strength are managed internally by WebRTC to avoid clipping quiet conversational speech.
         MediaConstraints audioConstraints = new MediaConstraints();
         audioConstraints.mandatory.add(
                 new MediaConstraints.KeyValuePair("googEchoCancellation", "true"));
@@ -1256,6 +1278,12 @@ public class CallManager {
         if (audioSource != null) { audioSource.dispose(); audioSource = null; }
         if (peerConnection != null) { peerConnection.close(); peerConnection = null; }
         if (factory != null) { factory.dispose(); factory = null; }
+        // The factory retains the ADM's native pointer, so release the module only after the
+        // factory has been disposed. This prevents leaked AudioRecord effects across calls.
+        if (audioDeviceModule != null) {
+            audioDeviceModule.release();
+            audioDeviceModule = null;
+        }
         if (eglBase != null) { eglBase.release(); eglBase = null; }
     }
 
