@@ -69,19 +69,14 @@ public class InCallChatActivity extends AppCompatActivity {
 
     // ── Floating call PiP ─────────────────────────────────────────────────────
     private FrameLayout         pipContainer;
-    private SurfaceViewRenderer pipVideoView;      // large tile
-    private FrameLayout         pipSelfContainer;  // inset tile wrapper
-    private SurfaceViewRenderer pipSelfVideoView;  // inset tile
+    private SurfaceViewRenderer pipVideoView;      // local participant, left half
+    private SurfaceViewRenderer pipSelfVideoView;  // remote participant, right half
     private ImageView           ivPipMuteBadge;
     private TextView            tvPipLabel;
+    private TextView            tvPipPartnerLabel;
 
     /** True once {@link SurfaceViewRenderer#init} ran — guards a double release(). */
     private boolean pipInitialised = false;
-    /**
-     * False by default: the partner fills the large tile and our self-view sits in the inset,
-     * matching Google Meet. Tapping the inset flips the two.
-     */
-    private boolean pipSwapped = false;
     /**
      * The tracks each renderer is currently a sink of.
      *
@@ -245,12 +240,12 @@ public class InCallChatActivity extends AppCompatActivity {
      * <p>The PiP stays hidden for voice-only calls and whenever no call session is reachable.
      */
     private void initPip() {
-        pipContainer     = findViewById(R.id.callPipContainer);
-        pipVideoView     = findViewById(R.id.pipVideoView);
-        pipSelfContainer = findViewById(R.id.pipSelfContainer);
-        pipSelfVideoView = findViewById(R.id.pipSelfVideoView);
-        ivPipMuteBadge   = findViewById(R.id.ivPipMuteBadge);
-        tvPipLabel       = findViewById(R.id.tvPipLabel);
+        pipContainer        = findViewById(R.id.callPipContainer);
+        pipVideoView        = findViewById(R.id.pipVideoView);
+        pipSelfVideoView    = findViewById(R.id.pipSelfVideoView);
+        ivPipMuteBadge      = findViewById(R.id.ivPipMuteBadge);
+        tvPipLabel          = findViewById(R.id.tvPipLabel);
+        tvPipPartnerLabel   = findViewById(R.id.tvPipPartnerLabel);
         if (pipContainer == null || pipVideoView == null || pipSelfVideoView == null) return;
 
         if (!isVideo) {
@@ -274,15 +269,16 @@ public class InCallChatActivity extends AppCompatActivity {
         pipSelfVideoView.init(egl.getEglBaseContext(), null);
         pipSelfVideoView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL);
         pipSelfVideoView.setEnableHardwareScaler(true);
-        // The inset sits on top of the main tile, so it must draw above it in the same window.
-        pipSelfVideoView.setZOrderMediaOverlay(true);
         pipInitialised = true;
+
+        if (tvPipLabel != null) tvPipLabel.setText("You");
+        if (tvPipPartnerLabel != null) tvPipPartnerLabel.setText(partnerName);
 
         setupPipGestures();
     }
 
     /**
-     * Tap the inset to swap which participant fills the large tile; drag to reposition.
+     * Drag the complete 1:1 tile to reposition it.
      *
      * <p>Free-float rather than corner-snapping: this window shares the screen with a message
      * list and an input row, so the user needs to be able to park it anywhere that is not
@@ -324,36 +320,18 @@ public class InCallChatActivity extends AppCompatActivity {
 
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    if (!dragged[0]) swapPip();
                     return true;
             }
             return false;
         });
-
-        // The inset is the affordance users reach for first (Meet/WhatsApp behaviour), but it
-        // sits inside the draggable container, so it must not swallow drags: it only claims the
-        // gesture once it resolves to a click.
-        if (pipSelfContainer != null) {
-            pipSelfContainer.setOnClickListener(v -> swapPip());
-        }
-    }
-
-    /** Flips which participant fills the large tile. */
-    private void swapPip() {
-        pipSwapped = !pipSwapped;
-        syncPip();
     }
 
     /**
-     * Points both renderers at their participant and refreshes the overlays.
+     * Points each renderer at its fixed participant and refreshes the overlays.
      *
-     * <p>Called on resume, on swap, and once a second: the remote track usually arrives after
-     * this screen is already open, and the mic-mute badge has to track the call's state without
-     * a listener.
-     *
-     * <p>While only one side has a renderable track (typically before the answer completes) the
-     * inset collapses and the available video takes the whole window, so the user never sees an
-     * empty black square.
+     * <p>Called on resume and once a second: the remote track usually arrives after this screen
+     * is already open, and the mic-mute badge has to track the call's state without a listener.
+     * When one track is unavailable its half remains dark, preserving the strict 1:1 layout.
      */
     private void syncPip() {
         if (!pipInitialised || pipContainer == null) return;
@@ -367,45 +345,26 @@ public class InCallChatActivity extends AppCompatActivity {
             return;
         }
 
-        VideoTrack remote = call.getRemoteVideoTrack();
         VideoTrack local  = call.getLocalVideoTrack();
-
-        // The partner owns the large tile unless the user swapped.
-        VideoTrack mainTrack = pipSwapped ? local  : remote;
-        VideoTrack selfTrack = pipSwapped ? remote : local;
-        boolean mainIsLocal  = pipSwapped;
-
-        // Only one side available — promote it to the large tile and hide the inset.
-        if (mainTrack == null || selfTrack == null) {
-            VideoTrack only = mainTrack != null ? mainTrack : selfTrack;
-            if (only == null) {
-                detachPipSink();
-                pipContainer.setVisibility(View.GONE);
-                return;
-            }
-            mainIsLocal = (only == local);
-            mainTrack   = only;
-            selfTrack   = null;
+        VideoTrack remote = call.getRemoteVideoTrack();
+        if (local == null && remote == null) {
+            detachPipSink();
+            pipContainer.setVisibility(View.GONE);
+            return;
         }
 
-        if (!attachPipSink(true, mainTrack)) return;
-        attachPipSink(false, selfTrack);
+        if (!attachPipSink(true, local)) return;
+        attachPipSink(false, remote);
 
-        pipVideoView.setMirror(mainIsLocal);
-        pipSelfVideoView.setMirror(!mainIsLocal);
-
+        // Role never changes: local is mirrored on the left, partner is unmirrored on the right.
+        pipVideoView.setMirror(true);
+        pipSelfVideoView.setMirror(false);
         pipContainer.setVisibility(View.VISIBLE);
-        if (pipSelfContainer != null) {
-            pipSelfContainer.setVisibility(selfTrack != null ? View.VISIBLE : View.GONE);
-        }
-        if (tvPipLabel != null) {
-            tvPipLabel.setText(mainIsLocal ? "You" : partnerName);
-        }
-        // The badge reflects *our* microphone, so it rides whichever tile is showing us — and
-        // is dropped entirely when the self-view is not on screen at all.
+
+        if (tvPipLabel != null) tvPipLabel.setText("You");
+        if (tvPipPartnerLabel != null) tvPipPartnerLabel.setText(partnerName);
         if (ivPipMuteBadge != null) {
-            boolean selfIsUs = selfTrack != null && !mainIsLocal;
-            ivPipMuteBadge.setVisibility(selfIsUs && call.isMicMuted()
+            ivPipMuteBadge.setVisibility(local != null && call.isMicMuted()
                     ? View.VISIBLE : View.GONE);
         }
     }

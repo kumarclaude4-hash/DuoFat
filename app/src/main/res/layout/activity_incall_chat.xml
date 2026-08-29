@@ -167,18 +167,17 @@
 </LinearLayout>
 
     <!--
-      ── Floating call PiP ──
-      Google Meet style: both participants stay visible while messages are read. The large
-      tile carries the partner's video and a smaller inset tile carries the self-view; tapping
-      the inset swaps the two, dragging the window repositions it.
-      Hidden for voice-only calls and until a renderable track exists — see
+      ── Floating 1:1 call tile ──
+      Google Meet style: local and partner video remain visible as equal side-by-side panels
+      while messages are read. The complete tile can be dragged to uncover chat content.
+      Hidden for voice-only calls and until at least one renderable track exists — see
       InCallChatActivity.initPip(). Both renderers are initialised and released in code, so
       these views must never be reused across activity instances.
     -->
     <FrameLayout
         android:id="@+id/callPipContainer"
-        android:layout_width="118dp"
-        android:layout_height="166dp"
+        android:layout_width="176dp"
+        android:layout_height="104dp"
         android:layout_gravity="top|end"
         android:layout_marginTop="72dp"
         android:layout_marginEnd="12dp"
@@ -186,77 +185,93 @@
         android:clipToOutline="true"
         android:elevation="8dp"
         android:visibility="gone"
-        android:contentDescription="Call video, tap the small tile to switch between you and your partner">
+        android:contentDescription="Call video showing you and your partner side by side">
 
-        <!-- Main tile — partner's video by default -->
-        <org.webrtc.SurfaceViewRenderer
-            android:id="@+id/pipVideoView"
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:baselineAligned="false">
+
+            <!-- Local participant — always the left half. -->
+            <FrameLayout
+                android:id="@+id/pipLocalContainer"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_pip">
+
+                <org.webrtc.SurfaceViewRenderer
+                    android:id="@+id/pipVideoView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <TextView
+                    android:id="@+id/tvPipLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|start"
+                    android:layout_margin="5dp"
+                    android:paddingStart="5dp"
+                    android:paddingEnd="5dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:background="@drawable/bg_pip_label"
+                    android:text="You"
+                    android:textColor="#FFFFFF"
+                    android:textSize="10sp" />
+
+                <ImageView
+                    android:id="@+id/ivPipMuteBadge"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="4dp"
+                    android:padding="4dp"
+                    android:background="@drawable/bg_pip_badge"
+                    android:src="@drawable/ic_mic_off"
+                    app:tint="#FFFFFF"
+                    android:visibility="gone"
+                    android:contentDescription="Your microphone is muted" />
+            </FrameLayout>
+
+            <!-- Remote participant — always the right half. -->
+            <FrameLayout
+                android:id="@+id/pipRemoteContainer"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_pip">
+
+                <org.webrtc.SurfaceViewRenderer
+                    android:id="@+id/pipSelfVideoView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <TextView
+                    android:id="@+id/tvPipPartnerLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|start"
+                    android:layout_margin="5dp"
+                    android:maxWidth="76dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:paddingStart="5dp"
+                    android:paddingEnd="5dp"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:background="@drawable/bg_pip_label"
+                    android:textColor="#FFFFFF"
+                    android:textSize="10sp" />
+            </FrameLayout>
+        </LinearLayout>
 
         <View
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:background="@drawable/bg_pip_border"
             android:importantForAccessibility="no" />
-
-        <TextView
-            android:id="@+id/tvPipLabel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
-            android:layout_margin="6dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp"
-            android:background="@drawable/bg_pip_label"
-            android:text="You"
-            android:textColor="#FFFFFF"
-            android:textSize="10sp" />
-
-        <!--
-          Inset tile — the second participant. Sits top|start so it never overlaps the main
-          tile's name chip (bottom|start) or the mute badge (top|end of the inset itself).
-        -->
-        <FrameLayout
-            android:id="@+id/pipSelfContainer"
-            android:layout_width="46dp"
-            android:layout_height="62dp"
-            android:layout_gravity="top|start"
-            android:layout_margin="6dp"
-            android:background="@drawable/bg_pip"
-            android:clipToOutline="true"
-            android:elevation="2dp"
-            android:clickable="true"
-            android:focusable="true"
-            android:contentDescription="Swap videos">
-
-            <org.webrtc.SurfaceViewRenderer
-                android:id="@+id/pipSelfVideoView"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@drawable/bg_pip_border"
-                android:importantForAccessibility="no" />
-
-            <!-- Mic-off badge — mirrors CallManager.isMicMuted(); rides whichever tile is us -->
-            <ImageView
-                android:id="@+id/ivPipMuteBadge"
-                android:layout_width="18dp"
-                android:layout_height="18dp"
-                android:layout_gravity="top|end"
-                android:layout_margin="3dp"
-                android:padding="3dp"
-                android:background="@drawable/bg_pip_badge"
-                android:src="@drawable/ic_mic_off"
-                app:tint="#FFFFFF"
-                android:visibility="gone"
-                android:contentDescription="Microphone muted" />
-        </FrameLayout>
     </FrameLayout>
 
 </FrameLayout>
