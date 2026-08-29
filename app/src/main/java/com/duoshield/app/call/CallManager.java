@@ -254,7 +254,10 @@ public class CallManager {
                 // Do NOT add OfferToReceiveAudio/Video — see createAnswer() for why.
                 // Transceivers are already established; only the ICE credentials change.
                 peerConnection.createOffer(new SdpObserver() {
-                    @Override public void onCreateSuccess(SessionDescription sdp) {
+                    @Override public void onCreateSuccess(SessionDescription rawSdp) {
+                        // Keep the restart offer on the same tuned parameters as the original.
+                        SessionDescription sdp = new SessionDescription(
+                                rawSdp.type, tuneSdpForQuality(rawSdp.description));
                         peerConnection.setLocalDescription(new SdpObserver() {
                             @Override public void onCreateSuccess(SessionDescription s) {}
                             @Override public void onSetSuccess() {
@@ -605,7 +608,30 @@ public class CallManager {
         config.iceTransportsType = relayOnly
                 ? PeerConnection.IceTransportsType.RELAY
                 : PeerConnection.IceTransportsType.ALL;
-        Log.d(TAG, "createPeerConnection: iceTransportsType=" + config.iceTransportsType);
+        // ── Setup-latency tuning ──────────────────────────────────────────────
+        // Everything below shortens the gap between "user taps call" and "first frame"
+        // without changing which candidate ultimately wins.
+        //
+        //  • MAXBUNDLE + REQUIRE mux: audio and video share one ICE/DTLS transport, so only
+        //    one connectivity check set and one DTLS handshake are needed instead of two.
+        //  • GATHER_CONTINUALLY: keeps gathering after the first pass, so a better path
+        //    (e.g. WiFi appearing, or a late srflx candidate) is adopted mid-call instead of
+        //    being stuck on the first relay that answered.
+        //  • iceCandidatePoolSize: pre-gathers a candidate pool as soon as the
+        //    PeerConnection exists — before the offer is even written to Firestore — so
+        //    connectivity checks can start almost immediately once the answer arrives.
+        //  • ECDSA keys: DTLS handshake completes in noticeably less time than RSA.
+        config.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
+        config.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
+        config.continualGatheringPolicy =
+                PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
+        config.iceCandidatePoolSize = 2;
+        config.keyType = PeerConnection.KeyType.ECDSA;
+        // Let libwebrtc drop the encoder resolution/frame rate itself when the CPU is the
+        // bottleneck, rather than letting frames queue up and inflate latency.
+        config.enableCpuOveruseDetection = true;
+        Log.d(TAG, "createPeerConnection: iceTransportsType=" + config.iceTransportsType
+                + ", bundle=MAXBUNDLE, gathering=CONTINUALLY, pool=2");
 
         return factory.createPeerConnection(config, new PeerConnection.Observer() {
             @Override
@@ -831,7 +857,11 @@ public class CallManager {
 
         peerConnection.createOffer(new SdpObserver() {
             @Override
-            public void onCreateSuccess(SessionDescription sdp) {
+            public void onCreateSuccess(SessionDescription rawSdp) {
+                // Tune once, then use the same description locally and in signalling so both
+                // peers agree on the negotiated codec parameters.
+                SessionDescription sdp = new SessionDescription(
+                        rawSdp.type, tuneSdpForQuality(rawSdp.description));
                 peerConnection.setLocalDescription(new SdpObserver() {
                     @Override public void onCreateSuccess(SessionDescription s) {}
                     @Override public void onSetSuccess() {
@@ -984,6 +1014,124 @@ public class CallManager {
         listenForCallStatus();
     }
 
+    // ─── SDP quality tuning ───────────────────────────────────────────────────
+
+    /**
+     * Raises the negotiated audio and video quality ceiling on a locally created SDP.
+     *
+     * <p>libwebrtc's defaults are tuned for the worst case: Opus is negotiated in a narrow
+     * speech mode and the video encoder starts near ~300 kbps and ramps up over several
+     * seconds. Both are conservative for a 1:1 call on a modern connection, and the ramp is
+     * exactly what users perceive as "blurry for the first few seconds".
+     *
+     * <p>Applied to offers and answers, so it holds for caller and callee:
+     * <ul>
+     *   <li>{@code maxaveragebitrate=40000} + {@code maxplaybackrate=48000} — full-band Opus
+     *       instead of the default narrower profile, which is the single biggest audible
+     *       improvement in voice clarity.</li>
+     *   <li>{@code useinbandfec=1} — Opus repairs isolated lost packets itself instead of
+     *       producing a dropout, the main cause of choppy audio on mobile data.</li>
+     *   <li>{@code usedtx=0} — discontinuous transmission saves bandwidth in silence but
+     *       clips the leading syllable after a pause, so it stays off.</li>
+     *   <li>{@code stereo=0} — one microphone; a second channel would only spend bitrate.</li>
+     *   <li>{@code x-google-start-bitrate} — start video high and let Transport-CC correct
+     *       downward within a second or two, rather than crawling upward from the floor.</li>
+     * </ul>
+     *
+     * <p>These are ceilings and starting points only. Congestion control still owns the
+     * steady-state rate, so a weak network converges to the same place it would have — it
+     * simply arrives there from above instead of from below.
+     *
+     * @return the tuned SDP, or the input unchanged if the expected lines are absent.
+     */
+    private String tuneSdpForQuality(String sdp) {
+        if (sdp == null || sdp.isEmpty()) return sdp;
+        try {
+            String[] lines = sdp.split("\r\n");
+            // Payload type → codec name, taken from the rtpmap lines of this SDP. Payload
+            // numbers are negotiated per session and must never be hardcoded.
+            java.util.Map<String, String> codecForPt = new java.util.HashMap<>();
+            for (String line : lines) {
+                if (!line.startsWith("a=rtpmap:")) continue;
+                String body = line.substring("a=rtpmap:".length());
+                int sp = body.indexOf(' ');
+                if (sp <= 0) continue;
+                String pt = body.substring(0, sp);
+                String codec = body.substring(sp + 1);
+                int slash = codec.indexOf('/');
+                if (slash > 0) codec = codec.substring(0, slash);
+                codecForPt.put(pt, codec.toUpperCase(Locale.US));
+            }
+
+            StringBuilder out = new StringBuilder(sdp.length() + 256);
+            java.util.Set<String> tunedPts = new java.util.HashSet<>();
+
+            for (String line : lines) {
+                if (line.startsWith("a=fmtp:")) {
+                    String body = line.substring("a=fmtp:".length());
+                    int sp = body.indexOf(' ');
+                    String pt = sp > 0 ? body.substring(0, sp) : body;
+                    String codec = codecForPt.get(pt);
+                    String extra = qualityFmtpParams(codec, sp > 0 ? body.substring(sp + 1) : "");
+                    if (extra != null) {
+                        line = line + ";" + extra;
+                        tunedPts.add(pt);
+                    }
+                }
+                out.append(line).append("\r\n");
+
+                // Codec negotiated without any fmtp line — emit one so the parameters apply.
+                if (line.startsWith("a=rtpmap:")) {
+                    String body = line.substring("a=rtpmap:".length());
+                    int sp = body.indexOf(' ');
+                    if (sp > 0) {
+                        String pt = body.substring(0, sp);
+                        if (!tunedPts.contains(pt) && !sdp.contains("a=fmtp:" + pt + " ")) {
+                            String extra = qualityFmtpParams(codecForPt.get(pt), "");
+                            if (extra != null) {
+                                out.append("a=fmtp:").append(pt).append(' ')
+                                        .append(extra).append("\r\n");
+                                tunedPts.add(pt);
+                            }
+                        }
+                    }
+                }
+            }
+            return out.toString();
+        } catch (Exception e) {
+            // Never let SDP rewriting break a call — quality tuning is an optimisation.
+            Log.w(TAG, "SDP quality tuning skipped: " + e.getMessage());
+            return sdp;
+        }
+    }
+
+    /**
+     * Parameters to append for a codec, or {@code null} when the codec needs no tuning.
+     * Existing keys are left untouched so a value already negotiated is never duplicated.
+     */
+    private String qualityFmtpParams(String codec, String existing) {
+        if (codec == null) return null;
+        StringBuilder sb = new StringBuilder();
+        if ("OPUS".equals(codec)) {
+            appendIfAbsent(sb, existing, "stereo", "0");
+            appendIfAbsent(sb, existing, "useinbandfec", "1");
+            appendIfAbsent(sb, existing, "usedtx", "0");
+            appendIfAbsent(sb, existing, "maxaveragebitrate", "40000");
+            appendIfAbsent(sb, existing, "maxplaybackrate", "48000");
+        } else if ("VP8".equals(codec) || "VP9".equals(codec) || "H264".equals(codec)
+                || "AV1".equals(codec) || "AV1X".equals(codec)) {
+            // kbps, not bps, for this Google-specific attribute.
+            appendIfAbsent(sb, existing, "x-google-start-bitrate", "800");
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private void appendIfAbsent(StringBuilder sb, String existing, String key, String value) {
+        if (existing != null && existing.contains(key + "=")) return;
+        if (sb.length() > 0) sb.append(';');
+        sb.append(key).append('=').append(value);
+    }
+
     private void createAnswer() {
         // UNIFIED_PLAN: do NOT pass OfferToReceiveAudio/Video here.
         //
@@ -1001,7 +1149,9 @@ public class CallManager {
 
         peerConnection.createAnswer(new SdpObserver() {
             @Override
-            public void onCreateSuccess(SessionDescription sdp) {
+            public void onCreateSuccess(SessionDescription rawSdp) {
+                SessionDescription sdp = new SessionDescription(
+                        rawSdp.type, tuneSdpForQuality(rawSdp.description));
                 peerConnection.setLocalDescription(new SdpObserver() {
                     @Override public void onCreateSuccess(SessionDescription s) {}
                     @Override public void onSetSuccess() {
@@ -1315,7 +1465,7 @@ public class CallManager {
 
     public CallState getCurrentState() { return currentState; }
 
-    // ── Synced duration timer ─────────────────────────────────────────────────
+    // ── Synced duration timer ──────────────────────��──────────────────────────
 
     /**
      * Kicks off the shared call-start anchor: stamps {@code connectedAt} on the call doc (a
@@ -1478,10 +1628,15 @@ public class CallManager {
 
             boolean isVideoTrack = sender.track() instanceof VideoTrack;
 
-            if (isVideoTrack && cappedVideo) {
-                // Shed resolution, not frame rate, when the encoder cannot keep up.
-                params.degradationPreference =
-                        RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE;
+            if (isVideoTrack) {
+                // Capped rungs shed resolution and hold frame rate: a smooth, softer image
+                // reads better than a sharp, stuttering one on a small screen.
+                // On the uncapped top rung the link can usually carry both, so BALANCED lets
+                // libwebrtc give back whichever dimension the network can actually afford
+                // instead of permanently sacrificing resolution.
+                params.degradationPreference = cappedVideo
+                        ? RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+                        : RtpParameters.DegradationPreference.BALANCED;
             }
 
             for (RtpParameters.Encoding enc : params.encodings) {
